@@ -1,0 +1,194 @@
+project:
+  name: "ReadRay"
+  description: "Windows 优先的本地英语学习 Agent"
+  repo_root: "."
+
+meta:
+  version: "0.4"
+  last_updated: "2026-06-22"
+  updated_by: "Codex"
+  source_of_truth: "docs/RESOURCE_MAP.yml"
+  language: "zh-CN"
+
+reading_policy:
+  default_sequence:
+    - "AGENTS.md"
+    - "docs/RESOURCE_MAP.yml"
+    - "只读取当前任务需要的文件"
+  avoid:
+    - "除非正在准备比赛材料，否则不要一次性读取 resource/ 下所有文件。"
+    - "没有明确原因时，不要扫描整个仓库。"
+    - "当本地文档已经记录决策时，不要从聊天历史里重建项目决策。"
+
+core_docs:
+  - path: "AGENTS.md"
+    purpose: "Codex 协作规则和启动流程。"
+    status: "active"
+    read_when:
+      - "开始新的 Codex 会话。"
+      - "不确定项目约定。"
+      - "需要判断是否添加流程、依赖或架构。"
+    notes: "只记录会改变 Codex 行为的规则；背景信息、阶段计划和技术细节放到 docs/。"
+    risk: "不要把临时想法、宽泛口号或不会改变行为的规则塞进本文件。"
+
+  - path: "docs/DEVELOPMENT_PLAN.md"
+    purpose: "项目定位、技术栈、核心原则、阶段计划和风险说明。"
+    status: "active"
+    read_when:
+      - "讨论路线、技术栈、产品范围、MVP 或比赛策略。"
+      - "决策桌面能力接入、Agent 层、SQLite、LLM 供应商。"
+      - "规划新的实现阶段。"
+    notes: "项目方向、技术栈和阶段计划以本文件为准。"
+    risk: "不要从聊天历史恢复已被本文件覆盖的旧决策。"
+
+  - path: "docs/HANDOFF.md"
+    purpose: "当前状态快照、已确认决策、下一步、待解决问题。"
+    status: "active"
+    read_when:
+      - "继续上一次开发。"
+      - "需要了解当前状态、下一步或待解决问题。"
+      - "任务产生交接价值，需要更新当前状态快照。"
+    notes: "只记录会影响下一次恢复上下文的信息；开头 TL;DR 用于新会话快速恢复。"
+    risk: "不要把小型措辞、格式调整或已经能从文件本身看出的变化写成流水账。"
+
+competition_resources:
+  directory: "resource/"
+  status: "active"
+  read_when:
+    - "准备比赛文档。"
+    - "检查提交要求。"
+    - "写作品简介、项目文档或演示脚本。"
+    - "比较 ReadRay 与官方赛题要求。"
+  notes: "2026-06-22 已从大赛官网重新恢复页面、附件和文本抽取；如涉及官方日期和规则，仍以官网当前页面为准。"
+  files:
+    - path: "resource/official_2026_topics_and_submission.md"
+      purpose: "官方赛题页抽取文本，包含开放赛题、地方赛题、华为赛题和附件链接。"
+      status: "active"
+      notes: "用于赛题方向判断。"
+      risk: "若涉及官方日期和规则，必要时重新核对官网。"
+
+    - path: "resource/official_2026_invitation_and_rules.md"
+      purpose: "官方邀请函/规则页抽取文本，包含参赛方式、赛程和奖项设置。"
+      status: "active"
+      notes: "用于规则、赛程和参赛对象确认。"
+      risk: "若比赛官网更新，以官网当前页面为准。"
+
+    - path: "resource/official_2026_homepage.md"
+      purpose: "赛事主页抽取文本。"
+      status: "active"
+      notes: "用于补充主页入口、赛程和通知列表信息。"
+      risk: "不要用它替代附件中的提交规范。"
+
+    - path: "resource/attachment1_initial_submission_spec.txt"
+      purpose: "初赛作品提交规范文本。"
+      status: "active"
+      notes: "查询作品简介、项目文档、视频、ZIP、截止时间等提交格式时优先读取。"
+      risk: "PDF 原件同目录保留；如文本有抽取疑问，回看 PDF。"
+
+    - path: "resource/attachment2_project_document_template.txt"
+      purpose: "项目文档模板文本。"
+      status: "active"
+      notes: "写项目文档结构时优先读取。"
+      risk: "模板字段应服务于 ReadRay 叙事，不要机械填充。"
+
+    - path: "resource/attachment3_huawei_topics.txt"
+      purpose: "华为赛题细则文本。"
+      status: "active"
+      notes: "用于判断是否需要兼报或对照华为赛题。"
+      risk: "当前 ReadRay 主线不按华为专项推进。"
+
+    - path: "resource/invitation_attachment1_participant_guide.txt"
+      purpose: "参赛指南文本。"
+      status: "active"
+      notes: "用于资格、流程、奖项和组织要求确认。"
+      risk: "与官网页面冲突时重新核对官方来源。"
+
+    - path: "resource/invitation_attachment2_invitation_letter.txt"
+      purpose: "邀请函盖章版抽取文本。"
+      status: "active"
+      notes: "用于补充官方通知口径。"
+      risk: "该 PDF 抽取曾有字体警告；需要精确引用时回看 PDF。"
+
+    - path: "resource/readray_competition_analysis.md"
+      purpose: "前期比赛分析和 ReadRay 定位建议。"
+      status: "active"
+      notes: "用于快速回顾比赛建议、MVP、风险和路线。"
+      risk: "这是综合分析，不替代官方附件。"
+
+source_areas:
+  - path: "src/"
+    purpose: "React 前端源码。"
+    status: "active"
+    read_when:
+      - "开发解释卡、历史页、复盘页、设置页。"
+    notes: "Tauri + Vite + React + TypeScript 脚手架入口；当前主要入口是 src/main.tsx 和 src/App.tsx。"
+    risk: "不要在前端入口塞入原生系统逻辑。"
+
+  - path: "src-tauri/"
+    purpose: "Tauri / Rust 原生层源码。"
+    status: "active"
+    read_when:
+      - "开发全局快捷键、剪贴板、窗口行为、SQLite 命令、原生配置。"
+    notes: "当前包含 Tauri v2 配置、Rust 入口和默认 opener 插件；关键文件是 src-tauri/tauri.conf.json、src-tauri/Cargo.toml、src-tauri/src/main.rs、src-tauri/src/lib.rs。"
+    risk: "不要把 UI 状态和业务展示逻辑塞进 Rust 层。"
+
+  - path: "scripts/"
+    purpose: "辅助脚本目录。"
+    status: "active"
+    read_when:
+      - "做 Python 评测脚本、Prompt 实验或数据清理。"
+    notes: "当前包含 resource 恢复脚本；Python 只用于辅助脚本、评测和数据处理。"
+    risk: "Python 不应成为桌面 App 运行时依赖。"
+
+  - path: "scripts/restore_competition_resources.py"
+    purpose: "从大赛官网恢复 resource/ 下的官方页面、附件和文本抽取。"
+    status: "active"
+    read_when:
+      - "resource/ 资料缺失。"
+      - "需要重新核对或刷新比赛官方资料。"
+    notes: "使用 requests 抓取官网页面和附件，使用 PyMuPDF/zip XML 抽取 PDF/DOCX 文本。"
+    risk: "该脚本会覆盖同名 resource 文件；运行前应确认 Git 状态可回滚。"
+
+app_scaffold:
+  - path: "package.json"
+    purpose: "前端依赖、Vite 构建命令和 Tauri CLI 命令。"
+    status: "active"
+    read_when:
+      - "调整 npm/pnpm 脚本。"
+      - "排查前端构建或 Tauri CLI 调用。"
+    notes: "包管理器使用 pnpm；当前脚本包含 dev、build、preview、tauri。"
+    risk: "不要无依据新增运行时依赖。"
+
+  - path: "pnpm-lock.yaml"
+    purpose: "pnpm 依赖锁定文件。"
+    status: "active"
+    read_when:
+      - "排查依赖版本。"
+      - "复现前端或 Tauri CLI 安装问题。"
+    notes: "由 pnpm install 生成。"
+    risk: "不要手工编辑锁文件。"
+
+  - path: "src-tauri/Cargo.lock"
+    purpose: "Rust / Tauri 依赖锁定文件。"
+    status: "active"
+    read_when:
+      - "排查 Rust 依赖版本。"
+      - "复现 Tauri 编译问题。"
+    notes: "由 cargo fetch / pnpm tauri dev 生成。"
+    risk: "不要手工编辑锁文件。"
+
+external_refs:
+  - name: "Tauri 官方文档"
+    purpose: "Windows 前置条件、全局快捷键、SQL、打包。"
+    read_when: "实现或排查 Tauri 相关能力时。"
+    risk: "这些信息可能变化，需要查官方当前文档。"
+
+  - name: "DeepSeek API 文档"
+    purpose: "实现 LLM 调用。"
+    read_when: "接入 DeepSeek OpenAI-compatible API 时。"
+    risk: "API 参数和模型名可能变化，需要查官方当前文档。"
+
+  - name: "SQLite / Tauri SQL 文档"
+    purpose: "实现本地持久化。"
+    read_when: "设计或排查 SQLite 读写时。"
+    risk: "插件版本和权限配置需要按当前 Tauri 版本确认。"
