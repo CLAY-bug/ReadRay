@@ -51,6 +51,16 @@ core_docs:
     notes: "只记录会影响下一次恢复上下文的信息；开头 TL;DR 用于新会话快速恢复。"
     risk: "不要把小型措辞、格式调整或已经能从文件本身看出的变化写成流水账。"
 
+  - path: "docs/WINDOWS_ENVIRONMENT.md"
+    purpose: "Windows 开发环境、VS Build Tools 修复经验、验证命令和磁盘占用策略。"
+    status: "active"
+    read_when:
+      - "排查 Tauri Windows 开发环境。"
+      - "处理 MSVC、Windows SDK、Rust、Cargo 或 VS Build Tools 问题。"
+      - "评估 C 盘空间压力、缓存迁移或 VS Build Tools 重装到 D 盘。"
+    notes: "记录可复用环境经验，不写成每次操作流水账。"
+    risk: "不要手动移动 VS 或 SDK 目录；迁移前先确认安装器、缓存和 Junction 策略。"
+
 competition_resources:
   directory: "resource/"
   status: "active"
@@ -121,7 +131,7 @@ source_areas:
     status: "active"
     read_when:
       - "开发解释卡、历史页、复盘页、设置页。"
-    notes: "Tauri + Vite + React + TypeScript 脚手架入口；当前主要入口是 src/main.tsx 和 src/App.tsx。"
+    notes: "Tauri + Vite + React + TypeScript 脚手架入口；当前主要入口是 src/main.tsx 和 src/App.tsx，App.tsx 暂为阶段一验证面板。"
     risk: "不要在前端入口塞入原生系统逻辑。"
 
   - path: "src-tauri/"
@@ -129,7 +139,7 @@ source_areas:
     status: "active"
     read_when:
       - "开发全局快捷键、剪贴板、窗口行为、SQLite 命令、原生配置。"
-    notes: "当前包含 Tauri v2 配置、Rust 入口和默认 opener 插件；关键文件是 src-tauri/tauri.conf.json、src-tauri/Cargo.toml、src-tauri/src/main.rs、src-tauri/src/lib.rs。"
+    notes: "当前包含 Tauri v2 配置、Rust 入口、capabilities 和官方插件 opener/global-shortcut/clipboard-manager/sql；关键文件是 src-tauri/tauri.conf.json、src-tauri/Cargo.toml、src-tauri/src/main.rs、src-tauri/src/lib.rs、src-tauri/capabilities/default.json、src-tauri/capabilities/desktop.json。"
     risk: "不要把 UI 状态和业务展示逻辑塞进 Rust 层。"
 
   - path: "scripts/"
@@ -150,6 +160,15 @@ source_areas:
     risk: "该脚本会覆盖同名 resource 文件；运行前应确认 Git 状态可回滚。"
 
 app_scaffold:
+  - path: ".env.example"
+    purpose: "本地开发环境变量占位示例。"
+    status: "active"
+    read_when:
+      - "配置 DeepSeek API key。"
+      - "排查开发期环境变量读取。"
+    notes: "复制为 .env 后填写本机密钥；.env 不提交。Tauri 启动时由 Rust dotenvy 从项目根目录加载 .env。"
+    risk: "不要把真实 DEEPSEEK_API_KEY 写入该文件或任何提交文件。"
+
   - path: "package.json"
     purpose: "前端依赖、Vite 构建命令和 Tauri CLI 命令。"
     status: "active"

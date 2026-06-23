@@ -1,0 +1,117 @@
+# Windows 开发环境说明
+
+最后更新：2026-06-22
+
+## 适用范围
+
+本文记录 ReadRay 在 Windows 上开发 Tauri 应用所需的本机环境、验证命令、VS Build Tools 修复经验和磁盘占用策略。
+
+ReadRay 当前仍以 Windows 优先推进；遇到 Tauri、Rust、pnpm、MSVC 或 Windows SDK 问题时，先定位原因，不切换技术栈。
+
+## 当前已验证环境
+
+- Node.js / pnpm 可用。
+- Rust / Cargo 使用 `stable-x86_64-pc-windows-msvc` 工具链。
+- Visual Studio 2022 Build Tools 已安装并完整可用。
+- Tauri CLI 已能识别 WebView2、MSVC、Windows SDK、Rust 和 Cargo。
+- `pnpm build` 已通过。
+- `pnpm tauri dev` 已通过 `link.exe` 阶段，生成并启动过 `src-tauri/target/debug/readray.exe`。
+- 2026-06-22 已完成阶段 A 磁盘迁移：Rust/Cargo 用户目录和 VS 包缓存已迁到 D 盘，原路径保留 Junction。
+
+关键验证命令：
+
+```powershell
+pnpm build
+pnpm tauri info
+pnpm tauri dev
+```
+
+## VS Build Tools 必要组件
+
+ReadRay 的 Tauri Windows 开发需要 MSVC 链接器和 Windows SDK。当前修复时确认需要的组件为：
+
+- `Microsoft.VisualStudio.Component.VC.Tools.x86.x64`
+- `Microsoft.VisualStudio.Component.Windows11SDK.26100`
+
+可用下面的命令检查组件是否能匹配到完整实例：
+
+```powershell
+& 'C:\Program Files (x86)\Microsoft Visual Studio\Installer\vswhere.exe' `
+  -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 `
+  -requires Microsoft.VisualStudio.Component.Windows11SDK.26100 `
+  -products *
+```
+
+## 本次修复踩坑记录
+
+`pnpm tauri dev` 失败于 `link.exe not found` 时，根因不是 Tauri 脚手架问题，而是 VS Build Tools / MSVC / Windows SDK 安装不完整或未被正确识别。
+
+修复经验：
+
+- `setup.exe modify --quiet` 必须从管理员权限启动；否则可能返回 `5007`。
+- 不要假设已安装的 `setup.exe modify` 支持 `--wait`；本次通过 PowerShell `Start-Process -Wait` 等待安装器完成。
+- `--installPath` 包含空格时，`Start-Process -ArgumentList` 的引用必须正确；否则路径可能被拆成 `C:\Program`。
+- 普通终端里 `link` / `cl` 不一定在 `PATH` 中；只要 `pnpm tauri info` 能通过 VS 安装信息识别 MSVC，不需要强行把 MSVC bin 目录写入全局 `PATH`。
+
+已验证可用的管理员修复命令形态：
+
+```powershell
+Start-Process `
+  -FilePath 'C:\Program Files (x86)\Microsoft Visual Studio\Installer\setup.exe' `
+  -Verb RunAs `
+  -Wait `
+  -ArgumentList 'modify --installPath "C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools" --channelId VisualStudio.17.Release --quiet --norestart --add Microsoft.VisualStudio.Component.VC.Tools.x86.x64 --add Microsoft.VisualStudio.Component.Windows11SDK.26100'
+```
+
+## 磁盘策略
+
+不要手动移动 Visual Studio、Windows Kits、Rust 或 Cargo 目录。手动移动会破坏注册表、安装器状态、`vswhere` 发现逻辑或 PATH。
+
+### 已执行：迁移会持续增长的缓存
+
+当前 ReadRay 项目目录位于 D 盘，Tauri 编译产物也在 `D:\project\ReadRay\src-tauri\target`，不会继续占用 C 盘。
+
+2026-06-22 已执行以下迁移：
+
+- `C:\Users\19150\.cargo` 是 Junction，指向 `D:\app_cache\rust\.cargo`。
+- `C:\Users\19150\.rustup` 是 Junction，指向 `D:\app_cache\rust\.rustup`。
+- `C:\ProgramData\Microsoft\VisualStudio\Packages` 是 Junction，指向 `D:\app_cache\vs\Packages`。
+- `HKLM\SOFTWARE\Microsoft\VisualStudio\Setup\CachePath` 已设置为 `D:\app_cache\vs\Packages`。
+- 本次迁移创建的 C 盘备份目录已在验证通过后删除。
+- C 盘剩余空间从约 4.94 GB 提升到约 8.21 GB。
+
+迁移后已验证：
+
+```powershell
+rustup show home
+cargo -V
+rustc -V
+pnpm build
+pnpm tauri info
+cargo check --manifest-path src-tauri\Cargo.toml
+```
+
+注意：Codex 沙箱内的普通命令访问 `C:\Users\19150\.cargo` 和 `C:\Users\19150\.rustup` Junction 时可能出现 `Access to the path is denied` 或 rustup home 创建误报；沙箱外同一用户验证正常。后续验证 Rust/Cargo 时，如遇该误报，优先用沙箱外命令确认真实系统状态。
+
+### 后续策略
+
+对 VS 包缓存，官方支持禁用或移动包缓存。包缓存的价值主要是离线修复；在网络可用时，安装器可以重新下载所需包。当前已采用 `CachePath` 迁移到 D 盘，而不是禁用缓存。
+
+如果后续发现其他 AppData 或工具缓存继续挤占 C 盘，继续使用“复制到 D 盘、验证、原路径改 Junction、验证写入、再删除备份”的流程。不要迁移 whole app root，优先迁移可确认的缓存目录。
+
+### 备选策略：卸载后重装 VS Build Tools 到 D 盘
+
+Visual Studio 官方规则是：安装位置只能在首次安装时选择；已安装实例不能原地改盘符。若要把 Build Tools 主体迁到 D 盘，安全流程是：
+
+1. 导出或记录当前组件。
+2. 通过 Visual Studio Installer 卸载当前 Build Tools。
+3. 使用 `vs_buildtools.exe` 重新安装到 D 盘，并同时设置缓存和共享组件路径。
+4. 重新运行 `pnpm build`、`pnpm tauri info`、`pnpm tauri dev`。
+
+即使指定 D 盘，部分 SDK 或工具仍可能按组件规则安装到系统盘，因此不能期望 C 盘完全不再占用空间。
+
+## 官方参考
+
+- Visual Studio 安装位置：https://learn.microsoft.com/en-us/visualstudio/install/change-installation-locations?view=vs-2022
+- Visual Studio 命令行参数：https://learn.microsoft.com/en-us/visualstudio/install/use-command-line-parameters-to-install-visual-studio?view=vs-2022
+- Visual Studio 包缓存：https://learn.microsoft.com/en-us/visualstudio/install/disable-or-move-the-package-cache?view=vs-2022

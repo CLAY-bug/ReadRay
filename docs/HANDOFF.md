@@ -1,12 +1,12 @@
 # ReadRay 交接记录
 
-最后更新：2026-06-22
+最后更新：2026-06-23
 
 ## TL;DR
 
-- 当前状态：Tauri + React + TypeScript 脚手架已创建，前端构建通过，Git 已修复，比赛资料已恢复；Tauri dev 仍阻塞在缺少 MSVC linker。
+- 当前状态：Tauri + React + TypeScript 脚手架已创建，前端构建通过，Git 已修复，比赛资料已恢复；Windows 上的 VS Build Tools / MSVC / Windows SDK 已修复，阶段 A 磁盘迁移已完成；阶段一桌面基础能力已完成第一轮工程验证。
 - 当前路线：Windows 原生，Tauri + React + TypeScript + Rust + SQLite。
-- 下一步：由工程实现会话安装 Visual Studio 2022 Build Tools 的 “Desktop development with C++” 工作负载后，重跑 `pnpm tauri dev`。
+- 下一步：复制 `.env.example` 为 `.env` 并设置 `DEEPSEEK_API_KEY` 后做 DeepSeek 真实 API 调用验证；随后进入解释卡 MVP 的最小闭环。
 - 当前约束：不使用通用 Agent 框架，不内置商业词典，不做 OCR、本地大模型或跨平台支持。
 - 交接原则：`HANDOFF.md` 只记录会影响下一次恢复上下文的信息，小型文档措辞和格式调整不记录。
 
@@ -16,6 +16,8 @@
 - `docs/DEVELOPMENT_PLAN.md`：项目计划和技术方向。
 - `docs/RESOURCE_MAP.yml`：重要本地资源索引。
 - `docs/HANDOFF.md`：当前交接记录，也就是本文件。
+- `docs/WINDOWS_ENVIRONMENT.md`：Windows 开发环境、VS Build Tools 修复经验和磁盘策略。
+- `.env.example`：本地开发环境变量占位示例；真实 `.env` 不提交。
 - `src/`：React + TypeScript 前端脚手架源码。
 - `src-tauri/`：Tauri v2 / Rust 原生层脚手架源码。
 - `package.json` / `pnpm-lock.yaml`：pnpm 前端依赖和脚本。
@@ -49,19 +51,32 @@
 - 已用 `pnpm create tauri-app` 初始化 Tauri + React + TypeScript 脚手架。
 - 已安装 pnpm 依赖，`pnpm build` 通过。
 - 已安装并修复 Rust stable MSVC toolchain；当前 `rustc` 和 `cargo` 可用。
-- `pnpm tauri info` 显示 WebView2 和 Rust 可用，但未检测到 Visual Studio / VS Build Tools 的 MSVC 和 SDK 组件。
-- `pnpm tauri dev` 可启动 Vite，并能进入 Cargo 编译阶段；当前失败于 `link.exe not found`。
+- 2026-06-22 重启 Windows 后，已通过 Visual Studio Installer 修复并补齐 Visual Studio 2022 Build Tools。
+- `pnpm tauri info` 已能识别 WebView2、MSVC、Rust、Cargo 和 stable MSVC Rust toolchain。
+- `vswhere -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -requires Microsoft.VisualStudio.Component.Windows11SDK.26100` 已能匹配完整 Build Tools 实例。
+- `pnpm tauri dev` 已通过 `link.exe` 阶段，生成 `src-tauri/target/debug/readray.exe` 并启动应用进程；验证后已停止本次测试进程。
+- 已完成阶段 A 磁盘迁移：`C:\Users\19150\.cargo`、`C:\Users\19150\.rustup` 和 `C:\ProgramData\Microsoft\VisualStudio\Packages` 通过 Junction 指向 D 盘缓存目录。
+- VS `CachePath` 已设置为 `D:\app_cache\vs\Packages`，迁移备份已删除；C 盘剩余空间从约 4.94 GB 提升到约 8.21 GB。
+- 迁移后已验证 `rustup show home`、`cargo -V`、`rustc -V`、`pnpm build`、`pnpm tauri info` 和 `cargo check --manifest-path src-tauri\Cargo.toml`。
+- 已接入 Tauri 官方插件：`global-shortcut`、`clipboard-manager`、`sql`。
+- 已新增阶段一验证面板：窗口显示/隐藏、窗口置顶、剪贴板读写、SQLite 读写、DeepSeek API smoke test。
+- 已在 Rust 层注册全局快捷键 `Ctrl+Alt+R`，用于显示/隐藏主窗口。
+- DeepSeek smoke test 通过 Rust command 调用，读取 `DEEPSEEK_API_KEY`；默认模型为 `deepseek-v4-flash`，可用 `DEEPSEEK_MODEL` 覆盖。
+- Tauri 启动时已通过 Rust `dotenvy` 从项目根目录加载 `.env`，因此 DeepSeek smoke test 可读取 `.env` 中的 `DEEPSEEK_API_KEY`。
+- 新增验证后已通过 `cargo fmt --manifest-path src-tauri\Cargo.toml`、`pnpm build`、`cargo check --manifest-path src-tauri\Cargo.toml`、`pnpm tauri info`。
+- 新增验证后 `pnpm tauri dev` 已完成编译并启动 `src-tauri/target/debug/readray.exe`；验证后已停止本次测试进程。
+- 已在运行窗口中完成第一轮人工点击验证：窗口显示/隐藏、`Ctrl+Alt+R` 恢复窗口、剪贴板读写、SQLite 写入读取均可用。
+- 仓库不提交真实 `.env`；未创建真实 `.env` 时，DeepSeek smoke test 能正确提示跳过真实 API 调用。
 - 已从大赛官网恢复 `resource/` 页面、附件和文本抽取，并补回 `readray_competition_analysis.md`。
 - 已修复原空 `.git` 目录，重新初始化为有效 Git 仓库。
 - 已在 `.gitignore` 中忽略 `src-tauri/target`。
 
 ## 下一步
 
-继续阶段一：Tauri 基础能力打通。当前最先要处理的阻塞：
+继续推进：阶段一基础桌面能力已经完成第一轮工程验证。当前最先要处理的阻塞：
 
-- 安装 Visual Studio 2022 Build Tools，并选择 “Desktop development with C++” 工作负载。
-- 安装完成后重新打开终端，确认 `link.exe` 可被 Rust MSVC toolchain 找到。
-- 在仓库根目录重跑 `pnpm tauri info` 和 `pnpm tauri dev`。
+- 仓库不包含真实 `DEEPSEEK_API_KEY`；本地开发可复制 `.env.example` 为 `.env` 后填写密钥，再验证真实 DeepSeek 调用。
+- 设置 API key 并验证真实 DeepSeek 调用后，可以进入阶段二解释卡 MVP。
 
 阶段一完成标准：
 
@@ -74,7 +89,9 @@
 
 ## 待解决问题
 
-- Tauri dev 当前失败于 `link.exe not found`，原因是缺少 Visual Studio C++ Build Tools / MSVC linker。
+- 仓库不提交真实 `.env`；未创建真实 `.env` 时，DeepSeek API smoke test 会提示跳过真实调用。
+- Codex 沙箱内普通命令访问 `C:\Users\19150\.cargo` / `.rustup` Junction 可能报权限或 rustup home 创建误报；沙箱外同一用户验证正常，后续环境验证优先以沙箱外命令为准。
+- C 盘空间已缓解但仍需留意；VS Build Tools 主体和 Windows Kits 仍在 C 盘，若空间再次吃紧，再评估卸载后重装 VS Build Tools 到 D 盘。
 - UI 具体设计暂时不定。
 - SQLite schema 在解释卡和本地记忆阶段再设计。
 
