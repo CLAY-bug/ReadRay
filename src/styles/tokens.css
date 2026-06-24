@@ -1,0 +1,35 @@
+:root {
+  --rr-color-graphite-950: #0d0d0b;
+  --rr-color-graphite-900: #171512;
+  --rr-color-graphite-850: #1f1b18;
+  --rr-color-graphite-800: #27211d;
+  --rr-color-amber: #ff6a32;
+  --rr-color-amber-soft: rgba(255, 106, 50, 0.16);
+  --rr-color-text-primary: #f6f0e8;
+  --rr-color-text-secondary: #d5c9bb;
+  --rr-color-text-muted: #8f8579;
+  --rr-color-border: rgba(246, 240, 232, 0.12);
+  --rr-color-border-strong: rgba(246, 240, 232, 0.18);
+
+  --rr-radius-sm: 8px;
+  --rr-radius-md: 12px;
+  --rr-radius-lg: 16px;
+
+  --rr-shadow-popover:
+    0 28px 70px rgba(0, 0, 0, 0.42),
+    0 12px 30px rgba(0, 0, 0, 0.3),
+    0 0 0 1px var(--rr-color-border);
+
+  --rr-space-1: 4px;
+  --rr-space-2: 8px;
+  --rr-space-3: 12px;
+  --rr-space-4: 16px;
+  --rr-space-5: 20px;
+  --rr-space-6: 24px;
+
+  --rr-font-stack:
+    Inter, "Segoe UI", system-ui, -apple-system, BlinkMacSystemFont, "Microsoft YaHei",
+    sans-serif;
+  --rr-font-mono:
+    "Cascadia Mono", "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
+}

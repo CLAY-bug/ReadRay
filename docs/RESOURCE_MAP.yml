@@ -5,7 +5,7 @@ project:
 
 meta:
   version: "0.4"
-  last_updated: "2026-06-22"
+  last_updated: "2026-06-24"
   updated_by: "Codex"
   source_of_truth: "docs/RESOURCE_MAP.yml"
   language: "zh-CN"
@@ -131,15 +131,42 @@ source_areas:
     status: "active"
     read_when:
       - "开发解释卡、历史页、复盘页、设置页。"
-    notes: "Tauri + Vite + React + TypeScript 脚手架入口；当前主要入口是 src/main.tsx 和 src/App.tsx，App.tsx 暂为阶段一验证面板。"
+    notes: "Tauri + Vite + React + TypeScript 脚手架入口；当前主要入口是 src/main.tsx 和 src/App.tsx，App.tsx 默认进入 compact preview 模式，可在 mock 划词浮层和无选区居中输入之间切换；阶段一验证能力收进右上角开发验证入口。"
     risk: "不要在前端入口塞入原生系统逻辑。"
+
+  - path: "src/components/AnchoredResultPopover.tsx"
+    purpose: "MVP compact UI 的锚定划词结果浮层组件骨架。"
+    status: "active"
+    read_when:
+      - "开发或调整 compact 查词结果浮层。"
+      - "接入 selectedText/contextText mock 或真实解释卡数据。"
+    notes: "当前由 App 传入静态 mock 数据、anchorRect、open 和 onOpenChange；组件内部负责 fixed 定位、下方优先、空间不足向上翻转、Esc 隐藏和 highlightText 例句高亮。不接真实 UI Automation 或 DeepSeek 解释卡。"
+    risk: "不要提前扩展成通用组件库；只服务当前锚定结果浮层。"
+
+  - path: "src/components/CenteredCommandInput.tsx"
+    purpose: "MVP compact UI 的无选区居中输入组件骨架。"
+    status: "active"
+    read_when:
+      - "开发无选区快捷键呼出的主动查询输入框。"
+      - "调整 typing、loading 或 error-lite 状态。"
+    notes: "当前由 App 传入 value、open、loading、error 和提交回调；组件内部负责打开自动聚焦、Esc 关闭、Enter 非空提交、loading 轻量呼吸点和 error-lite 轻提示。不接真实 UI Automation 或 DeepSeek 解释卡。"
+    risk: "不要扩展成命令面板、历史入口或正式结果页；它只负责无选区输入。"
+
+  - path: "src/styles/tokens.css"
+    purpose: "ReadRay 前端轻量样式 token。"
+    status: "active"
+    read_when:
+      - "调整 Graphite + Amber 视觉风格。"
+      - "修改 compact UI 基础色彩、边框、圆角、阴影、间距或字体。"
+    notes: "只放当前前端需要的轻量设计 token，不引入完整设计系统。"
+    risk: "不要把它扩成大型 UI 组件库或引入外部 UI 框架。"
 
   - path: "src-tauri/"
     purpose: "Tauri / Rust 原生层源码。"
     status: "active"
     read_when:
       - "开发全局快捷键、剪贴板、窗口行为、SQLite 命令、原生配置。"
-    notes: "当前包含 Tauri v2 配置、Rust 入口、capabilities 和官方插件 opener/global-shortcut/clipboard-manager/sql；关键文件是 src-tauri/tauri.conf.json、src-tauri/Cargo.toml、src-tauri/src/main.rs、src-tauri/src/lib.rs、src-tauri/capabilities/default.json、src-tauri/capabilities/desktop.json。"
+    notes: "当前包含 Tauri v2 配置、Rust 入口、capabilities 和官方插件 opener/global-shortcut/clipboard-manager/sql；关键文件是 src-tauri/tauri.conf.json、src-tauri/Cargo.toml、src-tauri/src/main.rs、src-tauri/src/lib.rs、src-tauri/capabilities/default.json、src-tauri/capabilities/desktop.json。tauri.conf.json 已把主窗口初始尺寸调整为 430x350 compact 预览壳。"
     risk: "不要把 UI 状态和业务展示逻辑塞进 Rust 层。"
 
   - path: "scripts/"

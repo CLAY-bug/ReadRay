@@ -1,7 +1,12 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { readText, writeText } from "@tauri-apps/plugin-clipboard-manager";
 import Database from "@tauri-apps/plugin-sql";
+import AnchoredResultPopover, {
+  type AnchorRect,
+  type AnchoredResult,
+} from "./components/AnchoredResultPopover";
+import CenteredCommandInput from "./components/CenteredCommandInput";
 import "./App.css";
 
 type CheckState = "idle" | "running" | "ok" | "warn" | "error";
@@ -32,19 +37,57 @@ type Stage1CheckRow = {
   created_at: string;
 };
 
+type PreviewMode = "anchored" | "command";
+
 const idle: CheckResult = { state: "idle", detail: "未验证" };
+const mockCommandError = "暂时无法解释，请稍后再试。";
+
+const mockAnchoredResult: AnchoredResult = {
+  word: "marketed",
+  phonetic: "/ˈmɑːrkɪtɪd/",
+  definition: "v. 宣传；推广；定位成",
+  contextMeaning: "被宣传为；被定位为",
+  usage: "marketed as = 被宣传为 / 被定位为",
+  example: "The course is marketed as beginner-friendly.",
+  exampleZh: "这门课程被宣传为适合初学者。",
+  highlightText: "marketed as",
+};
 
 function formatError(error: unknown) {
   return error instanceof Error ? error.message : String(error);
 }
 
 function App() {
+  const previewAnchorRef = useRef<HTMLDivElement>(null);
+  const commandMockTimerRef = useRef<number | null>(null);
   const [shortcutLabel, setShortcutLabel] = useState("Ctrl+Alt+R");
   const [windowCheck, setWindowCheck] = useState<CheckResult>(idle);
   const [clipboardCheck, setClipboardCheck] = useState<CheckResult>(idle);
   const [sqliteCheck, setSqliteCheck] = useState<CheckResult>(idle);
   const [deepseekCheck, setDeepseekCheck] = useState<CheckResult>(idle);
   const [alwaysOnTop, setAlwaysOnTop] = useState(false);
+  const [previewMode, setPreviewMode] = useState<PreviewMode>("anchored");
+  const [popoverOpen, setPopoverOpen] = useState(true);
+  const [anchorRect, setAnchorRect] = useState<AnchorRect | null>(null);
+  const [commandOpen, setCommandOpen] = useState(false);
+  const [commandValue, setCommandValue] = useState("marketed");
+  const [commandLoading, setCommandLoading] = useState(false);
+  const [commandError, setCommandError] = useState<string | undefined>();
+
+  const updatePreviewAnchorRect = useCallback(() => {
+    const element = previewAnchorRef.current;
+    if (!element) {
+      return;
+    }
+
+    const rect = element.getBoundingClientRect();
+    setAnchorRect({
+      x: rect.x,
+      y: rect.y,
+      width: rect.width,
+      height: rect.height,
+    });
+  }, []);
 
   useEffect(() => {
     invoke<string>("shortcut_label")
@@ -57,6 +100,78 @@ function App() {
       .then((state) => setAlwaysOnTop(state.alwaysOnTop))
       .catch(() => undefined);
   }, []);
+
+  useEffect(() => {
+    updatePreviewAnchorRect();
+    window.addEventListener("resize", updatePreviewAnchorRect);
+    window.addEventListener("scroll", updatePreviewAnchorRect, true);
+
+    return () => {
+      window.removeEventListener("resize", updatePreviewAnchorRect);
+      window.removeEventListener("scroll", updatePreviewAnchorRect, true);
+    };
+  }, [updatePreviewAnchorRect]);
+
+  useEffect(() => {
+    return () => {
+      if (commandMockTimerRef.current !== null) {
+        window.clearTimeout(commandMockTimerRef.current);
+        commandMockTimerRef.current = null;
+      }
+    };
+  }, []);
+
+  const clearCommandMockState = useCallback(() => {
+    if (commandMockTimerRef.current !== null) {
+      window.clearTimeout(commandMockTimerRef.current);
+      commandMockTimerRef.current = null;
+    }
+
+    setCommandLoading(false);
+    setCommandError(undefined);
+  }, []);
+
+  function showPreviewPopover() {
+    clearCommandMockState();
+    setPreviewMode("anchored");
+    updatePreviewAnchorRect();
+    setPopoverOpen(true);
+  }
+
+  function showCommandInputPreview() {
+    clearCommandMockState();
+    setPreviewMode("command");
+    setCommandOpen(true);
+  }
+
+  function handleCommandOpenChange(nextOpen: boolean) {
+    clearCommandMockState();
+    setCommandOpen(nextOpen);
+  }
+
+  function handleCommandValueChange(nextValue: string) {
+    setCommandValue(nextValue);
+    setCommandError(undefined);
+  }
+
+  function submitMockCommand(value: string) {
+    if (commandLoading) {
+      return;
+    }
+
+    if (commandMockTimerRef.current !== null) {
+      window.clearTimeout(commandMockTimerRef.current);
+    }
+
+    setCommandValue(value);
+    setCommandError(undefined);
+    setCommandLoading(true);
+    commandMockTimerRef.current = window.setTimeout(() => {
+      setCommandLoading(false);
+      setCommandError(mockCommandError);
+      commandMockTimerRef.current = null;
+    }, 1350);
+  }
 
   async function toggleWindow() {
     setWindowCheck({ state: "running", detail: "正在切换窗口" });
@@ -175,65 +290,123 @@ function App() {
   }
 
   return (
-    <main className="shell">
-      <section className="header">
-        <div>
-          <p className="eyebrow">ReadRay</p>
-          <h1>阶段一桌面能力验证</h1>
+    <main className="app-shell">
+      <section className="compact-preview" aria-label="ReadRay compact UI 桌面预览">
+        {previewMode === "anchored" ? (
+          <>
+            <div className="mock-reader-line" aria-hidden="true" />
+            <div className="compact-preview__anchor" ref={previewAnchorRef}>
+              <span>marketed</span>
+            </div>
+            <AnchoredResultPopover
+              result={mockAnchoredResult}
+              anchorRect={anchorRect}
+              open={popoverOpen}
+              onOpenChange={setPopoverOpen}
+            />
+          </>
+        ) : (
+          <CenteredCommandInput
+            value={commandValue}
+            onValueChange={handleCommandValueChange}
+            open={commandOpen}
+            loading={commandLoading}
+            error={commandError}
+            onSubmit={submitMockCommand}
+            onOpenChange={handleCommandOpenChange}
+          />
+        )}
+      </section>
+
+      <div className="preview-controls" aria-label="预览辅助控制">
+        <div className="preview-controls__modes" aria-label="预览模式">
+          <button
+            className={previewMode === "anchored" ? "is-active" : ""}
+            type="button"
+            onClick={showPreviewPopover}
+          >
+            划词
+          </button>
+          <button
+            className={previewMode === "command" ? "is-active" : ""}
+            type="button"
+            onClick={showCommandInputPreview}
+          >
+            无选区
+          </button>
         </div>
-        <div className="shortcut">{shortcutLabel}</div>
-      </section>
+        <button
+          className="compact-preview__show"
+          type="button"
+          onClick={
+            previewMode === "anchored" ? showPreviewPopover : showCommandInputPreview
+          }
+        >
+          重新显示
+        </button>
 
-      <section className="grid">
-        <article className="check">
-          <div>
-            <h2>窗口</h2>
-            <p className={`status ${windowCheck.state}`}>{windowCheck.detail}</p>
-          </div>
-          <div className="actions">
-            <button type="button" onClick={toggleWindow}>
-              显示 / 隐藏
-            </button>
-            <button type="button" onClick={toggleAlwaysOnTop}>
-              {alwaysOnTop ? "取消置顶" : "置顶"}
-            </button>
-          </div>
-        </article>
+        <details className="stage-diagnostics">
+          <summary>
+            <span>开发验证</span>
+            <span className="shortcut">{shortcutLabel}</span>
+          </summary>
 
-        <article className="check">
-          <div>
-            <h2>剪贴板</h2>
-            <p className={`status ${clipboardCheck.state}`}>
-              {clipboardCheck.detail}
-            </p>
-          </div>
-          <button type="button" onClick={testClipboard}>
-            读写验证
-          </button>
-        </article>
+          <section className="check-grid">
+            <article className="check">
+              <div>
+                <h3>窗口</h3>
+                <p className={`status ${windowCheck.state}`}>
+                  {windowCheck.detail}
+                </p>
+              </div>
+              <div className="actions">
+                <button type="button" onClick={toggleWindow}>
+                  显示 / 隐藏
+                </button>
+                <button type="button" onClick={toggleAlwaysOnTop}>
+                  {alwaysOnTop ? "取消置顶" : "置顶"}
+                </button>
+              </div>
+            </article>
 
-        <article className="check">
-          <div>
-            <h2>SQLite</h2>
-            <p className={`status ${sqliteCheck.state}`}>{sqliteCheck.detail}</p>
-          </div>
-          <button type="button" onClick={testSqlite}>
-            读写验证
-          </button>
-        </article>
+            <article className="check">
+              <div>
+                <h3>剪贴板</h3>
+                <p className={`status ${clipboardCheck.state}`}>
+                  {clipboardCheck.detail}
+                </p>
+              </div>
+              <button type="button" onClick={testClipboard}>
+                读写验证
+              </button>
+            </article>
 
-        <article className="check">
-          <div>
-            <h2>DeepSeek</h2>
-            <p className={`status ${deepseekCheck.state}`}>
-              {deepseekCheck.detail}
-            </p>
-          </div>
-          <button type="button" onClick={testDeepSeek}>
-            API 验证
-          </button>
-        </article>
-      </section>
+            <article className="check">
+              <div>
+                <h3>SQLite</h3>
+                <p className={`status ${sqliteCheck.state}`}>
+                  {sqliteCheck.detail}
+                </p>
+              </div>
+              <button type="button" onClick={testSqlite}>
+                读写验证
+              </button>
+            </article>
+
+            <article className="check">
+              <div>
+                <h3>DeepSeek</h3>
+                <p className={`status ${deepseekCheck.state}`}>
+                  {deepseekCheck.detail}
+                </p>
+              </div>
+              <button type="button" onClick={testDeepSeek}>
+                API 验证
+              </button>
+            </article>
+          </section>
+        </details>
+      </div>
     </main>
   );
 }

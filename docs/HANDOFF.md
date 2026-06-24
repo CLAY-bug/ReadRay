@@ -1,12 +1,12 @@
 # ReadRay 交接记录
 
-最后更新：2026-06-23
+最后更新：2026-06-24
 
 ## TL;DR
 
 - 当前状态：Tauri + React + TypeScript 脚手架已创建，前端构建通过，Git 已修复，比赛资料已恢复；Windows 上的 VS Build Tools / MSVC / Windows SDK 已修复，阶段 A 磁盘迁移已完成；阶段一桌面基础能力已完成第一轮工程验证。
 - 当前路线：Windows 原生，Tauri + React + TypeScript + Rust + SQLite。
-- 下一步：复制 `.env.example` 为 `.env` 并设置 `DEEPSEEK_API_KEY` 后做 DeepSeek 真实 API 调用验证；随后进入解释卡 MVP 的最小闭环。
+- 下一步：继续完成 ReadRay MVP compact UI 的前端交互骨架；本机 `.env` 已配置 `DEEPSEEK_API_KEY` 且 DeepSeek smoke test 已通过，之后进入解释卡 MVP 的最小闭环。
 - 当前约束：不使用通用 Agent 框架，不内置商业词典，不做 OCR、本地大模型或跨平台支持。
 - 交接原则：`HANDOFF.md` 只记录会影响下一次恢复上下文的信息，小型文档措辞和格式调整不记录。
 
@@ -19,7 +19,10 @@
 - `docs/WINDOWS_ENVIRONMENT.md`：Windows 开发环境、VS Build Tools 修复经验和磁盘策略。
 - `.env.example`：本地开发环境变量占位示例；真实 `.env` 不提交。
 - `src/`：React + TypeScript 前端脚手架源码。
-- `src-tauri/`：Tauri v2 / Rust 原生层脚手架源码。
+- `src/components/AnchoredResultPopover.tsx`：MVP compact UI 的锚定划词结果浮层组件骨架，当前由 App 传入静态 mock 数据和 mock anchorRect。
+- `src/components/CenteredCommandInput.tsx`：MVP compact UI 的无选区居中输入组件骨架，当前由 App 传入静态 mock 输入状态。
+- `src/styles/tokens.css`：ReadRay Graphite + Amber 轻量样式 token。
+- `src-tauri/`：Tauri v2 / Rust 原生层脚手架源码；当前 Tauri 主窗口配置已调整为 compact 预览尺寸。
 - `package.json` / `pnpm-lock.yaml`：pnpm 前端依赖和脚本。
 - `src-tauri/Cargo.lock`：Rust / Tauri 依赖锁定文件。
 - `resource/`：已恢复的比赛官网页面、附件和文本抽取。
@@ -42,6 +45,10 @@
 - `HANDOFF.md` 只记录会影响恢复上下文的信息，不作为操作流水账。
 - 写新代码前先找现有扩展点，复用优先，单一职责，最小改动，不无理由新增依赖。
 - 不得在非空项目根目录使用带覆盖或强制语义的初始化命令；如确需使用，必须先确认 Git 可用或完成备份，并说明会影响哪些文件。
+- ReadRay 的差异化不能停留在“复制一个单词后快捷查词”；后续需要研究 Windows 跨应用划词上下文捕获：用户只选中单词时，尽可能获取所在句子或段落作为 `contextText`，再生成语境义。
+- 暂不做浏览器插件方向，因为浏览器已有沉浸式翻译、陪读蛙等成熟同类工具；优先面向 Windows 桌面应用，尤其是 Electron 类应用和常用阅读/写作软件。
+- 当前 Tauri compact preview 只是开发模拟舞台：外层 ReadRay 窗口模拟桌面/阅读环境，mock selected word 模拟真实划词，AnchoredResultPopover 模拟未来贴近真实选区出现的结果浮层；最终产品不应出现这个大背景舞台。
+- 正式交互分为两种状态：有选区和 `anchorRect` 时显示锚定结果浮层；无选区时通过快捷键呼出居中输入框，用户手动输入后再切换到结果态。
 
 ## 已完成准备
 
@@ -66,17 +73,22 @@
 - 新增验证后已通过 `cargo fmt --manifest-path src-tauri\Cargo.toml`、`pnpm build`、`cargo check --manifest-path src-tauri\Cargo.toml`、`pnpm tauri info`。
 - 新增验证后 `pnpm tauri dev` 已完成编译并启动 `src-tauri/target/debug/readray.exe`；验证后已停止本次测试进程。
 - 已在运行窗口中完成第一轮人工点击验证：窗口显示/隐藏、`Ctrl+Alt+R` 恢复窗口、剪贴板读写、SQLite 写入读取均可用。
-- 仓库不提交真实 `.env`；未创建真实 `.env` 时，DeepSeek smoke test 能正确提示跳过真实 API 调用。
+- 仓库不提交真实 `.env`；本机 `.env` 已配置 `DEEPSEEK_API_KEY`，DeepSeek API smoke test 已通过，默认模型为 `deepseek-v4-flash`，返回 `status=200`。未创建真实 `.env` 的新环境仍会提示跳过真实 API 调用。
 - 已从大赛官网恢复 `resource/` 页面、附件和文本抽取，并补回 `readray_competition_analysis.md`。
 - 已修复原空 `.git` 目录，重新初始化为有效 Git 仓库。
 - 已在 `.gitignore` 中忽略 `src-tauri/target`。
+- 已建立 MVP compact UI 第一版前端基础：轻量样式 token、`AnchoredResultPopover` 静态 mock 组件，并在当前 App 中作为主视觉展示；阶段一验证面板保留为辅助区。
+- 已扩展 `AnchoredResultPopover` 交互骨架：支持 `result`、`anchorRect`、`open`、`onOpenChange` props，组件内完成 fixed 定位、下方优先、空间不足向上翻转、横向 viewport 限制、Esc 隐藏和 `highlightText` 例句高亮；当前 App 使用 mock 锚点 DOM 获取 rect，并提供“重新显示”预览按钮。
+- 已接入并修正 Tauri 桌面端 compact 预览壳：App 默认只展示 mock selected word 和 AnchoredResultPopover，阶段一验证能力收进右上角“开发验证”入口；Tauri 主窗口初始尺寸调整为 430×350，最小尺寸为 420×320，未改 Rust 捕获逻辑。
+- 已新增无选区 `CenteredCommandInput` 交互骨架：支持打开自动聚焦、Esc 关闭、Enter 非空提交、loading 轻量呼吸点和 error-lite 轻提示；当前 App 可在 mock 划词浮层和无选区输入之间切换，输入提交后只模拟 loading 到错误提示，不生成正式结果页。
 
 ## 下一步
 
 继续推进：阶段一基础桌面能力已经完成第一轮工程验证。当前最先要处理的阻塞：
 
-- 仓库不包含真实 `DEEPSEEK_API_KEY`；本地开发可复制 `.env.example` 为 `.env` 后填写密钥，再验证真实 DeepSeek 调用。
-- 设置 API key 并验证真实 DeepSeek 调用后，可以进入阶段二解释卡 MVP。
+- 当前先把 MVP 的 compact UI 设计完成，避免在技术验证前反复改变交互目标。
+- DeepSeek key 不再是当前本机阻塞；后续进入阶段二解释卡 MVP 时可以直接复用现有 smoke test 通路。
+- 新环境仍需复制 `.env.example` 为 `.env` 后自行填写 `DEEPSEEK_API_KEY`；真实 `.env` 不提交。
 
 阶段一完成标准：
 
@@ -89,7 +101,10 @@
 
 ## 待解决问题
 
-- 仓库不提交真实 `.env`；未创建真实 `.env` 时，DeepSeek API smoke test 会提示跳过真实调用。
+- UI 设计完成后，专门研究“划词获取上下文”的技术 spike。目标输入模型应区分 `selectedText` 和 `contextText`：只拿到剪贴板单词时降级为普通查词；能通过 Windows UI Automation、应用适配器或后续 OCR 取得上下文时，才展示语境义。
+- 该能力不要求一开始支持所有应用，应先验证常用 Windows 桌面场景，例如 VS Code、Obsidian、Notion Desktop、WPS/Word、PDF 阅读器等。Electron 应用本质基于 Chromium，通常可能暴露无障碍树，但仍需逐应用验证。
+- 后续技术路线建议按优先级评估：Windows UI Automation 读取前台窗口/焦点控件/选区和文本范围；高价值应用做专门适配器；OCR 仅作为更后期兜底；剪贴板查词只作为 fallback，不作为最终差异化。
+- 仓库不提交真实 `.env`；本机已配置 DeepSeek key，但新环境仍需复制 `.env.example` 为 `.env` 后自行填写。
 - Codex 沙箱内普通命令访问 `C:\Users\19150\.cargo` / `.rustup` Junction 可能报权限或 rustup home 创建误报；沙箱外同一用户验证正常，后续环境验证优先以沙箱外命令为准。
 - C 盘空间已缓解但仍需留意；VS Build Tools 主体和 Windows Kits 仍在 C 盘，若空间再次吃紧，再评估卸载后重装 VS Build Tools 到 D 盘。
 - UI 具体设计暂时不定。

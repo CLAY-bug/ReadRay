@@ -13,8 +13,10 @@
     "windows": [
       {
         "title": "ReadRay",
-        "width": 800,
-        "height": 600
+        "width": 430,
+        "height": 350,
+        "minWidth": 420,
+        "minHeight": 320
       }
     ],
     "security": {
