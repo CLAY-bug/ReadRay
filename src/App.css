@@ -57,6 +57,9 @@ button:active {
 }
 
 .compact-preview {
+  --centered-command-layer-top: 38%;
+  --centered-command-box-half-height: 34px;
+
   position: relative;
   min-height: 100vh;
   border: 0;
@@ -103,7 +106,7 @@ button:active {
 
 .centered-command-input {
   position: fixed;
-  top: 38%;
+  top: var(--centered-command-layer-top);
   left: 50%;
   z-index: 20;
   width: min(640px, calc(100vw - 32px));
@@ -244,7 +247,9 @@ button:active {
 
 .centered-result-panel {
   position: fixed;
-  top: 38%;
+  top: calc(
+    var(--centered-command-layer-top) - var(--centered-command-box-half-height)
+  );
   left: 50%;
   z-index: 20;
   width: min(640px, calc(100vw - 32px));
@@ -259,7 +264,7 @@ button:active {
   box-shadow:
     var(--rr-shadow-popover),
     0 0 0 1px rgba(255, 106, 50, 0.08);
-  transform: translate(-50%, -50%);
+  transform: translateX(-50%);
 }
 
 .centered-result-panel::before {
@@ -758,13 +763,16 @@ h3 {
   }
 
   .centered-command-input {
-    top: 34%;
     width: calc(100vw - 28px);
   }
 
   .centered-result-panel {
-    top: 50%;
     width: calc(100vw - 28px);
+  }
+
+  .compact-preview {
+    --centered-command-layer-top: 34%;
+    --centered-command-box-half-height: 32px;
   }
 
   .centered-command-input__box {

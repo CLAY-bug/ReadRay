@@ -82,7 +82,7 @@
 - 已扩展 `AnchoredResultPopover` 交互骨架：支持 `result`、`anchorRect`、`open`、`onOpenChange` props，组件内完成 fixed 定位、下方优先、空间不足向上翻转、横向 viewport 限制、Esc 隐藏和 `highlightText` 例句高亮；当前 App 使用 mock 锚点 DOM 获取 rect，并提供“重新显示”预览按钮。
 - 已接入并修正 Tauri 桌面端 compact 预览壳：App 默认只展示 mock selected word 和 AnchoredResultPopover，阶段一验证能力收进右上角“开发验证”入口；Tauri 主窗口初始尺寸调整为 430×350，最小尺寸为 420×320，未改 Rust 捕获逻辑。
 - 已新增无选区 `CenteredCommandInput` 交互骨架：支持打开自动聚焦、Esc 关闭、Enter 非空提交、loading 轻量呼吸点和 error-lite 轻提示；当前 App 可在 mock 划词浮层和无选区输入之间切换，输入提交后只模拟 loading 到错误提示，不生成正式结果页。
-- 已新增无选区输入后的 `CenteredResultPanel` 结果态骨架：当前 App 的无选区模式从 input/loading 进入 result，结果面板与输入框同宽同定位，顶部保留 query，内容区展示常见语块、近义理解和例句，内部可滚动；近义理解已按设计稿改成 `marketed` / `sold` / `advertised` 三行对照；未接真实 DeepSeek，不做聊天流或底部操作入口。
+- 已新增无选区输入后的 `CenteredResultPanel` 结果态骨架：当前 App 的无选区模式从 input/loading 进入 result，结果面板与输入框同宽，顶部对齐输入框顶部并向下展开，顶部保留 query，内容区展示常见语块、近义理解和例句，内部可滚动；近义理解已按设计稿改成 `marketed` / `sold` / `advertised` 三行对照；未接真实 DeepSeek，不做聊天流或底部操作入口。
 
 ## 下一步
 
