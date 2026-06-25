@@ -7,6 +7,9 @@ import AnchoredResultPopover, {
   type AnchoredResult,
 } from "./components/AnchoredResultPopover";
 import CenteredCommandInput from "./components/CenteredCommandInput";
+import CenteredResultPanel, {
+  type CenteredResult,
+} from "./components/CenteredResultPanel";
 import "./App.css";
 
 type CheckState = "idle" | "running" | "ok" | "warn" | "error";
@@ -38,9 +41,9 @@ type Stage1CheckRow = {
 };
 
 type PreviewMode = "anchored" | "command";
+type CommandStage = "input" | "loading" | "result";
 
 const idle: CheckResult = { state: "idle", detail: "未验证" };
-const mockCommandError = "暂时无法解释，请稍后再试。";
 
 const mockAnchoredResult: AnchoredResult = {
   word: "marketed",
@@ -51,6 +54,40 @@ const mockAnchoredResult: AnchoredResult = {
   example: "The course is marketed as beginner-friendly.",
   exampleZh: "这门课程被宣传为适合初学者。",
   highlightText: "marketed as",
+};
+
+const mockCenteredResult: CenteredResult = {
+  word: "marketed",
+  phonetic: "/ˈmɑːrkɪtɪd/",
+  partOfSpeech: "动词 market 的过去式 / 过去分词",
+  definition: "宣传；推广；把……定位为",
+  phrases: [
+    {
+      phrase: "marketed as",
+      meaning: "被宣传为；被定位为",
+    },
+    {
+      phrase: "marketed to",
+      meaning: "向……推广；面向……营销",
+    },
+  ],
+  nearMeaningTitle: "近义理解",
+  nearMeanings: [
+    {
+      phrase: "marketed",
+      meaning: "强调宣传、推广、市场定位",
+    },
+    {
+      phrase: "sold",
+      meaning: "强调已经卖出或完成销售",
+    },
+    {
+      phrase: "advertised",
+      meaning: "强调投放广告，是 marketed 的一种方式",
+    },
+  ],
+  example: "The product is marketed as eco-friendly.",
+  exampleZh: "这个产品被宣传为环保的。",
 };
 
 function formatError(error: unknown) {
@@ -71,8 +108,7 @@ function App() {
   const [anchorRect, setAnchorRect] = useState<AnchorRect | null>(null);
   const [commandOpen, setCommandOpen] = useState(false);
   const [commandValue, setCommandValue] = useState("marketed");
-  const [commandLoading, setCommandLoading] = useState(false);
-  const [commandError, setCommandError] = useState<string | undefined>();
+  const [commandStage, setCommandStage] = useState<CommandStage>("input");
 
   const updatePreviewAnchorRect = useCallback(() => {
     const element = previewAnchorRef.current;
@@ -127,8 +163,7 @@ function App() {
       commandMockTimerRef.current = null;
     }
 
-    setCommandLoading(false);
-    setCommandError(undefined);
+    setCommandStage("input");
   }, []);
 
   function showPreviewPopover() {
@@ -151,11 +186,11 @@ function App() {
 
   function handleCommandValueChange(nextValue: string) {
     setCommandValue(nextValue);
-    setCommandError(undefined);
+    setCommandStage("input");
   }
 
   function submitMockCommand(value: string) {
-    if (commandLoading) {
+    if (commandStage === "loading") {
       return;
     }
 
@@ -164,11 +199,9 @@ function App() {
     }
 
     setCommandValue(value);
-    setCommandError(undefined);
-    setCommandLoading(true);
+    setCommandStage("loading");
     commandMockTimerRef.current = window.setTimeout(() => {
-      setCommandLoading(false);
-      setCommandError(mockCommandError);
+      setCommandStage("result");
       commandMockTimerRef.current = null;
     }, 1350);
   }
@@ -306,15 +339,22 @@ function App() {
             />
           </>
         ) : (
-          <CenteredCommandInput
-            value={commandValue}
-            onValueChange={handleCommandValueChange}
-            open={commandOpen}
-            loading={commandLoading}
-            error={commandError}
-            onSubmit={submitMockCommand}
-            onOpenChange={handleCommandOpenChange}
-          />
+          <>
+            <CenteredCommandInput
+              value={commandValue}
+              onValueChange={handleCommandValueChange}
+              open={commandOpen && commandStage !== "result"}
+              loading={commandStage === "loading"}
+              onSubmit={submitMockCommand}
+              onOpenChange={handleCommandOpenChange}
+            />
+            <CenteredResultPanel
+              query={commandValue}
+              result={mockCenteredResult}
+              open={commandOpen && commandStage === "result"}
+              onOpenChange={handleCommandOpenChange}
+            />
+          </>
         )}
       </section>
 

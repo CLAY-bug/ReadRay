@@ -5,7 +5,7 @@ project:
 
 meta:
   version: "0.4"
-  last_updated: "2026-06-24"
+  last_updated: "2026-06-25"
   updated_by: "Codex"
   source_of_truth: "docs/RESOURCE_MAP.yml"
   language: "zh-CN"
@@ -151,6 +151,15 @@ source_areas:
       - "调整 typing、loading 或 error-lite 状态。"
     notes: "当前由 App 传入 value、open、loading、error 和提交回调；组件内部负责打开自动聚焦、Esc 关闭、Enter 非空提交、loading 轻量呼吸点和 error-lite 轻提示。不接真实 UI Automation 或 DeepSeek 解释卡。"
     risk: "不要扩展成命令面板、历史入口或正式结果页；它只负责无选区输入。"
+
+  - path: "src/components/CenteredResultPanel.tsx"
+    purpose: "MVP compact UI 的无选区输入后居中结果面板骨架。"
+    status: "active"
+    read_when:
+      - "开发无选区主动查询提交后的结果展示。"
+      - "调整居中结果面板的信息结构、滚动内容或 mock 数据映射。"
+    notes: "当前由 App 传入 query 和静态 mock result；顶部保留用户输入，内容区展示语块、近义理解和例句，内部可滚动。不接真实 DeepSeek，不做聊天流、底部操作按钮、历史、收藏、复盘或设置入口。"
+    risk: "不要把它扩展成完整结果页或 AI 对话界面；它只服务 MVP compact 主动查询结果态。"
 
   - path: "src/styles/tokens.css"
     purpose: "ReadRay 前端轻量样式 token。"
