@@ -8,7 +8,7 @@ export type CenteredResultPhrase = {
 export type CenteredResult = {
   word: string;
   phonetic: string;
-  partOfSpeech: string;
+  partOfSpeech?: string;
   definition: string;
   phrases: CenteredResultPhrase[];
   nearMeaningTitle: string;
@@ -21,6 +21,8 @@ type CenteredResultPanelProps = {
   query: string;
   result: CenteredResult;
   open: boolean;
+  onQueryChange: (value: string) => void;
+  onSubmit: (value: string) => void;
   onOpenChange: (open: boolean) => void;
 };
 
@@ -28,6 +30,8 @@ function CenteredResultPanel({
   query,
   result,
   open,
+  onQueryChange,
+  onSubmit,
   onOpenChange,
 }: CenteredResultPanelProps) {
   useEffect(() => {
@@ -49,6 +53,15 @@ function CenteredResultPanel({
     if (event.key === "Escape") {
       event.preventDefault();
       onOpenChange(false);
+      return;
+    }
+
+    if (event.key === "Enter") {
+      event.preventDefault();
+      const nextQuery = event.currentTarget.value.trim();
+      if (nextQuery) {
+        onSubmit(nextQuery);
+      }
     }
   }
 
@@ -67,8 +80,8 @@ function CenteredResultPanel({
           type="text"
           value={query}
           aria-label="查询内容"
-          readOnly
           spellCheck={false}
+          onChange={(event) => onQueryChange(event.target.value)}
           onKeyDown={handleInputKeyDown}
         />
         <span className="centered-result-panel__state" aria-hidden="true" />
@@ -84,9 +97,11 @@ function CenteredResultPanel({
               {result.phonetic}
             </span>
           </div>
-          <p className="centered-result-panel__part-of-speech">
-            {result.partOfSpeech}
-          </p>
+          {result.partOfSpeech ? (
+            <p className="centered-result-panel__part-of-speech">
+              {result.partOfSpeech}
+            </p>
+          ) : null}
         </header>
 
         <p className="centered-result-panel__definition">

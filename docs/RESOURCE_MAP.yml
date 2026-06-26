@@ -5,7 +5,7 @@ project:
 
 meta:
   version: "0.4"
-  last_updated: "2026-06-25"
+  last_updated: "2026-06-26"
   updated_by: "Codex"
   source_of_truth: "docs/RESOURCE_MAP.yml"
   language: "zh-CN"
@@ -131,7 +131,7 @@ source_areas:
     status: "active"
     read_when:
       - "开发解释卡、历史页、复盘页、设置页。"
-    notes: "Tauri + Vite + React + TypeScript 脚手架入口；当前主要入口是 src/main.tsx 和 src/App.tsx，App.tsx 默认进入 compact preview 模式，可在 mock 划词浮层和无选区居中输入之间切换；阶段一验证能力收进右上角开发验证入口。"
+    notes: "Tauri + Vite + React + TypeScript 脚手架入口；当前主要入口是 src/main.tsx 和 src/App.tsx，App.tsx 默认进入 compact preview 模式，可在 mock 划词浮层和无选区居中输入之间切换；无选区输入默认为空，已通过 create_explanation_card 调用真实 DeepSeek 查询并映射到 CenteredResultPanel；阶段一验证能力收进右上角开发验证入口。"
     risk: "不要在前端入口塞入原生系统逻辑。"
 
   - path: "src/components/AnchoredResultPopover.tsx"
@@ -149,7 +149,7 @@ source_areas:
     read_when:
       - "开发无选区快捷键呼出的主动查询输入框。"
       - "调整 typing、loading 或 error-lite 状态。"
-    notes: "当前由 App 传入 value、open、loading、error 和提交回调；组件内部负责打开自动聚焦、Esc 关闭、Enter 非空提交、loading 轻量呼吸点和 error-lite 轻提示。不接真实 UI Automation 或 DeepSeek 解释卡。"
+    notes: "当前由 App 传入 value、open、loading、error 和提交回调；组件内部负责打开自动聚焦、Esc 关闭、Enter 非空提交、loading 轻量呼吸点和 error-lite 轻提示。无选区提交已由 App 接入真实 create_explanation_card；本组件不接 UI Automation。"
     risk: "不要扩展成命令面板、历史入口或正式结果页；它只负责无选区输入。"
 
   - path: "src/components/CenteredResultPanel.tsx"
@@ -158,7 +158,7 @@ source_areas:
     read_when:
       - "开发无选区主动查询提交后的结果展示。"
       - "调整居中结果面板的信息结构、滚动内容或 mock 数据映射。"
-    notes: "当前由 App 传入 query 和静态 mock result；顶部保留用户输入，内容区展示语块、近义理解和例句，内部可滚动。不接真实 DeepSeek，不做聊天流、底部操作按钮、历史、收藏、复盘或设置入口。"
+    notes: "当前由 App 传入 query 和 ExplanationCard 映射后的 result；顶部保留可编辑用户输入，内容区展示语块、近义理解和例句，内部可滚动。结果头部不展示低信息标签；只有 reviewHint 有内容时才显示右侧提示。不做聊天流、底部操作按钮、历史、收藏、复盘或设置入口。"
     risk: "不要把它扩展成完整结果页或 AI 对话界面；它只服务 MVP compact 主动查询结果态。"
 
   - path: "src/styles/tokens.css"
@@ -177,6 +177,26 @@ source_areas:
       - "开发全局快捷键、剪贴板、窗口行为、SQLite 命令、原生配置。"
     notes: "当前包含 Tauri v2 配置、Rust 入口、capabilities 和官方插件 opener/global-shortcut/clipboard-manager/sql；关键文件是 src-tauri/tauri.conf.json、src-tauri/Cargo.toml、src-tauri/src/main.rs、src-tauri/src/lib.rs、src-tauri/capabilities/default.json、src-tauri/capabilities/desktop.json。tauri.conf.json 已把主窗口初始尺寸调整为 430x350 compact 预览壳。"
     risk: "不要把 UI 状态和业务展示逻辑塞进 Rust 层。"
+
+  - path: "src-tauri/src/explanation.rs"
+    purpose: "阶段二 ExplanationCard 中间协议、CaptureInput 类型和 Rust validator。"
+    status: "active"
+    read_when:
+      - "接入 DeepSeek 结构化输出。"
+      - "调整解释卡 schema、字段限长或校验规则。"
+      - "把解释卡映射到 compact UI 或后续 SQLite 本地记忆。"
+    notes: "schema 是 ReadRay 中间协议，不是前端组件 props；当前支持 word/phrase/sentence 类型，测试重点覆盖 word；无 contextText 时不允许 contextMeaning。"
+    risk: "不要在这里接真实 DeepSeek 查询链路、SQLite schema 或 UI 交互逻辑。"
+
+  - path: "src-tauri/src/deepseek_explanation.rs"
+    purpose: "DeepSeek 结构化 ExplanationCard 查询 command、prompt、响应解析和 validator 装配。"
+    status: "active"
+    read_when:
+      - "调整 create_explanation_card command。"
+      - "排查 DeepSeek 结构化 JSON 输出、serde 解析或 validator 失败。"
+      - "将 ExplanationCard 接入 compact UI 前的 Rust 层查询链路。"
+    notes: "command 输入为 CaptureInput，成功返回 ExplanationCard；请求使用 response_format=json_object，并在解析后调用 validate_explanation_card。当前不接前端 UI，不做 SQLite。"
+    risk: "不要在日志、文档或提交文件中写入真实 DEEPSEEK_API_KEY；不要把 UI 映射和真实查询链路混成一次大改。"
 
   - path: "scripts/"
     purpose: "辅助脚本目录。"

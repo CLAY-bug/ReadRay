@@ -43,6 +43,36 @@ type Stage1CheckRow = {
 type PreviewMode = "anchored" | "command";
 type CommandStage = "input" | "loading" | "result";
 
+type QueryType = "word" | "phrase" | "sentence";
+
+type CaptureInput = {
+  queryText: string;
+  contextText?: string | null;
+  sourceType: "manual" | "clipboard" | "windows_uia" | "app_adapter" | "ocr";
+};
+
+type ExplanationCard = {
+  queryType: QueryType;
+  headword: string;
+  phonetic?: string | null;
+  basicMeaning: string;
+  contextMeaning?: string | null;
+  phrases: Array<{
+    phrase: string;
+    meaning: string;
+  }>;
+  nearMeanings: Array<{
+    term: string;
+    meaning: string;
+  }>;
+  examples: Array<{
+    en: string;
+    zh: string;
+  }>;
+  difficulty?: string | null;
+  reviewHint?: string | null;
+};
+
 const idle: CheckResult = { state: "idle", detail: "未验证" };
 
 const mockAnchoredResult: AnchoredResult = {
@@ -90,13 +120,34 @@ const mockCenteredResult: CenteredResult = {
   exampleZh: "这个产品被宣传为环保的。",
 };
 
+function mapExplanationCardToCenteredResult(card: ExplanationCard): CenteredResult {
+  const primaryExample = card.examples[0];
+  const reviewHint = card.reviewHint?.trim();
+
+  return {
+    word: card.headword,
+    phonetic: card.phonetic ?? "",
+    partOfSpeech: reviewHint || undefined,
+    definition: card.contextMeaning
+      ? `${card.basicMeaning}｜语境：${card.contextMeaning}`
+      : card.basicMeaning,
+    phrases: card.phrases,
+    nearMeaningTitle: "近义理解",
+    nearMeanings: card.nearMeanings.map((item) => ({
+      phrase: item.term,
+      meaning: item.meaning,
+    })),
+    example: primaryExample.en,
+    exampleZh: primaryExample.zh,
+  };
+}
+
 function formatError(error: unknown) {
   return error instanceof Error ? error.message : String(error);
 }
 
 function App() {
   const previewAnchorRef = useRef<HTMLDivElement>(null);
-  const commandMockTimerRef = useRef<number | null>(null);
   const [shortcutLabel, setShortcutLabel] = useState("Ctrl+Alt+R");
   const [windowCheck, setWindowCheck] = useState<CheckResult>(idle);
   const [clipboardCheck, setClipboardCheck] = useState<CheckResult>(idle);
@@ -107,8 +158,11 @@ function App() {
   const [popoverOpen, setPopoverOpen] = useState(true);
   const [anchorRect, setAnchorRect] = useState<AnchorRect | null>(null);
   const [commandOpen, setCommandOpen] = useState(false);
-  const [commandValue, setCommandValue] = useState("marketed");
+  const [commandValue, setCommandValue] = useState("");
   const [commandStage, setCommandStage] = useState<CommandStage>("input");
+  const [commandError, setCommandError] = useState<string | undefined>();
+  const [centeredResult, setCenteredResult] =
+    useState<CenteredResult>(mockCenteredResult);
 
   const updatePreviewAnchorRect = useCallback(() => {
     const element = previewAnchorRef.current;
@@ -148,62 +202,60 @@ function App() {
     };
   }, [updatePreviewAnchorRect]);
 
-  useEffect(() => {
-    return () => {
-      if (commandMockTimerRef.current !== null) {
-        window.clearTimeout(commandMockTimerRef.current);
-        commandMockTimerRef.current = null;
-      }
-    };
-  }, []);
-
-  const clearCommandMockState = useCallback(() => {
-    if (commandMockTimerRef.current !== null) {
-      window.clearTimeout(commandMockTimerRef.current);
-      commandMockTimerRef.current = null;
-    }
-
+  const clearCommandState = useCallback(() => {
     setCommandStage("input");
+    setCommandError(undefined);
   }, []);
 
   function showPreviewPopover() {
-    clearCommandMockState();
+    clearCommandState();
     setPreviewMode("anchored");
     updatePreviewAnchorRect();
     setPopoverOpen(true);
   }
 
   function showCommandInputPreview() {
-    clearCommandMockState();
+    clearCommandState();
     setPreviewMode("command");
     setCommandOpen(true);
   }
 
   function handleCommandOpenChange(nextOpen: boolean) {
-    clearCommandMockState();
+    clearCommandState();
     setCommandOpen(nextOpen);
   }
 
   function handleCommandValueChange(nextValue: string) {
     setCommandValue(nextValue);
     setCommandStage("input");
+    setCommandError(undefined);
   }
 
-  function submitMockCommand(value: string) {
+  async function submitCommand(value: string) {
     if (commandStage === "loading") {
       return;
     }
 
-    if (commandMockTimerRef.current !== null) {
-      window.clearTimeout(commandMockTimerRef.current);
-    }
-
     setCommandValue(value);
     setCommandStage("loading");
-    commandMockTimerRef.current = window.setTimeout(() => {
+    setCommandError(undefined);
+
+    const input: CaptureInput = {
+      queryText: value,
+      contextText: null,
+      sourceType: "manual",
+    };
+
+    try {
+      const card = await invoke<ExplanationCard>("create_explanation_card", {
+        input,
+      });
+      setCenteredResult(mapExplanationCardToCenteredResult(card));
       setCommandStage("result");
-      commandMockTimerRef.current = null;
-    }, 1350);
+    } catch (error) {
+      setCommandStage("input");
+      setCommandError(formatError(error));
+    }
   }
 
   async function toggleWindow() {
@@ -345,13 +397,16 @@ function App() {
               onValueChange={handleCommandValueChange}
               open={commandOpen && commandStage !== "result"}
               loading={commandStage === "loading"}
-              onSubmit={submitMockCommand}
+              error={commandError}
+              onSubmit={submitCommand}
               onOpenChange={handleCommandOpenChange}
             />
             <CenteredResultPanel
               query={commandValue}
-              result={mockCenteredResult}
+              result={centeredResult}
               open={commandOpen && commandStage === "result"}
+              onQueryChange={handleCommandValueChange}
+              onSubmit={submitCommand}
               onOpenChange={handleCommandOpenChange}
             />
           </>

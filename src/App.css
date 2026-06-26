@@ -291,7 +291,7 @@ button:active {
   outline: 0;
   color: var(--rr-color-text-primary);
   background: transparent;
-  caret-color: transparent;
+  caret-color: var(--rr-color-amber);
   font: 400 20px / 1.35 var(--rr-font-stack);
   letter-spacing: 0;
 }
@@ -411,8 +411,8 @@ button:active {
 
 .centered-result-panel__phrase-row {
   display: grid;
-  grid-template-columns: 128px 1fr;
-  gap: 12px;
+  grid-template-columns: minmax(0, 1.25fr) minmax(0, 1fr);
+  gap: 14px;
   min-height: 30px;
   align-items: baseline;
   border: 1px solid rgba(246, 240, 232, 0.08);
@@ -422,17 +422,20 @@ button:active {
 }
 
 .centered-result-panel__phrase {
+  min-width: 0;
   color: var(--rr-color-amber);
   font-family: var(--rr-font-mono);
   font-size: 13px;
   line-height: 1.2;
-  white-space: nowrap;
+  overflow-wrap: anywhere;
 }
 
 .centered-result-panel__phrase-meaning {
+  min-width: 0;
   color: rgba(246, 240, 232, 0.86);
   font-size: 13px;
   line-height: 1.55;
+  overflow-wrap: anywhere;
 }
 
 .centered-result-panel__example {

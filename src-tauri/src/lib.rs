@@ -2,9 +2,12 @@ use serde::Serialize;
 use serde_json::json;
 use std::path::PathBuf;
 
+pub mod deepseek_explanation;
+pub mod explanation;
+
 const READRAY_SHORTCUT_LABEL: &str = "Ctrl+Alt+R";
-const DEEPSEEK_BASE_URL: &str = "https://api.deepseek.com";
-const DEFAULT_DEEPSEEK_MODEL: &str = "deepseek-v4-flash";
+pub(crate) const DEEPSEEK_BASE_URL: &str = "https://api.deepseek.com";
+pub(crate) const DEFAULT_DEEPSEEK_MODEL: &str = "deepseek-v4-flash";
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -238,7 +241,8 @@ pub fn run() {
             shortcut_label,
             toggle_main_window,
             set_main_window_always_on_top,
-            deepseek_smoke_test
+            deepseek_smoke_test,
+            deepseek_explanation::create_explanation_card
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

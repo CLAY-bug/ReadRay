@@ -1,12 +1,12 @@
 # ReadRay 交接记录
 
-最后更新：2026-06-25
+最后更新：2026-06-26
 
 ## TL;DR
 
 - 当前状态：Tauri + React + TypeScript 脚手架已创建，前端构建通过，Git 已修复，比赛资料已恢复；Windows 上的 VS Build Tools / MSVC / Windows SDK 已修复，阶段 A 磁盘迁移已完成；阶段一桌面基础能力已完成第一轮工程验证。
 - 当前路线：Windows 原生，Tauri + React + TypeScript + Rust + SQLite。
-- 下一步：继续完成 ReadRay MVP compact UI 的前端交互骨架；本机 `.env` 已配置 `DEEPSEEK_API_KEY` 且 DeepSeek smoke test 已通过，之后进入解释卡 MVP 的最小闭环。
+- 下一步：把当前 compact preview 迁移成真实桌面 overlay 壳，让无选区输入框先浮在真实桌面上；本机 `.env` 已配置 `DEEPSEEK_API_KEY` 且无选区真实查询已接通。
 - 当前约束：不使用通用 Agent 框架，不内置商业词典，不做 OCR、本地大模型或跨平台支持。
 - 交接原则：`HANDOFF.md` 只记录会影响下一次恢复上下文的信息，小型文档措辞和格式调整不记录。
 
@@ -20,10 +20,12 @@
 - `.env.example`：本地开发环境变量占位示例；真实 `.env` 不提交。
 - `src/`：React + TypeScript 前端脚手架源码。
 - `src/components/AnchoredResultPopover.tsx`：MVP compact UI 的锚定划词结果浮层组件骨架，当前由 App 传入静态 mock 数据和 mock anchorRect。
-- `src/components/CenteredCommandInput.tsx`：MVP compact UI 的无选区居中输入组件骨架，当前由 App 传入静态 mock 输入状态。
-- `src/components/CenteredResultPanel.tsx`：MVP compact UI 的无选区输入后居中结果面板骨架，当前由 App 传入静态 mock 结果。
+- `src/components/CenteredCommandInput.tsx`：MVP compact UI 的无选区居中输入组件骨架，当前由 App 传入真实查询状态。
+- `src/components/CenteredResultPanel.tsx`：MVP compact UI 的无选区输入后居中结果面板骨架，当前由 App 传入 ExplanationCard 映射后的真实查询结果。
 - `src/styles/tokens.css`：ReadRay Graphite + Amber 轻量样式 token。
 - `src-tauri/`：Tauri v2 / Rust 原生层脚手架源码；当前 Tauri 主窗口配置已调整为 compact 预览尺寸。
+- `src-tauri/src/explanation.rs`：阶段二 ExplanationCard 中间协议、CaptureInput 类型和 Rust validator；当前只做 schema 与校验，不接真实 DeepSeek。
+- `src-tauri/src/deepseek_explanation.rs`：DeepSeek 结构化 ExplanationCard 查询 command、prompt、响应解析和 validator 装配；当前不接前端 UI。
 - `package.json` / `pnpm-lock.yaml`：pnpm 前端依赖和脚本。
 - `src-tauri/Cargo.lock`：Rust / Tauri 依赖锁定文件。
 - `resource/`：已恢复的比赛官网页面、附件和文本抽取。
@@ -50,6 +52,9 @@
 - 暂不做浏览器插件方向，因为浏览器已有沉浸式翻译、陪读蛙等成熟同类工具；优先面向 Windows 桌面应用，尤其是 Electron 类应用和常用阅读/写作软件。
 - 当前 Tauri compact preview 只是开发模拟舞台：外层 ReadRay 窗口模拟桌面/阅读环境，mock selected word 模拟真实划词，AnchoredResultPopover 模拟未来贴近真实选区出现的结果浮层；最终产品不应出现这个大背景舞台。
 - 正式交互分为两种状态：有选区和 `anchorRect` 时显示锚定结果浮层；无选区时通过快捷键呼出居中输入框，用户手动输入后再切换到结果态。
+- ExplanationCard 是 ReadRay 的中间协议，服务 DeepSeek 结构化输出、compact UI 映射和后续 SQLite 本地记忆；它不是某个前端组件的 props。
+- 解释卡上下文规则：只有输入侧存在 `contextText` 时，输出侧才允许 `contextMeaning`；无上下文时必须降级为普通解释。
+- UI 信息原则：不要为了填充而展示低信息标签；例如未定义 ReadRay 难度体系前，不展示模型自由生成的 CEFR 难度，结果头部右侧只有在 `reviewHint` 有实际内容时才显示。
 
 ## 已完成准备
 
@@ -81,15 +86,18 @@
 - 已建立 MVP compact UI 第一版前端基础：轻量样式 token、`AnchoredResultPopover` 静态 mock 组件，并在当前 App 中作为主视觉展示；阶段一验证面板保留为辅助区。
 - 已扩展 `AnchoredResultPopover` 交互骨架：支持 `result`、`anchorRect`、`open`、`onOpenChange` props，组件内完成 fixed 定位、下方优先、空间不足向上翻转、横向 viewport 限制、Esc 隐藏和 `highlightText` 例句高亮；当前 App 使用 mock 锚点 DOM 获取 rect，并提供“重新显示”预览按钮。
 - 已接入并修正 Tauri 桌面端 compact 预览壳：App 默认只展示 mock selected word 和 AnchoredResultPopover，阶段一验证能力收进右上角“开发验证”入口；Tauri 主窗口初始尺寸调整为 430×350，最小尺寸为 420×320，未改 Rust 捕获逻辑。
-- 已新增无选区 `CenteredCommandInput` 交互骨架：支持打开自动聚焦、Esc 关闭、Enter 非空提交、loading 轻量呼吸点和 error-lite 轻提示；当前 App 可在 mock 划词浮层和无选区输入之间切换，输入提交后只模拟 loading 到错误提示，不生成正式结果页。
-- 已新增无选区输入后的 `CenteredResultPanel` 结果态骨架：当前 App 的无选区模式从 input/loading 进入 result，结果面板与输入框同宽，顶部对齐输入框顶部并向下展开，顶部保留 query，内容区展示常见语块、近义理解和例句，内部可滚动；近义理解已按设计稿改成 `marketed` / `sold` / `advertised` 三行对照；未接真实 DeepSeek，不做聊天流或底部操作入口。
+- 已新增无选区 `CenteredCommandInput` 交互骨架：支持打开自动聚焦、Esc 关闭、Enter 非空提交、loading 轻量呼吸点和 error-lite 轻提示；当前 App 可在 mock 划词浮层和无选区输入之间切换，无选区输入默认为空。
+- 已新增无选区输入后的 `CenteredResultPanel` 结果态骨架：当前 App 的无选区模式从 input/loading 进入 result，结果面板与输入框同宽，顶部对齐输入框顶部并向下展开，顶部保留可编辑 query，内容区展示语块、近义理解和例句，内部可滚动；查询完成后可在顶部输入框 Backspace 删除并继续输入下一次查询；不做聊天流或底部操作入口。
+- 已新增阶段二 ExplanationCard schema 与 Rust validator：支持 `word` / `phrase` / `sentence` 查询类型和 `manual` / `clipboard` / `windows_uia` / `app_adapter` / `ocr` 来源类型；当前 validator 覆盖必填非空、文本限长、数组限长、例句至少 1 个最多 2 个且英中双语必填，以及 `contextText` / `contextMeaning` 约束；未做 SQLite schema。
+- 已新增 Rust command `create_explanation_card`：输入 `CaptureInput`，调用 DeepSeek JSON Output，解析为 `ExplanationCard`，再调用 `validate_explanation_card`；失败时区分请求失败、HTTP 非成功、响应结构解析失败、JSON 内容解析失败和 validator 失败；当前未接 compact UI。
+- 无选区居中输入已接入真实查询：提交时构造 `CaptureInput { queryText, contextText: null, sourceType: manual }`，调用 `create_explanation_card`，成功后映射到 `CenteredResultPanel`，失败时复用输入框的 error-lite 状态；当前不展示未定义标准的 difficulty，短语行已修复长英文和中文解释重叠问题；未改划词浮层、UI Automation、SQLite 或历史功能。
 
 ## 下一步
 
 继续推进：阶段一基础桌面能力已经完成第一轮工程验证。当前最先要处理的阻塞：
 
-- 当前先把 MVP 的 compact UI 设计完成，避免在技术验证前反复改变交互目标。
-- DeepSeek key 不再是当前本机阻塞；后续进入阶段二解释卡 MVP 时可以直接复用现有 smoke test 通路。
+- 下一步优先做真实桌面 overlay 壳：移除当前模拟舞台背景，把 Tauri 主窗口改成透明、无边框、置顶、默认隐藏，并让无选区输入框先真实浮在桌面上。
+- DeepSeek key 不再是当前本机阻塞；后续阶段二解释卡 MVP 可以复用现有 command，但不要把 overlay 壳、SQLite schema 和上下文捕获混在一次大改里。
 - 新环境仍需复制 `.env.example` 为 `.env` 后自行填写 `DEEPSEEK_API_KEY`；真实 `.env` 不提交。
 
 阶段一完成标准：
