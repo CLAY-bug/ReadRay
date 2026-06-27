@@ -13,10 +13,17 @@
     "windows": [
       {
         "title": "ReadRay",
-        "width": 430,
-        "height": 350,
-        "minWidth": 420,
-        "minHeight": 320
+        "width": 720,
+        "height": 104,
+        "minWidth": 680,
+        "minHeight": 90,
+        "center": true,
+        "decorations": false,
+        "transparent": true,
+        "alwaysOnTop": true,
+        "resizable": false,
+        "skipTaskbar": true,
+        "shadow": false
       }
     ],
     "security": {

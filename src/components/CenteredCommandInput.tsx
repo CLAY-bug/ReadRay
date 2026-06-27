@@ -1,4 +1,11 @@
-import { useEffect, useRef, type FormEvent, type KeyboardEvent } from "react";
+import {
+  useEffect,
+  useRef,
+  type FormEvent,
+  type KeyboardEvent,
+  type MouseEvent,
+} from "react";
+import { invoke } from "@tauri-apps/api/core";
 
 type CenteredCommandInputProps = {
   value: string;
@@ -58,6 +65,38 @@ function CenteredCommandInput({
     }
   }
 
+  function handleWindowDrag(event: MouseEvent<HTMLElement>) {
+    if (event.button !== 0) {
+      return;
+    }
+
+    if (event.target instanceof HTMLElement && event.target.closest("input")) {
+      return;
+    }
+
+    event.preventDefault();
+    invoke("begin_overlay_window_drag", {
+      pointerX: event.screenX,
+      pointerY: event.screenY,
+    }).catch(() => undefined);
+
+    function handleMouseMove(moveEvent: globalThis.MouseEvent) {
+      invoke("drag_overlay_window", {
+        pointerX: moveEvent.screenX,
+        pointerY: moveEvent.screenY,
+      }).catch(() => undefined);
+    }
+
+    function handleMouseUp() {
+      window.removeEventListener("mousemove", handleMouseMove);
+      window.removeEventListener("mouseup", handleMouseUp);
+      invoke("finish_overlay_window_drag").catch(() => undefined);
+    }
+
+    window.addEventListener("mousemove", handleMouseMove);
+    window.addEventListener("mouseup", handleMouseUp);
+  }
+
   if (!open) {
     return null;
   }
@@ -72,8 +111,14 @@ function CenteredCommandInput({
           loading ? " is-loading" : ""
         }${error ? " is-error-lite" : ""}`}
         autoComplete="off"
+        onMouseDown={handleWindowDrag}
         onSubmit={handleSubmit}
       >
+        <span
+          className="centered-command-input__drag-region"
+          data-tauri-drag-region
+          aria-hidden="true"
+        />
         <input
           ref={inputRef}
           className="centered-command-input__field"

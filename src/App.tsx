@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
 import { readText, writeText } from "@tauri-apps/plugin-clipboard-manager";
 import Database from "@tauri-apps/plugin-sql";
 import AnchoredResultPopover, {
@@ -42,6 +43,7 @@ type Stage1CheckRow = {
 
 type PreviewMode = "anchored" | "command";
 type CommandStage = "input" | "loading" | "result";
+type OverlayWindowStage = "input" | "loading" | "result" | "error";
 
 type QueryType = "word" | "phrase" | "sentence";
 
@@ -154,10 +156,11 @@ function App() {
   const [sqliteCheck, setSqliteCheck] = useState<CheckResult>(idle);
   const [deepseekCheck, setDeepseekCheck] = useState<CheckResult>(idle);
   const [alwaysOnTop, setAlwaysOnTop] = useState(false);
-  const [previewMode, setPreviewMode] = useState<PreviewMode>("anchored");
+  const [previewMode, setPreviewMode] = useState<PreviewMode>("command");
   const [popoverOpen, setPopoverOpen] = useState(true);
   const [anchorRect, setAnchorRect] = useState<AnchorRect | null>(null);
-  const [commandOpen, setCommandOpen] = useState(false);
+  const [showDevControls, setShowDevControls] = useState(false);
+  const [commandOpen, setCommandOpen] = useState(true);
   const [commandValue, setCommandValue] = useState("");
   const [commandStage, setCommandStage] = useState<CommandStage>("input");
   const [commandError, setCommandError] = useState<string | undefined>();
@@ -189,6 +192,10 @@ function App() {
     invoke<WindowState>("stage1_status")
       .then((state) => setAlwaysOnTop(state.alwaysOnTop))
       .catch(() => undefined);
+
+    invoke("prepare_overlay_input_window").catch((error) => {
+      setWindowCheck({ state: "warn", detail: formatError(error) });
+    });
   }, []);
 
   useEffect(() => {
@@ -202,10 +209,74 @@ function App() {
     };
   }, [updatePreviewAnchorRect]);
 
+  useEffect(() => {
+    function handleDevControlsToggle(event: globalThis.KeyboardEvent) {
+      if (event.ctrlKey && event.shiftKey && event.key.toLowerCase() === "d") {
+        event.preventDefault();
+        setShowDevControls((visible) => !visible);
+      }
+    }
+
+    window.addEventListener("keydown", handleDevControlsToggle);
+    return () => window.removeEventListener("keydown", handleDevControlsToggle);
+  }, []);
+
+  const overlayWindowStage: OverlayWindowStage = commandError
+    ? "error"
+    : commandStage;
+
+  useEffect(() => {
+    if (!commandOpen || previewMode !== "command") {
+      return;
+    }
+
+    invoke("set_overlay_window_stage", { stage: overlayWindowStage }).catch(
+      (error) => {
+        setWindowCheck({ state: "warn", detail: formatError(error) });
+      },
+    );
+  }, [commandOpen, overlayWindowStage, previewMode]);
+
   const clearCommandState = useCallback(() => {
     setCommandStage("input");
     setCommandError(undefined);
   }, []);
+
+  const showCommandOverlay = useCallback(() => {
+    clearCommandState();
+    setPreviewMode("command");
+    setCommandOpen(true);
+  }, [clearCommandState]);
+
+  useEffect(() => {
+    let unlistenShowInput: (() => void) | undefined;
+    let unlistenHidden: (() => void) | undefined;
+
+    listen("readray://show-input", () => {
+      showCommandOverlay();
+    })
+      .then((dispose) => {
+        unlistenShowInput = dispose;
+      })
+      .catch((error) => {
+        setWindowCheck({ state: "warn", detail: formatError(error) });
+      });
+
+    listen("readray://hidden", () => {
+      setCommandOpen(false);
+    })
+      .then((dispose) => {
+        unlistenHidden = dispose;
+      })
+      .catch((error) => {
+        setWindowCheck({ state: "warn", detail: formatError(error) });
+      });
+
+    return () => {
+      unlistenShowInput?.();
+      unlistenHidden?.();
+    };
+  }, [showCommandOverlay]);
 
   function showPreviewPopover() {
     clearCommandState();
@@ -215,14 +286,19 @@ function App() {
   }
 
   function showCommandInputPreview() {
-    clearCommandState();
-    setPreviewMode("command");
-    setCommandOpen(true);
+    showCommandOverlay();
   }
 
-  function handleCommandOpenChange(nextOpen: boolean) {
+  async function handleCommandOpenChange(nextOpen: boolean) {
     clearCommandState();
     setCommandOpen(nextOpen);
+    if (!nextOpen) {
+      try {
+        await invoke("hide_overlay_window");
+      } catch (error) {
+        setWindowCheck({ state: "warn", detail: formatError(error) });
+      }
+    }
   }
 
   function handleCommandValueChange(nextValue: string) {
@@ -376,7 +452,7 @@ function App() {
 
   return (
     <main className="app-shell">
-      <section className="compact-preview" aria-label="ReadRay compact UI 桌面预览">
+      <section className="compact-preview" aria-label="ReadRay 桌面浮层">
         {previewMode === "anchored" ? (
           <>
             <div className="mock-reader-line" aria-hidden="true" />
@@ -413,6 +489,7 @@ function App() {
         )}
       </section>
 
+      {showDevControls ? (
       <div className="preview-controls" aria-label="预览辅助控制">
         <div className="preview-controls__modes" aria-label="预览模式">
           <button
@@ -502,6 +579,7 @@ function App() {
           </section>
         </details>
       </div>
+      ) : null}
     </main>
   );
 }

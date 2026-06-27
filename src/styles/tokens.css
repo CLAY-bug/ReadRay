@@ -16,8 +16,6 @@
   --rr-radius-lg: 16px;
 
   --rr-shadow-popover:
-    0 28px 70px rgba(0, 0, 0, 0.42),
-    0 12px 30px rgba(0, 0, 0, 0.3),
     0 0 0 1px var(--rr-color-border);
 
   --rr-space-1: 4px;

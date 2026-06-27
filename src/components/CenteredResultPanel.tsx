@@ -1,4 +1,5 @@
-import { useEffect, type KeyboardEvent } from "react";
+import { useEffect, type KeyboardEvent, type MouseEvent } from "react";
+import { invoke } from "@tauri-apps/api/core";
 
 export type CenteredResultPhrase = {
   phrase: string;
@@ -65,6 +66,41 @@ function CenteredResultPanel({
     }
   }
 
+  function handleWindowDrag(event: MouseEvent<HTMLElement>) {
+    if (event.button !== 0) {
+      return;
+    }
+
+    if (
+      event.target instanceof HTMLElement &&
+      event.target.closest("input, .centered-result-panel__body")
+    ) {
+      return;
+    }
+
+    event.preventDefault();
+    invoke("begin_overlay_window_drag", {
+      pointerX: event.screenX,
+      pointerY: event.screenY,
+    }).catch(() => undefined);
+
+    function handleMouseMove(moveEvent: globalThis.MouseEvent) {
+      invoke("drag_overlay_window", {
+        pointerX: moveEvent.screenX,
+        pointerY: moveEvent.screenY,
+      }).catch(() => undefined);
+    }
+
+    function handleMouseUp() {
+      window.removeEventListener("mousemove", handleMouseMove);
+      window.removeEventListener("mouseup", handleMouseUp);
+      invoke("finish_overlay_window_drag").catch(() => undefined);
+    }
+
+    window.addEventListener("mousemove", handleMouseMove);
+    window.addEventListener("mouseup", handleMouseUp);
+  }
+
   if (!open) {
     return null;
   }
@@ -73,7 +109,13 @@ function CenteredResultPanel({
     <article
       className="centered-result-panel"
       aria-label={`${result.word} 的居中解释结果`}
+      onMouseDown={handleWindowDrag}
     >
+      <span
+        className="centered-result-panel__drag-region"
+        data-tauri-drag-region
+        aria-hidden="true"
+      />
       <div className="centered-result-panel__query-row">
         <input
           className="centered-result-panel__query"

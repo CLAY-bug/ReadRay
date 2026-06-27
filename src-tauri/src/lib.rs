@@ -1,6 +1,8 @@
 use serde::Serialize;
 use serde_json::json;
 use std::path::PathBuf;
+use std::sync::{Mutex, OnceLock};
+use tauri::{LogicalPosition, LogicalSize, WebviewWindow, WindowEvent};
 
 pub mod deepseek_explanation;
 pub mod explanation;
@@ -16,6 +18,25 @@ struct WindowState {
     always_on_top: bool,
 }
 
+#[derive(Clone, Copy)]
+enum OverlayWindowStage {
+    Input,
+    Result,
+    Error,
+}
+
+impl OverlayWindowStage {
+    fn size(self) -> LogicalSize<f64> {
+        match self {
+            Self::Input => LogicalSize::new(720.0, 104.0),
+            Self::Result => LogicalSize::new(800.0, 560.0),
+            Self::Error => LogicalSize::new(720.0, 132.0),
+        }
+    }
+}
+
+const DEFAULT_OVERLAY_CENTER_Y_RATIO: f64 = 0.36;
+
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 struct DeepSeekSmokeResult {
@@ -27,8 +48,87 @@ struct DeepSeekSmokeResult {
     content_preview: Option<String>,
 }
 
+#[derive(Clone, Copy)]
+struct SavedOverlayPosition {
+    x: f64,
+    y: f64,
+}
+
+#[derive(Clone, Copy)]
+struct ActiveOverlayDrag {
+    pointer_x: f64,
+    pointer_y: f64,
+    window_x: f64,
+    window_y: f64,
+}
+
+static SAVED_OVERLAY_POSITION: OnceLock<Mutex<Option<SavedOverlayPosition>>> = OnceLock::new();
+static ACTIVE_OVERLAY_DRAG: OnceLock<Mutex<Option<ActiveOverlayDrag>>> = OnceLock::new();
+
 fn tauri_err(error: impl std::fmt::Display) -> String {
     error.to_string()
+}
+
+fn saved_overlay_position() -> &'static Mutex<Option<SavedOverlayPosition>> {
+    SAVED_OVERLAY_POSITION.get_or_init(|| Mutex::new(None))
+}
+
+fn active_overlay_drag() -> &'static Mutex<Option<ActiveOverlayDrag>> {
+    ACTIVE_OVERLAY_DRAG.get_or_init(|| Mutex::new(None))
+}
+
+fn save_overlay_position(x: i32, y: i32, scale_factor: f64) -> Result<(), String> {
+    save_overlay_position_from_logical(f64::from(x) / scale_factor, f64::from(y) / scale_factor)
+}
+
+fn save_overlay_position_from_logical(x: f64, y: f64) -> Result<(), String> {
+    let mut saved = saved_overlay_position().lock().map_err(tauri_err)?;
+
+    *saved = Some(SavedOverlayPosition { x, y });
+
+    Ok(())
+}
+
+fn remember_overlay_position(window: &WebviewWindow) -> Result<(), String> {
+    let position = window.outer_position().map_err(tauri_err)?;
+    save_overlay_position(
+        position.x,
+        position.y,
+        window.scale_factor().map_err(tauri_err)?,
+    )
+}
+
+fn get_saved_overlay_position() -> Result<Option<SavedOverlayPosition>, String> {
+    saved_overlay_position()
+        .lock()
+        .map(|saved| *saved)
+        .map_err(tauri_err)
+}
+
+fn place_default_overlay_position(
+    window: &WebviewWindow,
+    stage: OverlayWindowStage,
+) -> Result<(), String> {
+    let Some(monitor) = window.current_monitor().map_err(tauri_err)? else {
+        return window.center().map_err(tauri_err);
+    };
+
+    let scale_factor = window.scale_factor().map_err(tauri_err)?;
+    let monitor_position = monitor.position();
+    let monitor_size = monitor.size();
+    let stage_size = stage.size();
+
+    let monitor_x = f64::from(monitor_position.x) / scale_factor;
+    let monitor_y = f64::from(monitor_position.y) / scale_factor;
+    let monitor_width = f64::from(monitor_size.width) / scale_factor;
+    let monitor_height = f64::from(monitor_size.height) / scale_factor;
+
+    let x = monitor_x + (monitor_width - stage_size.width) / 2.0;
+    let y = monitor_y + monitor_height * DEFAULT_OVERLAY_CENTER_Y_RATIO - stage_size.height / 2.0;
+
+    window
+        .set_position(LogicalPosition::new(x.max(monitor_x), y.max(monitor_y)))
+        .map_err(tauri_err)
 }
 
 fn load_project_env() {
@@ -48,18 +148,33 @@ fn load_project_env() {
     }
 }
 
-fn show_and_focus(window: &tauri::WebviewWindow) -> Result<(), String> {
+fn resize_overlay_window(window: &WebviewWindow, stage: OverlayWindowStage) -> Result<(), String> {
+    window.set_size(stage.size()).map_err(tauri_err)?;
+    if let Some(position) = get_saved_overlay_position()? {
+        window
+            .set_position(LogicalPosition::new(position.x, position.y))
+            .map_err(tauri_err)?;
+    } else {
+        place_default_overlay_position(window, stage)?;
+    }
+
+    Ok(())
+}
+
+fn show_and_focus(window: &WebviewWindow) -> Result<(), String> {
     window.show().map_err(tauri_err)?;
     window.set_focus().map_err(tauri_err)
 }
 
-fn toggle_window_visibility(window: &tauri::WebviewWindow) -> Result<bool, String> {
+fn toggle_window_visibility(window: &WebviewWindow) -> Result<bool, String> {
     let visible = window.is_visible().map_err(tauri_err)?;
 
     if visible {
+        let _ = remember_overlay_position(window);
         window.hide().map_err(tauri_err)?;
         Ok(false)
     } else {
+        resize_overlay_window(window, OverlayWindowStage::Input)?;
         show_and_focus(window)?;
         Ok(true)
     }
@@ -85,7 +200,7 @@ fn toggle_main_window(window: tauri::WebviewWindow) -> Result<bool, String> {
 
 #[tauri::command]
 fn set_main_window_always_on_top(
-    window: tauri::WebviewWindow,
+    window: WebviewWindow,
     enabled: bool,
 ) -> Result<WindowState, String> {
     window.set_always_on_top(enabled).map_err(tauri_err)?;
@@ -97,6 +212,76 @@ fn set_main_window_always_on_top(
         visible: window.is_visible().map_err(tauri_err)?,
         always_on_top: enabled,
     })
+}
+
+#[tauri::command]
+fn prepare_overlay_input_window(window: WebviewWindow) -> Result<(), String> {
+    resize_overlay_window(&window, OverlayWindowStage::Input)?;
+    window.set_always_on_top(true).map_err(tauri_err)?;
+    show_and_focus(&window)
+}
+
+#[tauri::command]
+fn set_overlay_window_stage(window: WebviewWindow, stage: &str) -> Result<(), String> {
+    let overlay_stage = match stage {
+        "input" | "loading" => OverlayWindowStage::Input,
+        "result" => OverlayWindowStage::Result,
+        "error" => OverlayWindowStage::Error,
+        other => return Err(format!("未知 overlay stage：{other}")),
+    };
+
+    resize_overlay_window(&window, overlay_stage)
+}
+
+#[tauri::command]
+fn hide_overlay_window(window: WebviewWindow) -> Result<(), String> {
+    let _ = remember_overlay_position(&window);
+    window.hide().map_err(tauri_err)
+}
+
+#[tauri::command]
+fn begin_overlay_window_drag(
+    window: WebviewWindow,
+    pointer_x: f64,
+    pointer_y: f64,
+) -> Result<(), String> {
+    let position = window.outer_position().map_err(tauri_err)?;
+    let scale_factor = window.scale_factor().map_err(tauri_err)?;
+    let mut active_drag = active_overlay_drag().lock().map_err(tauri_err)?;
+
+    *active_drag = Some(ActiveOverlayDrag {
+        pointer_x,
+        pointer_y,
+        window_x: f64::from(position.x) / scale_factor,
+        window_y: f64::from(position.y) / scale_factor,
+    });
+
+    Ok(())
+}
+
+#[tauri::command]
+fn drag_overlay_window(
+    window: WebviewWindow,
+    pointer_x: f64,
+    pointer_y: f64,
+) -> Result<(), String> {
+    let Some(active_drag) = *active_overlay_drag().lock().map_err(tauri_err)? else {
+        return Ok(());
+    };
+
+    let x = active_drag.window_x + pointer_x - active_drag.pointer_x;
+    let y = active_drag.window_y + pointer_y - active_drag.pointer_y;
+
+    window
+        .set_position(LogicalPosition::new(x, y))
+        .map_err(tauri_err)?;
+    save_overlay_position_from_logical(x, y)
+}
+
+#[tauri::command]
+fn finish_overlay_window_drag(window: WebviewWindow) -> Result<(), String> {
+    *active_overlay_drag().lock().map_err(tauri_err)? = None;
+    remember_overlay_position(&window)
 }
 
 #[tauri::command]
@@ -199,6 +384,8 @@ pub fn run() {
     load_project_env();
 
     #[cfg(desktop)]
+    use tauri::Emitter;
+    #[cfg(desktop)]
     use tauri::Manager;
     #[cfg(desktop)]
     use tauri_plugin_global_shortcut::{
@@ -221,7 +408,9 @@ pub fn run() {
                         && matches!(event.state(), ShortcutState::Pressed)
                     {
                         if let Some(window) = app.get_webview_window("main") {
-                            let _ = toggle_window_visibility(&window);
+                            let _ = resize_overlay_window(&window, OverlayWindowStage::Input);
+                            let _ = show_and_focus(&window);
+                            let _ = app.emit("readray://show-input", ());
                         }
                     }
                 })
@@ -236,12 +425,24 @@ pub fn run() {
 
             Ok(())
         })
+        .on_window_event(|window, event| {
+            if let WindowEvent::Focused(false) = event {
+                let _ = window.hide();
+                let _ = window.emit("readray://hidden", ());
+            }
+        })
         .invoke_handler(tauri::generate_handler![
             stage1_status,
             shortcut_label,
             toggle_main_window,
             set_main_window_always_on_top,
             deepseek_smoke_test,
+            prepare_overlay_input_window,
+            set_overlay_window_stage,
+            hide_overlay_window,
+            begin_overlay_window_drag,
+            drag_overlay_window,
+            finish_overlay_window_drag,
             deepseek_explanation::create_explanation_card
         ])
         .run(tauri::generate_context!())

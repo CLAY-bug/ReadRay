@@ -4,8 +4,8 @@ project:
   repo_root: "."
 
 meta:
-  version: "0.4"
-  last_updated: "2026-06-26"
+  version: "0.5"
+  last_updated: "2026-06-27"
   updated_by: "Codex"
   source_of_truth: "docs/RESOURCE_MAP.yml"
   language: "zh-CN"
@@ -131,7 +131,7 @@ source_areas:
     status: "active"
     read_when:
       - "开发解释卡、历史页、复盘页、设置页。"
-    notes: "Tauri + Vite + React + TypeScript 脚手架入口；当前主要入口是 src/main.tsx 和 src/App.tsx，App.tsx 默认进入 compact preview 模式，可在 mock 划词浮层和无选区居中输入之间切换；无选区输入默认为空，已通过 create_explanation_card 调用真实 DeepSeek 查询并映射到 CenteredResultPanel；阶段一验证能力收进右上角开发验证入口。"
+    notes: "Tauri + Vite + React + TypeScript 脚手架入口；当前主要入口是 src/main.tsx 和 src/App.tsx，App.tsx 默认进入无选区 overlay 输入体验；无选区输入默认为空，已通过 create_explanation_card 调用真实 DeepSeek 查询并映射到 CenteredResultPanel；mock 划词浮层和阶段验证控件保留为开发辅助，默认隐藏，可用 Ctrl+Shift+D 临时显示。"
     risk: "不要在前端入口塞入原生系统逻辑。"
 
   - path: "src/components/AnchoredResultPopover.tsx"
@@ -149,7 +149,7 @@ source_areas:
     read_when:
       - "开发无选区快捷键呼出的主动查询输入框。"
       - "调整 typing、loading 或 error-lite 状态。"
-    notes: "当前由 App 传入 value、open、loading、error 和提交回调；组件内部负责打开自动聚焦、Esc 关闭、Enter 非空提交、loading 轻量呼吸点和 error-lite 轻提示。无选区提交已由 App 接入真实 create_explanation_card；本组件不接 UI Automation。"
+    notes: "当前由 App 传入 value、open、loading、error 和提交回调；组件内部负责打开自动聚焦、Esc 关闭、Enter 非空提交、loading 轻量呼吸点、error-lite 轻提示和输入态拖拽区域。无选区提交已由 App 接入真实 create_explanation_card；本组件不接 UI Automation。"
     risk: "不要扩展成命令面板、历史入口或正式结果页；它只负责无选区输入。"
 
   - path: "src/components/CenteredResultPanel.tsx"
@@ -158,7 +158,7 @@ source_areas:
     read_when:
       - "开发无选区主动查询提交后的结果展示。"
       - "调整居中结果面板的信息结构、滚动内容或 mock 数据映射。"
-    notes: "当前由 App 传入 query 和 ExplanationCard 映射后的 result；顶部保留可编辑用户输入，内容区展示语块、近义理解和例句，内部可滚动。结果头部不展示低信息标签；只有 reviewHint 有内容时才显示右侧提示。不做聊天流、底部操作按钮、历史、收藏、复盘或设置入口。"
+    notes: "当前由 App 传入 query 和 ExplanationCard 映射后的 result；顶部保留可编辑用户输入，内容区展示语块、近义理解和例句，内部可滚动，面板顶部提供拖拽区域。结果头部不展示低信息标签；只有 reviewHint 有内容时才显示右侧提示。不做聊天流、底部操作按钮、历史、收藏、复盘或设置入口。"
     risk: "不要把它扩展成完整结果页或 AI 对话界面；它只服务 MVP compact 主动查询结果态。"
 
   - path: "src/styles/tokens.css"
@@ -175,7 +175,7 @@ source_areas:
     status: "active"
     read_when:
       - "开发全局快捷键、剪贴板、窗口行为、SQLite 命令、原生配置。"
-    notes: "当前包含 Tauri v2 配置、Rust 入口、capabilities 和官方插件 opener/global-shortcut/clipboard-manager/sql；关键文件是 src-tauri/tauri.conf.json、src-tauri/Cargo.toml、src-tauri/src/main.rs、src-tauri/src/lib.rs、src-tauri/capabilities/default.json、src-tauri/capabilities/desktop.json。tauri.conf.json 已把主窗口初始尺寸调整为 430x350 compact 预览壳。"
+    notes: "当前包含 Tauri v2 配置、Rust 入口、capabilities 和官方插件 opener/global-shortcut/clipboard-manager/sql；关键文件是 src-tauri/tauri.conf.json、src-tauri/Cargo.toml、src-tauri/src/main.rs、src-tauri/src/lib.rs、src-tauri/capabilities/default.json、src-tauri/capabilities/desktop.json。tauri.conf.json 已把主窗口改为无边框、透明、置顶、跳过任务栏的 overlay 壳，初始输入态尺寸为 720x104；无已保存位置时按屏幕偏上区域定位，拖动命令会在当前进程内显式记住新位置，失焦时自动隐藏。"
     risk: "不要把 UI 状态和业务展示逻辑塞进 Rust 层。"
 
   - path: "src-tauri/src/explanation.rs"
