@@ -1,12 +1,12 @@
 # ReadRay 交接记录
 
-最后更新：2026-06-27
+最后更新：2026-06-28
 
 ## TL;DR
 
 - 当前状态：Tauri + React + TypeScript 脚手架已创建，前端构建通过，Git 已修复，比赛资料已恢复；Windows 上的 VS Build Tools / MSVC / Windows SDK 已修复，阶段 A 磁盘迁移已完成；阶段一桌面基础能力已完成第一轮工程验证。
 - 当前路线：Windows 原生，Tauri + React + TypeScript + Rust + SQLite。
-- 下一步：当前桌面 overlay 的位置和拖动体验已接受，不再继续微调；后续准备 Windows 上下文捕获技术 spike。本机 `.env` 已配置 `DEEPSEEK_API_KEY` 且无选区真实查询已接通。
+- 下一步：Obsidian 编辑模式和阅读模式 UI Automation spike 均已通过，下一轮可以进入 Codex App 单应用验证；当前不把 UIA 接入正式查询链路。本机 `.env` 已配置 `DEEPSEEK_API_KEY` 且无选区真实查询已接通。
 - 当前约束：不使用通用 Agent 框架，不内置商业词典，不做 OCR、本地大模型或跨平台支持。
 - 交接原则：`HANDOFF.md` 只记录会影响下一次恢复上下文的信息，小型文档措辞和格式调整不记录。
 
@@ -24,6 +24,7 @@
 - `src/components/CenteredResultPanel.tsx`：MVP compact UI 的无选区输入后居中结果面板骨架，当前由 App 传入 ExplanationCard 映射后的真实查询结果。
 - `src/styles/tokens.css`：ReadRay Graphite + Amber 轻量样式 token。
 - `src-tauri/`：Tauri v2 / Rust 原生层脚手架源码；当前 Tauri 主窗口配置已调整为无边框、透明、置顶 overlay 壳。
+- `src-tauri/src/windows_uia.rs`：Windows UI Automation 上下文捕获 spike；当前只服务开发期 Obsidian 验证。
 - `src-tauri/src/explanation.rs`：阶段二 ExplanationCard 中间协议、CaptureInput 类型和 Rust validator；当前只做 schema 与校验，不接真实 DeepSeek。
 - `src-tauri/src/deepseek_explanation.rs`：DeepSeek 结构化 ExplanationCard 查询 command、prompt、响应解析和 validator 装配；当前不接前端 UI。
 - `package.json` / `pnpm-lock.yaml`：pnpm 前端依赖和脚本。
@@ -47,12 +48,14 @@
 - `AGENTS.md` 只保留会改变 Codex 行为的规则；背景信息、阶段计划和技术细节放到 `docs/`。
 - `HANDOFF.md` 只记录会影响恢复上下文的信息，不作为操作流水账。
 - 写新代码前先找现有扩展点，复用优先，单一职责，最小改动，不无理由新增依赖。
+- 本机命令和发布流程优先采用 `docs/WINDOWS_ENVIRONMENT.md` 的已验证基线：Codex 显式使用 D 盘本机 pnpm；普通 GitHub commit/push 通过现有 SSH remote 直推 `main`，不因本机缺少 `gh` 而阻塞；启动 Tauri dev 前先检查 ReadRay 相关进程和 1420 端口。
 - 不得在非空项目根目录使用带覆盖或强制语义的初始化命令；如确需使用，必须先确认 Git 可用或完成备份，并说明会影响哪些文件。
 - ReadRay 的差异化不能停留在“复制一个单词后快捷查词”；后续需要研究 Windows 跨应用划词上下文捕获：用户只选中单词时，尽可能获取所在句子或段落作为 `contextText`，再生成语境义。
 - 暂不做浏览器插件方向，因为浏览器已有沉浸式翻译、陪读蛙等成熟同类工具；优先面向 Windows 桌面应用，尤其是 Electron 类应用和常用阅读/写作软件。
 - 原 Tauri compact preview 曾作为开发模拟舞台：外层 ReadRay 窗口模拟桌面/阅读环境，mock selected word 模拟真实划词，AnchoredResultPopover 模拟未来贴近真实选区出现的结果浮层；当前默认主体验已切到无选区桌面 overlay，最终产品不应出现大背景舞台。
 - 无选区 overlay 是当前优先体验：启动显示输入态浮层，Esc 或窗口失焦隐藏窗口，`Ctrl+Alt+R` 重新呼出输入态；输入态/结果态可通过浮层顶部拖动，拖动后的位置会在当前进程内记住；结果态由前端请求 Rust 调整窗口尺寸。
 - 当前窗口位置方案已经接受：无拖动记录时使用屏幕偏上区域作为默认位置，拖动后优先恢复当前进程内记录的位置；现阶段不再继续校准默认位置。
+- Windows UIA 捕获必须在 ReadRay show/focus 前完成；开发期使用独立快捷键 `Ctrl+Alt+U`，且该快捷键只执行捕获和诊断，不显示或聚焦 ReadRay。正式 `Ctrl+Alt+R` 无选区流程保持不变。当前只验证 Obsidian，不接 DeepSeek、SQLite、OCR、剪贴板辅助或正式 UI。
 - 正式交互分为两种状态：有选区和 `anchorRect` 时显示锚定结果浮层；无选区时通过快捷键呼出居中输入框，用户手动输入后再切换到结果态。
 - ExplanationCard 是 ReadRay 的中间协议，服务 DeepSeek 结构化输出、compact UI 映射和后续 SQLite 本地记忆；它不是某个前端组件的 props。
 - 解释卡上下文规则：只有输入侧存在 `contextText` 时，输出侧才允许 `contextMeaning`；无上下文时必须降级为普通解释。
@@ -95,13 +98,15 @@
 - 无选区居中输入已接入真实查询：提交时构造 `CaptureInput { queryText, contextText: null, sourceType: manual }`，调用 `create_explanation_card`，成功后映射到 `CenteredResultPanel`，失败时复用输入框的 error-lite 状态；当前不展示未定义标准的 difficulty，短语行已修复长英文和中文解释重叠问题；未改划词浮层、UI Automation、SQLite 或历史功能。
 - 已把 compact preview 迁移为真实桌面 overlay 壳：Tauri 主窗口无边框、透明、置顶、不可缩放并跳过任务栏；输入/loading 态窗口为 720×104，错误态 720×132，结果态 800×560；前端通过 `prepare_overlay_input_window`、`set_overlay_window_stage`、`hide_overlay_window` 控制显示、尺寸和隐藏。
 - 已完成第一轮 overlay 行为校准：无拖动记录时输入框定位到屏幕偏上区域；输入态和结果态提供拖拽区域，前端拖动手势调用 Rust commands 移动窗口并在当前进程内显式记住位置，后续快捷键呼出优先恢复该位置；窗口失焦时自动隐藏；产品浮层默认不显示右上角开发控件，开发期可用 `Ctrl+Shift+D` 临时显示；默认浮层厚黑阴影已移除，仅保留边界线。当前体验已接受，不再继续微调窗口位置。
+- 已新增 Windows UI Automation spike：Windows target 直接依赖 `windows 0.61.3`，只启用 Foundation、COM、Ole、Threading、Accessibility 和 WindowsAndMessaging feature；捕获前台进程、窗口标题、焦点元素诊断，优先 `TextPattern2`、回退 `TextPattern`，并分别返回 `selectedText`、Paragraph `contextText` 和物理屏幕坐标 `anchorRect`。
+- Obsidian 1.12.7 真实验证结果：编辑模式和阅读模式的单词、短语、无选区、滚动后选区均按预期通过；有选区时分别取得 `selectedText`、Paragraph `contextText` 和物理屏幕像素 `anchorRect`，无选区时三项均为 `null`。阅读模式不能只检查焦点元素本身，需要沿 Raw View 祖先链找到 Document 的 `TextPattern2`；成功样本未使用 MSAA/IAccessible2 或剪贴板辅助。
 
 ## 下一步
 
 继续推进：阶段一基础桌面能力已经完成第一轮工程验证。当前最先要处理的阻塞：
 
 - overlay 第一轮体验校准到此结束：拖动、当前进程内位置记忆、点击外部隐藏、`Ctrl+Alt+R` 重新呼出和真实查询链路已形成可继续开发的基础；现阶段不再继续调整默认窗口位置。
-- 下一步优先准备 Windows 上下文捕获技术 spike，先验证常用桌面应用能否稳定取得 `selectedText` 和 `contextText`，不要同时引入 OCR 或 SQLite schema。
+- 下一轮可以进入 Codex App 的独立 UIA 测试，沿用同一开发期快捷键和分项报告；不要因为 Obsidian 两种模式通过就假设其他 Electron 应用必然支持同一 provider 路径。
 - DeepSeek key 不再是当前本机阻塞；后续阶段二解释卡 MVP 可以复用现有 command，但不要把 SQLite schema 和上下文捕获混在 overlay 校准里。
 - 新环境仍需复制 `.env.example` 为 `.env` 后自行填写 `DEEPSEEK_API_KEY`；真实 `.env` 不提交。
 
@@ -117,6 +122,7 @@
 ## 待解决问题
 
 - UI 设计完成后，专门研究“划词获取上下文”的技术 spike。目标输入模型应区分 `selectedText` 和 `contextText`：只拿到剪贴板单词时降级为普通查词；能通过 Windows UI Automation、应用适配器或后续 OCR 取得上下文时，才展示语境义。
+- Obsidian 的 UIA provider 路径存在模式差异：编辑模式可直接从焦点 Edit 取得 TextPattern2，阅读模式需要从焦点/光标元素沿 Raw View 祖先链查找 Document。当前两种模式均可用，但仍需观察不同主题、页面结构和 Obsidian 版本下的稳定性。
 - 该能力不要求一开始支持所有应用，应先验证常用 Windows 桌面场景，例如 VS Code、Obsidian、Notion Desktop、WPS/Word、PDF 阅读器等。Electron 应用本质基于 Chromium，通常可能暴露无障碍树，但仍需逐应用验证。
 - 后续技术路线建议按优先级评估：Windows UI Automation 读取前台窗口/焦点控件/选区和文本范围；高价值应用做专门适配器；OCR 仅作为更后期兜底；剪贴板查词只作为 fallback，不作为最终差异化。
 - 仓库不提交真实 `.env`；本机已配置 DeepSeek key，但新环境仍需复制 `.env.example` 为 `.env` 后自行填写。

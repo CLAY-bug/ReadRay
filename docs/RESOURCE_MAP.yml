@@ -4,8 +4,8 @@ project:
   repo_root: "."
 
 meta:
-  version: "0.5"
-  last_updated: "2026-06-27"
+  version: "0.8"
+  last_updated: "2026-06-28"
   updated_by: "Codex"
   source_of_truth: "docs/RESOURCE_MAP.yml"
   language: "zh-CN"
@@ -58,7 +58,8 @@ core_docs:
       - "排查 Tauri Windows 开发环境。"
       - "处理 MSVC、Windows SDK、Rust、Cargo 或 VS Build Tools 问题。"
       - "评估 C 盘空间压力、缓存迁移或 VS Build Tools 重装到 D 盘。"
-    notes: "记录可复用环境经验，不写成每次操作流水账。"
+      - "在 Codex 中运行 pnpm 构建、启动 Tauri dev 或发布到 GitHub。"
+    notes: "记录可复用环境经验和本机命令/发布基线，不写成每次操作流水账；已有基线应优先复用，不要先走通用工具探测。"
     risk: "不要手动移动 VS 或 SDK 目录；迁移前先确认安装器、缓存和 Junction 策略。"
 
 competition_resources:
@@ -177,6 +178,16 @@ source_areas:
       - "开发全局快捷键、剪贴板、窗口行为、SQLite 命令、原生配置。"
     notes: "当前包含 Tauri v2 配置、Rust 入口、capabilities 和官方插件 opener/global-shortcut/clipboard-manager/sql；关键文件是 src-tauri/tauri.conf.json、src-tauri/Cargo.toml、src-tauri/src/main.rs、src-tauri/src/lib.rs、src-tauri/capabilities/default.json、src-tauri/capabilities/desktop.json。tauri.conf.json 已把主窗口改为无边框、透明、置顶、跳过任务栏的 overlay 壳，初始输入态尺寸为 720x104；无已保存位置时按屏幕偏上区域定位，拖动命令会在当前进程内显式记住新位置，失焦时自动隐藏。"
     risk: "不要把 UI 状态和业务展示逻辑塞进 Rust 层。"
+
+  - path: "src-tauri/src/windows_uia.rs"
+    purpose: "Windows UI Automation 上下文捕获 spike。"
+    status: "experimental"
+    read_when:
+      - "验证或扩展 Windows 跨应用选区捕获。"
+      - "排查 selectedText、contextText、anchorRect 或前台应用诊断。"
+      - "调整开发期 Ctrl+Alt+U 捕获快捷键。"
+    notes: "仅 Windows 编译；按焦点元素、窗口根、ElementFromPoint、Raw View 祖先和必要时子树的顺序寻找 TextPattern2/TextPattern。Obsidian 1.12.7 编辑/阅读模式均已验证单词、短语、无选区和滚动后选区；阅读模式选区命中祖先 Document 的 TextPattern2。捕获发生在 ReadRay show/focus 前，Ctrl+Alt+U 只输出 READRAY_UIA_CAPTURE JSON 和诊断，不显示居中输入框。"
+    risk: "这是开发期技术 spike，不要直接接 DeepSeek、SQLite、OCR 或正式 UI；本轮未实现 MSAA/IAccessible2 和剪贴板辅助，因为 Obsidian 阅读模式已由 UIA 取得三项数据。不同应用仍需分别验证。"
 
   - path: "src-tauri/src/explanation.rs"
     purpose: "阶段二 ExplanationCard 中间协议、CaptureInput 类型和 Rust validator。"

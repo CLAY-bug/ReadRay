@@ -1,6 +1,6 @@
 # Windows 开发环境说明
 
-最后更新：2026-06-22
+最后更新：2026-06-27
 
 ## 适用范围
 
@@ -25,6 +25,38 @@ pnpm build
 pnpm tauri info
 pnpm tauri dev
 ```
+
+## 本机命令与发布基线
+
+以下是 2026-06-27 在本机验证过的 ReadRay 开发基线。Codex 后续执行本仓库任务时应优先直接使用这些事实，不要每次先尝试通用默认路径。
+
+### Node 与 pnpm
+
+- 本机 Node.js 路径为 `D:\Application\nvm\nodejs\node.exe`。
+- ReadRay 当前使用的本机 pnpm 为 `D:\Application\nvm\nodejs\pnpm.cmd`，版本为 `10.30.3`。
+- Codex 命令环境中的 `pnpm` 首选项可能解析到 `C:\Users\19150\.cache\codex-runtimes\codex-primary-runtime\dependencies\bin\pnpm.cmd`。该运行时曾因当前 `node_modules` 由另一 pnpm 创建而触发非交互清理，报 `ERR_PNPM_ABORTED_REMOVE_MODULES_DIR_NO_TTY`。
+- 因此 Codex 运行 ReadRay 的安装、构建和 Tauri 命令时，默认显式调用本机 pnpm：
+
+```powershell
+& 'D:\Application\nvm\nodejs\pnpm.cmd' build
+& 'D:\Application\nvm\nodejs\pnpm.cmd' tauri info
+& 'D:\Application\nvm\nodejs\pnpm.cmd' tauri dev
+```
+
+只有该路径不存在或执行失败时，才重新检查 pnpm 安装和 PATH，不要先让 Codex bundled pnpm 接管现有 `node_modules`。
+
+### Git 与 GitHub
+
+- 当前远端为 `git@github.com:CLAY-bug/ReadRay.git`，SSH fetch/push 已验证可用。
+- 当前开发流程直接维护 `main`。用户只要求“提交并上传 GitHub”时，默认使用本地 Git 提交后执行 `git push origin main`。
+- 本机当前没有 `gh`。普通 commit/push 不依赖 GitHub CLI，不需要为此先检查或安装 `gh`；只有明确需要创建或管理 PR，且现有 GitHub connector 不能完成时，才检查 `gh`。
+- `design-open-design/` 不属于 ReadRay 提交范围；暂存时使用明确文件列表，不使用会把该目录带入提交的 `git add -A`。
+
+### 开发进程与端口
+
+- Vite 开发端口为 `1420`，Tauri dev 会启动该 Vite 服务、Cargo 和 `src-tauri/target/debug/readray.exe`。
+- 启动新的 `pnpm tauri dev` 或运行会占用 Cargo 构建锁的验证前，先定向检查 ReadRay 的 Vite、Cargo 和 `readray.exe` 是否已运行。
+- 端口和进程属于动态状态，不能假设永远占用或永远空闲；发现已有实例时先判断能否复用，确需停止时只终止命令行或可执行路径明确指向 `D:\project\ReadRay` 的进程。
 
 ## VS Build Tools 必要组件
 

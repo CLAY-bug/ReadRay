@@ -6,6 +6,8 @@ use tauri::{LogicalPosition, LogicalSize, WebviewWindow, WindowEvent};
 
 pub mod deepseek_explanation;
 pub mod explanation;
+#[cfg(target_os = "windows")]
+pub mod windows_uia;
 
 const READRAY_SHORTCUT_LABEL: &str = "Ctrl+Alt+R";
 pub(crate) const DEEPSEEK_BASE_URL: &str = "https://api.deepseek.com";
@@ -396,6 +398,10 @@ pub fn run() {
     let readray_shortcut = Shortcut::new(Some(Modifiers::CONTROL | Modifiers::ALT), Code::KeyR);
     #[cfg(desktop)]
     let registered_shortcut = readray_shortcut.clone();
+    #[cfg(all(desktop, debug_assertions, target_os = "windows"))]
+    let uia_capture_shortcut = Shortcut::new(Some(Modifiers::CONTROL | Modifiers::ALT), Code::KeyU);
+    #[cfg(all(desktop, debug_assertions, target_os = "windows"))]
+    let registered_uia_capture_shortcut = uia_capture_shortcut.clone();
 
     tauri::Builder::default()
         .plugin(tauri_plugin_sql::Builder::default().build())
@@ -404,6 +410,21 @@ pub fn run() {
             #[cfg(desktop)]
             tauri_plugin_global_shortcut::Builder::new()
                 .with_handler(move |app, shortcut, event| {
+                    #[cfg(all(debug_assertions, target_os = "windows"))]
+                    if shortcut == &uia_capture_shortcut
+                        && matches!(event.state(), ShortcutState::Pressed)
+                    {
+                        let capture = windows_uia::capture_foreground();
+                        match serde_json::to_string(&capture) {
+                            Ok(json) => eprintln!("READRAY_UIA_CAPTURE={json}"),
+                            Err(error) => {
+                                eprintln!("READRAY_UIA_CAPTURE_SERIALIZE_ERROR={error}")
+                            }
+                        }
+                        let _ = app.emit("readray://uia-capture", capture);
+                        return;
+                    }
+
                     if shortcut == &readray_shortcut
                         && matches!(event.state(), ShortcutState::Pressed)
                     {
@@ -421,6 +442,9 @@ pub fn run() {
             #[cfg(desktop)]
             {
                 app.global_shortcut().register(registered_shortcut)?;
+                #[cfg(all(debug_assertions, target_os = "windows"))]
+                app.global_shortcut()
+                    .register(registered_uia_capture_shortcut)?;
             }
 
             Ok(())
