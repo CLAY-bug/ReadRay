@@ -1,22 +1,9 @@
 import { useEffect, type KeyboardEvent, type MouseEvent } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import type { ExplanationResult } from "../explanationViewModel";
+import ExplanationResultContent from "./ExplanationResultContent";
 
-export type CenteredResultPhrase = {
-  phrase: string;
-  meaning: string;
-};
-
-export type CenteredResult = {
-  word: string;
-  phonetic: string;
-  partOfSpeech?: string;
-  definition: string;
-  phrases: CenteredResultPhrase[];
-  nearMeaningTitle: string;
-  nearMeanings: CenteredResultPhrase[];
-  example: string;
-  exampleZh: string;
-};
+export type CenteredResult = ExplanationResult;
 
 type CenteredResultPanelProps = {
   query: string;
@@ -105,10 +92,13 @@ function CenteredResultPanel({
     return null;
   }
 
+  const resultLabel =
+    result.kind === "word" ? result.headword : result.sourceText;
+
   return (
     <article
       className="centered-result-panel"
-      aria-label={`${result.word} 的居中解释结果`}
+      aria-label={`${resultLabel} 的居中解释结果`}
       onMouseDown={handleWindowDrag}
     >
       <span
@@ -132,75 +122,7 @@ function CenteredResultPanel({
       <div className="centered-result-panel__divider" />
 
       <div className="centered-result-panel__body">
-        <header className="centered-result-panel__head">
-          <div className="centered-result-panel__word-main">
-            <span className="centered-result-panel__word">{result.word}</span>
-            <span className="centered-result-panel__phonetic">
-              {result.phonetic}
-            </span>
-          </div>
-          {result.partOfSpeech ? (
-            <p className="centered-result-panel__part-of-speech">
-              {result.partOfSpeech}
-            </p>
-          ) : null}
-        </header>
-
-        <p className="centered-result-panel__definition">
-          {result.definition}
-        </p>
-
-        <section
-          className="centered-result-panel__section"
-          aria-label="常见语块"
-        >
-          <div className="centered-result-panel__section-label">常见语块</div>
-          <div className="centered-result-panel__phrase-list">
-            {result.phrases.map((item) => (
-              <div className="centered-result-panel__phrase-row" key={item.phrase}>
-                <span className="centered-result-panel__phrase">
-                  {item.phrase}
-                </span>
-                <span className="centered-result-panel__phrase-meaning">
-                  {item.meaning}
-                </span>
-              </div>
-            ))}
-          </div>
-        </section>
-
-        <section
-          className="centered-result-panel__section"
-          aria-label={result.nearMeaningTitle}
-        >
-          <div className="centered-result-panel__section-label">
-            {result.nearMeaningTitle}
-          </div>
-          <div className="centered-result-panel__phrase-list">
-            {result.nearMeanings.map((item) => (
-              <div className="centered-result-panel__phrase-row" key={item.phrase}>
-                <span className="centered-result-panel__phrase">
-                  {item.phrase}
-                </span>
-                <span className="centered-result-panel__phrase-meaning">
-                  {item.meaning}
-                </span>
-              </div>
-            ))}
-          </div>
-        </section>
-
-        <section className="centered-result-panel__section" aria-label="例句">
-          <div className="centered-result-panel__section-label">例句</div>
-          <div className="centered-result-panel__example">
-            <div className="centered-result-panel__example-en">
-              {result.example}
-            </div>
-            <div className="centered-result-panel__example-zh">
-              {result.exampleZh}
-            </div>
-          </div>
-        </section>
+        <ExplanationResultContent result={result} highlightText={query} />
       </div>
     </article>
   );

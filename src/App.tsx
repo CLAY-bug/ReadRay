@@ -5,12 +5,19 @@ import { readText, writeText } from "@tauri-apps/plugin-clipboard-manager";
 import Database from "@tauri-apps/plugin-sql";
 import AnchoredResultPopover, {
   type AnchorRect,
-  type AnchoredResult,
 } from "./components/AnchoredResultPopover";
 import CenteredCommandInput from "./components/CenteredCommandInput";
 import CenteredResultPanel, {
   type CenteredResult,
 } from "./components/CenteredResultPanel";
+import {
+  mapExplanationCard,
+  type ExplanationResult,
+} from "./explanationViewModel";
+import type {
+  CaptureInput,
+  ExplanationCard,
+} from "./types/explanation";
 import "./App.css";
 
 type CheckState = "idle" | "running" | "ok" | "warn" | "error";
@@ -43,56 +50,27 @@ type Stage1CheckRow = {
 
 type PreviewMode = "anchored" | "command";
 type CommandStage = "input" | "loading" | "result";
+type AnchoredStage = "mock" | "loading" | "result" | "error";
 type OverlayWindowStage = "input" | "loading" | "result" | "error";
 
-type QueryType = "word" | "phrase" | "sentence";
-
-type CaptureInput = {
-  queryText: string;
+type WindowsUiaCapture = {
+  selectedText?: string | null;
   contextText?: string | null;
-  sourceType: "manual" | "clipboard" | "windows_uia" | "app_adapter" | "ocr";
-};
-
-type ExplanationCard = {
-  queryType: QueryType;
-  headword: string;
-  phonetic?: string | null;
-  basicMeaning: string;
-  contextMeaning?: string | null;
-  phrases: Array<{
-    phrase: string;
-    meaning: string;
-  }>;
-  nearMeanings: Array<{
-    term: string;
-    meaning: string;
-  }>;
-  examples: Array<{
-    en: string;
-    zh: string;
-  }>;
-  difficulty?: string | null;
-  reviewHint?: string | null;
+  anchorRect?: AnchorRect | null;
 };
 
 const idle: CheckResult = { state: "idle", detail: "未验证" };
 
-const mockAnchoredResult: AnchoredResult = {
-  word: "marketed",
-  phonetic: "/ˈmɑːrkɪtɪd/",
-  definition: "v. 宣传；推广；定位成",
-  contextMeaning: "被宣传为；被定位为",
-  usage: "marketed as = 被宣传为 / 被定位为",
-  example: "The course is marketed as beginner-friendly.",
-  exampleZh: "这门课程被宣传为适合初学者。",
-  highlightText: "marketed as",
-};
-
-const mockCenteredResult: CenteredResult = {
-  word: "marketed",
+const mockExplanationResult: ExplanationResult = {
+  kind: "word",
+  sourceText: "marketed",
+  headword: "market",
   phonetic: "/ˈmɑːrkɪtɪd/",
   partOfSpeech: "动词 market 的过去式 / 过去分词",
-  definition: "宣传；推广；把……定位为",
+  basicMeanings: ["宣传；推广", "把……定位为"],
+  contextMeaning: "被宣传为；被定位为",
+  sourceSentence: "The course is marketed as beginner-friendly.",
+  sourceSentenceZh: "这门课程被宣传为适合初学者。",
   phrases: [
     {
       phrase: "marketed as",
@@ -103,45 +81,38 @@ const mockCenteredResult: CenteredResult = {
       meaning: "向……推广；面向……营销",
     },
   ],
-  nearMeaningTitle: "近义理解",
   nearMeanings: [
     {
-      phrase: "marketed",
+      term: "marketed",
       meaning: "强调宣传、推广、市场定位",
     },
     {
-      phrase: "sold",
+      term: "sold",
       meaning: "强调已经卖出或完成销售",
     },
     {
-      phrase: "advertised",
+      term: "advertised",
       meaning: "强调投放广告，是 marketed 的一种方式",
     },
   ],
-  example: "The product is marketed as eco-friendly.",
-  exampleZh: "这个产品被宣传为环保的。",
+  examples: [
+    {
+      en: "The product is marketed as eco-friendly.",
+      zh: "这个产品被宣传为环保的。",
+    },
+  ],
 };
 
-function mapExplanationCardToCenteredResult(card: ExplanationCard): CenteredResult {
-  const primaryExample = card.examples[0];
-  const reviewHint = card.reviewHint?.trim();
+function normalizeUiaText(value?: string | null) {
+  return value
+    ?.replace(/[\u200B\uFFFC]/g, "")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+}
 
-  return {
-    word: card.headword,
-    phonetic: card.phonetic ?? "",
-    partOfSpeech: reviewHint || undefined,
-    definition: card.contextMeaning
-      ? `${card.basicMeaning}｜语境：${card.contextMeaning}`
-      : card.basicMeaning,
-    phrases: card.phrases,
-    nearMeaningTitle: "近义理解",
-    nearMeanings: card.nearMeanings.map((item) => ({
-      phrase: item.term,
-      meaning: item.meaning,
-    })),
-    example: primaryExample.en,
-    exampleZh: primaryExample.zh,
-  };
+function contextForQuery(selectedText: string, contextText?: string | null) {
+  const normalized = normalizeUiaText(contextText);
+  return normalized && normalized !== selectedText ? normalized : null;
 }
 
 function formatError(error: unknown) {
@@ -159,13 +130,20 @@ function App() {
   const [previewMode, setPreviewMode] = useState<PreviewMode>("command");
   const [popoverOpen, setPopoverOpen] = useState(true);
   const [anchorRect, setAnchorRect] = useState<AnchorRect | null>(null);
+  const [anchoredStage, setAnchoredStage] = useState<AnchoredStage>("mock");
+  const [anchoredQuery, setAnchoredQuery] = useState("");
+  const [anchoredResult, setAnchoredResult] =
+    useState<ExplanationResult>(mockExplanationResult);
+  const [anchoredError, setAnchoredError] = useState<string>();
   const [showDevControls, setShowDevControls] = useState(false);
   const [commandOpen, setCommandOpen] = useState(true);
   const [commandValue, setCommandValue] = useState("");
   const [commandStage, setCommandStage] = useState<CommandStage>("input");
   const [commandError, setCommandError] = useState<string | undefined>();
   const [centeredResult, setCenteredResult] =
-    useState<CenteredResult>(mockCenteredResult);
+    useState<CenteredResult>(mockExplanationResult);
+  const anchoredRequestId = useRef(0);
+  const anchoredSourceRect = useRef<AnchorRect | null>(null);
 
   const updatePreviewAnchorRect = useCallback(() => {
     const element = previewAnchorRef.current;
@@ -243,14 +221,115 @@ function App() {
   }, []);
 
   const showCommandOverlay = useCallback(() => {
+    anchoredRequestId.current += 1;
     clearCommandState();
     setPreviewMode("command");
     setCommandOpen(true);
   }, [clearCommandState]);
 
+  const closeAnchoredOverlay = useCallback(async () => {
+    anchoredRequestId.current += 1;
+    setPopoverOpen(false);
+    try {
+      await invoke("hide_anchored_overlay_window");
+    } catch (error) {
+      setWindowCheck({ state: "warn", detail: formatError(error) });
+    }
+  }, []);
+
+  const runAnchoredQuery = useCallback(async (capture: WindowsUiaCapture) => {
+    const selectedText = normalizeUiaText(capture.selectedText);
+    const capturedAnchorRect = capture.anchorRect;
+    if (!selectedText || !capturedAnchorRect) {
+      return;
+    }
+
+    const requestId = anchoredRequestId.current + 1;
+    anchoredRequestId.current = requestId;
+    anchoredSourceRect.current = capturedAnchorRect;
+    setAnchoredQuery(selectedText);
+    setAnchoredError(undefined);
+    setAnchoredStage("loading");
+    setPopoverOpen(true);
+    setPreviewMode("anchored");
+
+    await new Promise<void>((resolve) => window.requestAnimationFrame(() => resolve()));
+
+    try {
+      await invoke("present_anchored_overlay_window", {
+        stage: "loading",
+        anchorRect: capturedAnchorRect,
+      });
+    } catch (error) {
+      if (anchoredRequestId.current === requestId) {
+        setAnchoredStage("error");
+        setAnchoredError(`无法显示划词浮层：${formatError(error)}`);
+      }
+      return;
+    }
+
+    const input: CaptureInput = {
+      queryText: selectedText,
+      contextText: contextForQuery(selectedText, capture.contextText),
+      sourceType: "windows_uia",
+    };
+
+    try {
+      const card = await invoke<ExplanationCard>("create_explanation_card", {
+        input,
+      });
+      if (anchoredRequestId.current !== requestId) {
+        return;
+      }
+
+      await invoke("present_anchored_overlay_window", {
+        stage: "result",
+        anchorRect: capturedAnchorRect,
+      });
+      if (anchoredRequestId.current !== requestId) {
+        return;
+      }
+      setAnchoredResult(mapExplanationCard(card));
+      setAnchoredStage("result");
+    } catch (error) {
+      if (anchoredRequestId.current !== requestId) {
+        return;
+      }
+
+      setAnchoredStage("error");
+      setAnchoredError(formatError(error));
+      await new Promise<void>((resolve) =>
+        window.requestAnimationFrame(() => resolve()),
+      );
+      await invoke("present_anchored_overlay_window", {
+        stage: "error",
+        anchorRect: capturedAnchorRect,
+      }).catch(() => undefined);
+    }
+  }, []);
+
+  const handleAnchoredContentSizeChange = useCallback(
+    (size: { width: number; height: number }) => {
+      const currentAnchorRect = anchoredSourceRect.current;
+      if (!currentAnchorRect) {
+        return;
+      }
+
+      invoke("resize_anchored_overlay_window", {
+        width: size.width,
+        height: size.height,
+        anchorRect: currentAnchorRect,
+      }).catch((error) => {
+        setWindowCheck({ state: "warn", detail: formatError(error) });
+      });
+    },
+    [],
+  );
+
   useEffect(() => {
     let unlistenShowInput: (() => void) | undefined;
     let unlistenHidden: (() => void) | undefined;
+    let unlistenUiaCapture: (() => void) | undefined;
 
     listen("readray://show-input", () => {
       showCommandOverlay();
@@ -264,6 +343,8 @@ function App() {
 
     listen("readray://hidden", () => {
       setCommandOpen(false);
+      setPopoverOpen(false);
+      anchoredRequestId.current += 1;
     })
       .then((dispose) => {
         unlistenHidden = dispose;
@@ -272,15 +353,30 @@ function App() {
         setWindowCheck({ state: "warn", detail: formatError(error) });
       });
 
+    listen<WindowsUiaCapture>("readray://uia-capture", (event) => {
+      void runAnchoredQuery(event.payload);
+    })
+      .then((dispose) => {
+        unlistenUiaCapture = dispose;
+      })
+      .catch((error) => {
+        setWindowCheck({ state: "warn", detail: formatError(error) });
+      });
+
     return () => {
       unlistenShowInput?.();
       unlistenHidden?.();
+      unlistenUiaCapture?.();
     };
-  }, [showCommandOverlay]);
+  }, [runAnchoredQuery, showCommandOverlay]);
 
   function showPreviewPopover() {
+    anchoredRequestId.current += 1;
     clearCommandState();
     setPreviewMode("anchored");
+    setAnchoredStage("mock");
+    setAnchoredResult(mockExplanationResult);
+    setAnchoredError(undefined);
     updatePreviewAnchorRect();
     setPopoverOpen(true);
   }
@@ -288,6 +384,37 @@ function App() {
   function showCommandInputPreview() {
     showCommandOverlay();
   }
+
+  function handleAnchoredOpenChange(nextOpen: boolean) {
+    if (anchoredStage === "mock") {
+      setPopoverOpen(nextOpen);
+      return;
+    }
+
+    if (!nextOpen) {
+      void closeAnchoredOverlay();
+    }
+  }
+
+  useEffect(() => {
+    if (
+      previewMode !== "anchored" ||
+      anchoredStage === "mock" ||
+      anchoredStage === "result"
+    ) {
+      return;
+    }
+
+    function handleAnchoredEscape(event: globalThis.KeyboardEvent) {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        void closeAnchoredOverlay();
+      }
+    }
+
+    document.addEventListener("keydown", handleAnchoredEscape);
+    return () => document.removeEventListener("keydown", handleAnchoredEscape);
+  }, [anchoredStage, closeAnchoredOverlay, previewMode]);
 
   async function handleCommandOpenChange(nextOpen: boolean) {
     clearCommandState();
@@ -326,7 +453,7 @@ function App() {
       const card = await invoke<ExplanationCard>("create_explanation_card", {
         input,
       });
-      setCenteredResult(mapExplanationCardToCenteredResult(card));
+      setCenteredResult(mapExplanationCard(card));
       setCommandStage("result");
     } catch (error) {
       setCommandStage("input");
@@ -454,18 +581,54 @@ function App() {
     <main className="app-shell">
       <section className="compact-preview" aria-label="ReadRay 桌面浮层">
         {previewMode === "anchored" ? (
-          <>
-            <div className="mock-reader-line" aria-hidden="true" />
-            <div className="compact-preview__anchor" ref={previewAnchorRef}>
-              <span>marketed</span>
-            </div>
+          anchoredStage === "mock" ? (
+            <>
+              <div className="mock-reader-line" aria-hidden="true" />
+              <div className="compact-preview__anchor" ref={previewAnchorRef}>
+                <span>marketed</span>
+              </div>
+              <AnchoredResultPopover
+                result={anchoredResult}
+                anchorRect={anchorRect}
+                open={popoverOpen}
+                onOpenChange={handleAnchoredOpenChange}
+                highlightText="marketed"
+              />
+            </>
+          ) : anchoredStage === "result" ? (
             <AnchoredResultPopover
-              result={mockAnchoredResult}
-              anchorRect={anchorRect}
+              result={anchoredResult}
+              anchorRect={null}
               open={popoverOpen}
-              onOpenChange={setPopoverOpen}
+              onOpenChange={handleAnchoredOpenChange}
+              embedded
+              highlightText={anchoredQuery}
+              onContentSizeChange={handleAnchoredContentSizeChange}
             />
-          </>
+          ) : (
+            <section
+              className={`anchored-query-status is-${anchoredStage}`}
+              aria-live="polite"
+              aria-busy={anchoredStage === "loading"}
+            >
+              <div className="anchored-query-status__header">
+                <span className="anchored-query-status__query">
+                  {anchoredQuery}
+                </span>
+                {anchoredStage === "loading" ? (
+                  <span
+                    className="anchored-query-status__loading-dot"
+                    aria-hidden="true"
+                  />
+                ) : null}
+              </div>
+              <p className="anchored-query-status__message">
+                {anchoredStage === "loading"
+                  ? "正在生成语境解释…"
+                  : anchoredError ?? "解释失败，请稍后重试。"}
+              </p>
+            </section>
+          )
         ) : (
           <>
             <CenteredCommandInput

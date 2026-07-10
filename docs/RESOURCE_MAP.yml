@@ -4,7 +4,7 @@ project:
   repo_root: "."
 
 meta:
-  version: "0.8"
+  version: "1.0"
   last_updated: "2026-06-28"
   updated_by: "Codex"
   source_of_truth: "docs/RESOURCE_MAP.yml"
@@ -132,7 +132,7 @@ source_areas:
     status: "active"
     read_when:
       - "开发解释卡、历史页、复盘页、设置页。"
-    notes: "Tauri + Vite + React + TypeScript 脚手架入口；当前主要入口是 src/main.tsx 和 src/App.tsx，App.tsx 默认进入无选区 overlay 输入体验；无选区输入默认为空，已通过 create_explanation_card 调用真实 DeepSeek 查询并映射到 CenteredResultPanel；mock 划词浮层和阶段验证控件保留为开发辅助，默认隐藏，可用 Ctrl+Shift+D 临时显示。"
+    notes: "Tauri + Vite + React + TypeScript 脚手架入口；App.tsx 保留 Ctrl+Alt+R 无选区输入链路，并监听 readray://uia-capture：清理 UIA 上下文后以 windows_uia CaptureInput 调用 create_explanation_card，再按 word/phrase/sentence/paragraph 映射到选区附近解释卡。mock 划词浮层和阶段验证控件保留为开发辅助，默认隐藏，可用 Ctrl+Shift+D 临时显示。"
     risk: "不要在前端入口塞入原生系统逻辑。"
 
   - path: "src/components/AnchoredResultPopover.tsx"
@@ -141,8 +141,35 @@ source_areas:
     read_when:
       - "开发或调整 compact 查词结果浮层。"
       - "接入 selectedText/contextText mock 或真实解释卡数据。"
-    notes: "当前由 App 传入静态 mock 数据、anchorRect、open 和 onOpenChange；组件内部负责 fixed 定位、下方优先、空间不足向上翻转、Esc 隐藏和 highlightText 例句高亮。不接真实 UI Automation 或 DeepSeek 解释卡。"
-    risk: "不要提前扩展成通用组件库；只服务当前锚定结果浮层。"
+    notes: "支持 mock viewport 定位和真实 Tauri 小窗口 embedded 两种模式；真实模式按查询类型选择建议宽度，并通过 ResizeObserver 报告实际内容高度，由 Rust 在当前显示器工作区内重新放置窗口。"
+    risk: "不要提前扩展成通用组件库；窗口最大高度由 Rust 限制为工作区约 70%，超出时仅组件内部滚动。"
+
+  - path: "src/components/ExplanationResultContent.tsx"
+    purpose: "word、phrase、sentence、paragraph 四类解释结果的共享展示组件。"
+    status: "active"
+    read_when:
+      - "调整不同查询类型的信息优先级、空字段隐藏或视觉层级。"
+      - "同步锚定解释卡与无选区结果面板的内容结构。"
+    notes: "单词优先语境义和原句，句子/段落优先完整翻译；只在字段有值时渲染区块，避免把搭配误映射成用法。"
+    risk: "该组件只负责展示，不应承担协议校验、查询分类或原生窗口控制。"
+
+  - path: "src/explanationViewModel.ts"
+    purpose: "Rust ExplanationCard 协议到前端展示模型的最小映射。"
+    status: "active"
+    read_when:
+      - "调整协议字段到 UI 的映射。"
+      - "调整四类结果的锚定窗口建议宽度。"
+    notes: "保留后端有价值字段并规范化可选数组；word/phrase/sentence/paragraph 的建议宽度分别为 500/540/640/700 像素。"
+    risk: "不要在映射层重新推断 queryType 或补造后端没有返回的学习信息。"
+
+  - path: "src/types/explanation.ts"
+    purpose: "前端使用的 ExplanationCard TypeScript 判别联合类型。"
+    status: "active"
+    read_when:
+      - "Rust ExplanationCard schema 发生变化。"
+      - "排查 Tauri command 返回值的前端类型。"
+    notes: "字段名与 Rust serde camelCase 协议保持一致。"
+    risk: "协议变更时必须同步 Rust 类型、TypeScript 类型、映射和测试。"
 
   - path: "src/components/CenteredCommandInput.tsx"
     purpose: "MVP compact UI 的无选区居中输入组件骨架。"
@@ -159,7 +186,7 @@ source_areas:
     read_when:
       - "开发无选区主动查询提交后的结果展示。"
       - "调整居中结果面板的信息结构、滚动内容或 mock 数据映射。"
-    notes: "当前由 App 传入 query 和 ExplanationCard 映射后的 result；顶部保留可编辑用户输入，内容区展示语块、近义理解和例句，内部可滚动，面板顶部提供拖拽区域。结果头部不展示低信息标签；只有 reviewHint 有内容时才显示右侧提示。不做聊天流、底部操作按钮、历史、收藏、复盘或设置入口。"
+    notes: "当前由 App 传入 query 和 ExplanationCard 映射后的四类 result；顶部保留可编辑用户输入，内容区复用 ExplanationResultContent，内部可滚动，面板顶部提供拖拽区域。不做聊天流、底部操作按钮、历史、收藏、复盘或设置入口。"
     risk: "不要把它扩展成完整结果页或 AI 对话界面；它只服务 MVP compact 主动查询结果态。"
 
   - path: "src/styles/tokens.css"
@@ -176,7 +203,7 @@ source_areas:
     status: "active"
     read_when:
       - "开发全局快捷键、剪贴板、窗口行为、SQLite 命令、原生配置。"
-    notes: "当前包含 Tauri v2 配置、Rust 入口、capabilities 和官方插件 opener/global-shortcut/clipboard-manager/sql；关键文件是 src-tauri/tauri.conf.json、src-tauri/Cargo.toml、src-tauri/src/main.rs、src-tauri/src/lib.rs、src-tauri/capabilities/default.json、src-tauri/capabilities/desktop.json。tauri.conf.json 已把主窗口改为无边框、透明、置顶、跳过任务栏的 overlay 壳，初始输入态尺寸为 720x104；无已保存位置时按屏幕偏上区域定位，拖动命令会在当前进程内显式记住新位置，失焦时自动隐藏。"
+    notes: "当前包含 Tauri v2 配置、Rust入口和桌面插件。lib.rs 除居中 input/result 窗口外，还提供 anchored loading/result/error 的物理像素定位和 resize_anchored_overlay_window：按 UIA anchorRect 所在显示器、DPI 和工作区把小窗口放在选区下方或上方，最大高度约为工作区 70%；锚定窗口不会覆盖用户保存的居中窗口位置。"
     risk: "不要把 UI 状态和业务展示逻辑塞进 Rust 层。"
 
   - path: "src-tauri/src/windows_uia.rs"
@@ -186,8 +213,8 @@ source_areas:
       - "验证或扩展 Windows 跨应用选区捕获。"
       - "排查 selectedText、contextText、anchorRect 或前台应用诊断。"
       - "调整开发期 Ctrl+Alt+U 捕获快捷键。"
-    notes: "仅 Windows 编译；按焦点元素、窗口根、ElementFromPoint、Raw View 祖先和必要时子树的顺序寻找 TextPattern2/TextPattern。Obsidian 1.12.7 编辑/阅读模式均已验证单词、短语、无选区和滚动后选区；阅读模式选区命中祖先 Document 的 TextPattern2。捕获发生在 ReadRay show/focus 前，Ctrl+Alt+U 只输出 READRAY_UIA_CAPTURE JSON 和诊断，不显示居中输入框。"
-    risk: "这是开发期技术 spike，不要直接接 DeepSeek、SQLite、OCR 或正式 UI；本轮未实现 MSAA/IAccessible2 和剪贴板辅助，因为 Obsidian 阅读模式已由 UIA 取得三项数据。不同应用仍需分别验证。"
+    notes: "仅 Windows 编译；按焦点元素、窗口根、ElementFromPoint、Raw View 祖先和必要时子树的顺序寻找 TextPattern2/TextPattern。Ctrl+Alt+U 先在源应用前台完成捕获并输出 READRAY_UIA_CAPTURE，再由前端事件链调用 DeepSeek 和锚定解释卡；Obsidian 1.12.7 与 Codex App 已完成真实端到端验证。"
+    risk: "不同应用仍需分别验证；本轮未实现 MSAA/IAccessible2、剪贴板辅助或专用应用适配器。选区查询上限与协议一致为 4096 字符，不属于整页翻译能力。"
 
   - path: "src-tauri/src/explanation.rs"
     purpose: "阶段二 ExplanationCard 中间协议、CaptureInput 类型和 Rust validator。"
@@ -196,7 +223,7 @@ source_areas:
       - "接入 DeepSeek 结构化输出。"
       - "调整解释卡 schema、字段限长或校验规则。"
       - "把解释卡映射到 compact UI 或后续 SQLite 本地记忆。"
-    notes: "schema 是 ReadRay 中间协议，不是前端组件 props；当前支持 word/phrase/sentence 类型，测试重点覆盖 word；无 contextText 时不允许 contextMeaning。"
+    notes: "schema 是 ReadRay 中间协议，不是前端组件 props；当前使用 serde tagged enum 明确区分 word/phrase/sentence/paragraph。输入 queryText/contextText 上限为 4096 字符；无 contextText 时不允许 contextMeaning；句子和段落以完整 translation 为核心，不继承单词卡必填项。"
     risk: "不要在这里接真实 DeepSeek 查询链路、SQLite schema 或 UI 交互逻辑。"
 
   - path: "src-tauri/src/deepseek_explanation.rs"
@@ -206,7 +233,7 @@ source_areas:
       - "调整 create_explanation_card command。"
       - "排查 DeepSeek 结构化 JSON 输出、serde 解析或 validator 失败。"
       - "将 ExplanationCard 接入 compact UI 前的 Rust 层查询链路。"
-    notes: "command 输入为 CaptureInput，成功返回 ExplanationCard；请求使用 response_format=json_object，并在解析后调用 validate_explanation_card。当前不接前端 UI，不做 SQLite。"
+    notes: "command 输入为 CaptureInput，先在本地判断 word/phrase/sentence/paragraph，再使用对应 JSON schema prompt；请求使用 response_format=json_object，解析前以捕获输入覆盖 sourceText，随后 serde 解析并调用 validate_explanation_card。当前同时服务 manual 无选区输入和 windows_uia 划词解释卡，不做 SQLite。"
     risk: "不要在日志、文档或提交文件中写入真实 DEEPSEEK_API_KEY；不要把 UI 映射和真实查询链路混成一次大改。"
 
   - path: "scripts/"

@@ -2,7 +2,9 @@ use serde::Serialize;
 use serde_json::json;
 use std::path::PathBuf;
 use std::sync::{Mutex, OnceLock};
-use tauri::{LogicalPosition, LogicalSize, WebviewWindow, WindowEvent};
+use tauri::{
+    LogicalPosition, LogicalSize, PhysicalPosition, PhysicalSize, WebviewWindow, WindowEvent,
+};
 
 pub mod deepseek_explanation;
 pub mod explanation;
@@ -37,7 +39,38 @@ impl OverlayWindowStage {
     }
 }
 
+#[cfg(target_os = "windows")]
+#[derive(Clone, Copy)]
+enum AnchoredOverlayStage {
+    Loading,
+    Result,
+    Error,
+}
+
+#[cfg(target_os = "windows")]
+impl AnchoredOverlayStage {
+    fn logical_size(self) -> LogicalSize<f64> {
+        match self {
+            Self::Loading => LogicalSize::new(430.0, 92.0),
+            Self::Result => LogicalSize::new(520.0, 380.0),
+            Self::Error => LogicalSize::new(430.0, 132.0),
+        }
+    }
+}
+
 const DEFAULT_OVERLAY_CENTER_Y_RATIO: f64 = 0.36;
+#[cfg(target_os = "windows")]
+const ANCHORED_OVERLAY_GAP: f64 = 10.0;
+#[cfg(target_os = "windows")]
+const ANCHORED_OVERLAY_MARGIN: f64 = 8.0;
+#[cfg(target_os = "windows")]
+const ANCHORED_OVERLAY_MAX_HEIGHT_RATIO: f64 = 0.7;
+#[cfg(target_os = "windows")]
+const ANCHORED_OVERLAY_MIN_WIDTH: f64 = 360.0;
+#[cfg(target_os = "windows")]
+const ANCHORED_OVERLAY_MAX_WIDTH: f64 = 720.0;
+#[cfg(target_os = "windows")]
+const ANCHORED_OVERLAY_MIN_HEIGHT: f64 = 80.0;
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -163,6 +196,76 @@ fn resize_overlay_window(window: &WebviewWindow, stage: OverlayWindowStage) -> R
     Ok(())
 }
 
+#[cfg(target_os = "windows")]
+fn place_anchored_overlay_window(
+    window: &WebviewWindow,
+    requested_size: LogicalSize<f64>,
+    anchor_rect: &windows_uia::ScreenRect,
+) -> Result<(), String> {
+    let anchor_center_x = anchor_rect.x + anchor_rect.width / 2.0;
+    let anchor_center_y = anchor_rect.y + anchor_rect.height / 2.0;
+    let monitor = window
+        .available_monitors()
+        .map_err(tauri_err)?
+        .into_iter()
+        .find(|monitor| {
+            let work_area = monitor.work_area();
+            let left = f64::from(work_area.position.x);
+            let top = f64::from(work_area.position.y);
+            let right = left + f64::from(work_area.size.width);
+            let bottom = top + f64::from(work_area.size.height);
+
+            anchor_center_x >= left
+                && anchor_center_x < right
+                && anchor_center_y >= top
+                && anchor_center_y < bottom
+        })
+        .or_else(|| window.current_monitor().ok().flatten())
+        .ok_or_else(|| "无法确定选区所在显示器。".to_string())?;
+
+    let work_area = monitor.work_area();
+    let scale_factor = monitor.scale_factor();
+    let gap = ANCHORED_OVERLAY_GAP * scale_factor;
+    let margin = ANCHORED_OVERLAY_MARGIN * scale_factor;
+    let requested_width = requested_size
+        .width
+        .clamp(ANCHORED_OVERLAY_MIN_WIDTH, ANCHORED_OVERLAY_MAX_WIDTH)
+        * scale_factor;
+    let requested_height = requested_size.height.max(ANCHORED_OVERLAY_MIN_HEIGHT) * scale_factor;
+    let max_width = (f64::from(work_area.size.width) - margin * 2.0).max(1.0);
+    let max_height =
+        (f64::from(work_area.size.height) * ANCHORED_OVERLAY_MAX_HEIGHT_RATIO).max(1.0);
+    let width = requested_width.min(max_width).round().max(1.0) as u32;
+    let height = requested_height.min(max_height).round().max(1.0) as u32;
+
+    let work_left = f64::from(work_area.position.x);
+    let work_top = f64::from(work_area.position.y);
+    let work_right = work_left + f64::from(work_area.size.width);
+    let work_bottom = work_top + f64::from(work_area.size.height);
+    let max_x = (work_right - f64::from(width) - margin).max(work_left + margin);
+    let x = (anchor_center_x - f64::from(width) / 2.0).clamp(work_left + margin, max_x);
+
+    let preferred_bottom = anchor_rect.y + anchor_rect.height + gap;
+    let preferred_top = anchor_rect.y - gap - f64::from(height);
+    let y = if preferred_bottom + f64::from(height) + margin <= work_bottom {
+        preferred_bottom
+    } else if preferred_top >= work_top + margin {
+        preferred_top
+    } else {
+        preferred_bottom.clamp(
+            work_top + margin,
+            (work_bottom - f64::from(height) - margin).max(work_top + margin),
+        )
+    };
+
+    window
+        .set_size(PhysicalSize::new(width, height))
+        .map_err(tauri_err)?;
+    window
+        .set_position(PhysicalPosition::new(x.round() as i32, y.round() as i32))
+        .map_err(tauri_err)
+}
+
 fn show_and_focus(window: &WebviewWindow) -> Result<(), String> {
     window.show().map_err(tauri_err)?;
     window.set_focus().map_err(tauri_err)
@@ -238,6 +341,46 @@ fn set_overlay_window_stage(window: WebviewWindow, stage: &str) -> Result<(), St
 #[tauri::command]
 fn hide_overlay_window(window: WebviewWindow) -> Result<(), String> {
     let _ = remember_overlay_position(&window);
+    window.hide().map_err(tauri_err)
+}
+
+#[cfg(target_os = "windows")]
+#[tauri::command]
+fn present_anchored_overlay_window(
+    window: WebviewWindow,
+    stage: &str,
+    anchor_rect: windows_uia::ScreenRect,
+) -> Result<(), String> {
+    let anchored_stage = match stage {
+        "loading" => AnchoredOverlayStage::Loading,
+        "result" => AnchoredOverlayStage::Result,
+        "error" => AnchoredOverlayStage::Error,
+        other => return Err(format!("未知 anchored overlay stage：{other}")),
+    };
+
+    place_anchored_overlay_window(&window, anchored_stage.logical_size(), &anchor_rect)?;
+    window.set_always_on_top(true).map_err(tauri_err)?;
+    show_and_focus(&window)
+}
+
+#[cfg(target_os = "windows")]
+#[tauri::command]
+fn resize_anchored_overlay_window(
+    window: WebviewWindow,
+    width: f64,
+    height: f64,
+    anchor_rect: windows_uia::ScreenRect,
+) -> Result<(), String> {
+    if !width.is_finite() || !height.is_finite() || width <= 0.0 || height <= 0.0 {
+        return Err("anchored overlay 尺寸必须是有限的正数。".to_string());
+    }
+
+    place_anchored_overlay_window(&window, LogicalSize::new(width, height), &anchor_rect)
+}
+
+#[cfg(target_os = "windows")]
+#[tauri::command]
+fn hide_anchored_overlay_window(window: WebviewWindow) -> Result<(), String> {
     window.hide().map_err(tauri_err)
 }
 
@@ -398,9 +541,9 @@ pub fn run() {
     let readray_shortcut = Shortcut::new(Some(Modifiers::CONTROL | Modifiers::ALT), Code::KeyR);
     #[cfg(desktop)]
     let registered_shortcut = readray_shortcut.clone();
-    #[cfg(all(desktop, debug_assertions, target_os = "windows"))]
+    #[cfg(all(desktop, target_os = "windows"))]
     let uia_capture_shortcut = Shortcut::new(Some(Modifiers::CONTROL | Modifiers::ALT), Code::KeyU);
-    #[cfg(all(desktop, debug_assertions, target_os = "windows"))]
+    #[cfg(all(desktop, target_os = "windows"))]
     let registered_uia_capture_shortcut = uia_capture_shortcut.clone();
 
     tauri::Builder::default()
@@ -410,7 +553,7 @@ pub fn run() {
             #[cfg(desktop)]
             tauri_plugin_global_shortcut::Builder::new()
                 .with_handler(move |app, shortcut, event| {
-                    #[cfg(all(debug_assertions, target_os = "windows"))]
+                    #[cfg(target_os = "windows")]
                     if shortcut == &uia_capture_shortcut
                         && matches!(event.state(), ShortcutState::Pressed)
                     {
@@ -442,7 +585,7 @@ pub fn run() {
             #[cfg(desktop)]
             {
                 app.global_shortcut().register(registered_shortcut)?;
-                #[cfg(all(debug_assertions, target_os = "windows"))]
+                #[cfg(target_os = "windows")]
                 app.global_shortcut()
                     .register(registered_uia_capture_shortcut)?;
             }
@@ -464,6 +607,12 @@ pub fn run() {
             prepare_overlay_input_window,
             set_overlay_window_stage,
             hide_overlay_window,
+            #[cfg(target_os = "windows")]
+            present_anchored_overlay_window,
+            #[cfg(target_os = "windows")]
+            resize_anchored_overlay_window,
+            #[cfg(target_os = "windows")]
+            hide_anchored_overlay_window,
             begin_overlay_window_drag,
             drag_overlay_window,
             finish_overlay_window_drag,

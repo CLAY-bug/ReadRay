@@ -1,4 +1,4 @@
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::ffi::c_void;
 use std::time::{SystemTime, UNIX_EPOCH};
 use windows::core::PWSTR;
@@ -28,7 +28,7 @@ const MAX_ANCESTOR_DEPTH: usize = 16;
 const MAX_RAW_VIEW_ELEMENTS: usize = 512;
 const MAX_RAW_VIEW_DEPTH: usize = 16;
 
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ScreenRect {
     pub x: f64,

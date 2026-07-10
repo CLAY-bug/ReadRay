@@ -1,9 +1,11 @@
-use crate::explanation::{validate_explanation_card, CaptureInput, ExplanationCard};
+use crate::explanation::{
+    classify_query_type, validate_explanation_card, CaptureInput, ExplanationCard, QueryType,
+};
 use crate::{DEEPSEEK_BASE_URL, DEFAULT_DEEPSEEK_MODEL};
 use serde::Deserialize;
 use serde_json::json;
 
-const EXPLANATION_CARD_MAX_TOKENS: u16 = 900;
+const EXPLANATION_CARD_MAX_TOKENS: u16 = 4_096;
 const EXPLANATION_CARD_TEMPERATURE: f32 = 0.2;
 
 #[derive(Debug, Deserialize)]
@@ -24,6 +26,7 @@ struct DeepSeekMessage {
 
 #[tauri::command]
 pub async fn create_explanation_card(input: CaptureInput) -> Result<ExplanationCard, String> {
+    let query_type = classify_query_type(&input.query_text)?;
     let model =
         std::env::var("DEEPSEEK_MODEL").unwrap_or_else(|_| DEFAULT_DEEPSEEK_MODEL.to_string());
     let api_key = match std::env::var("DEEPSEEK_API_KEY") {
@@ -31,13 +34,13 @@ pub async fn create_explanation_card(input: CaptureInput) -> Result<ExplanationC
         _ => return Err("未设置 DEEPSEEK_API_KEY，无法创建 ExplanationCard。".to_string()),
     };
 
-    let user_prompt = build_user_prompt(&input)?;
+    let user_prompt = build_user_prompt(&input, query_type)?;
     let request_body = json!({
         "model": model,
         "messages": [
             {
                 "role": "system",
-                "content": explanation_card_system_prompt()
+                "content": explanation_card_system_prompt(query_type)
             },
             {
                 "role": "user",
@@ -92,7 +95,16 @@ pub(crate) fn parse_explanation_card_content(
         return Err("DeepSeek 返回空内容，无法解析 ExplanationCard JSON。".to_string());
     }
 
-    let card: ExplanationCard = serde_json::from_str(content)
+    let mut value: serde_json::Value = serde_json::from_str(content)
+        .map_err(|error| format!("DeepSeek 返回内容不是合法 ExplanationCard JSON：{error}"))?;
+    let object = value.as_object_mut().ok_or_else(|| {
+        "DeepSeek 返回内容不是合法 ExplanationCard JSON：顶层必须是对象。".to_string()
+    })?;
+    object.insert(
+        "sourceText".to_string(),
+        serde_json::Value::String(input.query_text.trim().to_string()),
+    );
+    let card: ExplanationCard = serde_json::from_value(value)
         .map_err(|error| format!("DeepSeek 返回内容不是合法 ExplanationCard JSON：{error}"))?;
     validate_explanation_card(input, &card).map_err(|errors| {
         format!(
@@ -125,55 +137,130 @@ fn extract_content(response: DeepSeekChatResponse) -> Result<String, String> {
         .ok_or_else(|| "DeepSeek ExplanationCard 响应缺少 choices[0].message.content。".to_string())
 }
 
-fn build_user_prompt(input: &CaptureInput) -> Result<String, String> {
+fn build_user_prompt(input: &CaptureInput, query_type: QueryType) -> Result<String, String> {
     let input_json = serde_json::to_string_pretty(input)
         .map_err(|error| format!("CaptureInput 无法序列化为 JSON：{error}"))?;
 
     Ok(format!(
-        "Create one ExplanationCard JSON object for this CaptureInput.\n\nCaptureInput JSON:\n{input_json}"
+        "The local classifier selected queryType={}. Create exactly one matching ExplanationCard JSON object.\n\nCaptureInput JSON:\n{input_json}",
+        query_type_label(query_type)
     ))
 }
 
-fn explanation_card_system_prompt() -> &'static str {
-    r#"You create structured JSON for ReadRay, a desktop English learning app.
-
-Return exactly one JSON object. Do not return Markdown. Do not wrap the JSON in code fences. Do not add explanations before or after the JSON.
-
-The JSON object must match this camelCase schema:
-{
+fn explanation_card_system_prompt(query_type: QueryType) -> String {
+    let schema = match query_type {
+        QueryType::Word => {
+            r#"{
   "queryType": "word",
+  "sourceText": "market",
   "headword": "market",
+  "partOfSpeech": "noun / verb",
   "phonetic": "/ˈmɑːrkɪt/",
-  "basicMeaning": "市场；销售；推广",
+  "basicMeanings": ["市场", "推广；销售"],
   "contextMeaning": null,
-  "phrases": [
-    { "phrase": "market share", "meaning": "市场份额" }
-  ],
-  "nearMeanings": [
-    { "term": "sell", "meaning": "强调卖出商品或服务" }
-  ],
-  "examples": [
-    { "en": "The company entered a new market.", "zh": "这家公司进入了一个新市场。" }
-  ],
-  "difficulty": null,
-  "reviewHint": "注意名词“市场”和动词“推广”的区别。"
+  "sourceSentence": null,
+  "sourceSentenceZh": null,
+  "phrases": [{ "phrase": "market share", "meaning": "市场份额" }],
+  "nearMeanings": [{ "term": "promote", "meaning": "强调宣传和推广" }],
+  "examples": [{ "en": "The company entered a new market.", "zh": "这家公司进入了一个新市场。" }],
+  "reviewHint": null
 }
 
-Rules:
-- queryType must be one of: word, phrase, sentence.
-- Infer queryType from captureInput.queryText.
-- headword and basicMeaning are required and must be non-empty.
-- phonetic, contextMeaning, and reviewHint may be null if not useful.
-- difficulty must be null for now because ReadRay has not defined its own learner difficulty rubric yet.
-- If captureInput.contextText is missing, null, or blank, contextMeaning must be null or omitted.
-- If captureInput.contextText is present, contextMeaning may be present but is not required.
-- phrases must contain at most 3 items.
-- nearMeanings must contain at most 3 items.
-- examples must contain at least 1 item and at most 2 items.
-- Each example must contain non-empty English en and Chinese zh.
-- Use concise Chinese for meanings.
-- Do not cite or pretend to quote any commercial dictionary or authoritative dictionary source.
-- Keep the output compact enough for a small desktop popover."#
+Word rules:
+- Preserve sourceText exactly. headword is the normalized lookup form.
+- Prefer the meaning used in contextText. Put that concise meaning in contextMeaning.
+- If contextText contains a useful source sentence, copy it to sourceSentence and translate it to sourceSentenceZh. Otherwise both must be null.
+- partOfSpeech and phonetic may be null. Code identifiers such as anchorRect should normally use null phonetic.
+- basicMeanings requires 1 to 4 concise Chinese meanings.
+- phrases and nearMeanings contain at most 3 useful items each.
+- examples contain at most 2 bilingual items and may be empty when an invented example would add little value.
+- Do not invent fields merely to fill the card."#
+        }
+        QueryType::Phrase => {
+            r#"{
+  "queryType": "phrase",
+  "sourceText": "in progress",
+  "basicMeaning": "正在进行中",
+  "contextMeaning": null,
+  "composition": "介词短语，常作表语",
+  "sourceSentence": null,
+  "sourceSentenceZh": null,
+  "examples": [{ "en": "The work is still in progress.", "zh": "这项工作仍在进行中。" }],
+  "reviewHint": null
+}
+
+Phrase rules:
+- Preserve sourceText exactly.
+- Explain the phrase as one semantic unit. basicMeaning is required.
+- Prefer the meaning used in contextText and put it in contextMeaning.
+- composition is optional and should only explain useful structure or usage.
+- If contextText contains a useful source sentence, copy it to sourceSentence and translate it to sourceSentenceZh. Otherwise both must be null.
+- examples contain at most 2 bilingual items and may be empty.
+- Do not split the phrase into fake word-card fields."#
+        }
+        QueryType::Sentence => {
+            r#"{
+  "queryType": "sentence",
+  "sourceText": "The window remains beside the selected text.",
+  "translation": "窗口会保持在所选文本旁边。",
+  "keyPoints": [
+    { "expression": "remain beside", "meaning": "保持在……旁边" }
+  ],
+  "explanation": null,
+  "reviewHint": null
+}
+
+Sentence rules:
+- Preserve sourceText exactly.
+- translation is required and is the primary output. Translate the complete sentence naturally and accurately.
+- keyPoints contains at most 3 expressions that materially help comprehension.
+- explanation and reviewHint are optional. Omit or use null when they add no value.
+- Do not generate phonetics, dictionary meanings, collocations, or invented examples."#
+        }
+        QueryType::Paragraph => {
+            r#"{
+  "queryType": "paragraph",
+  "sourceText": "The first sentence explains the state. The second describes the next action.",
+  "translation": "第一句解释当前状态。第二句描述下一步操作。",
+  "keyPoints": [
+    { "expression": "next action", "meaning": "下一步操作" }
+  ],
+  "summary": null
+}
+
+Paragraph rules:
+- Preserve sourceText exactly.
+- translation is required and is the primary output. Translate the complete selected paragraph without omitting sentences.
+- Preserve paragraph breaks when useful.
+- keyPoints contains at most 5 expressions that materially help comprehension.
+- summary is optional and should only be present when it adds meaning beyond the translation.
+- Do not generate phonetics, dictionary meanings, collocations, or invented examples."#
+        }
+    };
+
+    format!(
+        r#"You create structured JSON for ReadRay, a desktop English learning app.
+
+Return exactly one JSON object matching the schema below. Do not return Markdown, code fences, or commentary.
+The queryType is already determined locally. Do not change it.
+All JSON property names must use the exact camelCase spelling shown.
+Use concise Chinese for explanations and natural Chinese for translations.
+Do not cite or pretend to quote any commercial or authoritative dictionary.
+Only include optional information when it is useful.
+If captureInput.contextText is missing, null, or blank, contextMeaning must be null or omitted.
+If captureInput.contextText is present, contextMeaning may be present but is not required.
+
+{schema}"#
+    )
+}
+
+fn query_type_label(query_type: QueryType) -> &'static str {
+    match query_type {
+        QueryType::Word => "word",
+        QueryType::Phrase => "phrase",
+        QueryType::Sentence => "sentence",
+        QueryType::Paragraph => "paragraph",
+    }
 }
 
 fn summarize_validation_errors(errors: &[String]) -> String {
@@ -183,13 +270,13 @@ fn summarize_validation_errors(errors: &[String]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::explanation::{QueryType, SourceType};
+    use crate::explanation::SourceType;
     use std::path::PathBuf;
 
-    fn input_without_context() -> CaptureInput {
+    fn input(query_text: &str, context_text: Option<&str>) -> CaptureInput {
         CaptureInput {
-            query_text: "market".to_string(),
-            context_text: None,
+            query_text: query_text.to_string(),
+            context_text: context_text.map(str::to_string),
             source_type: SourceType::Manual,
         }
     }
@@ -204,86 +291,112 @@ mod tests {
         }
     }
 
-    fn valid_card_json() -> &'static str {
-        r#"{
-  "queryType": "word",
-  "headword": "market",
-  "phonetic": "/ˈmɑːrkɪt/",
-  "basicMeaning": "市场；销售；推广",
-  "phrases": [
-    { "phrase": "market share", "meaning": "市场份额" }
-  ],
-  "nearMeanings": [
-    { "term": "sell", "meaning": "强调卖出商品或服务" }
-  ],
-  "examples": [
-    { "en": "The company entered a new market.", "zh": "这家公司进入了一个新市场。" }
-  ],
-  "difficulty": null,
-  "reviewHint": "注意名词和动词用法。"
-}"#
-    }
-
     #[test]
-    fn valid_json_parses_and_validates() {
-        let input = input_without_context();
-        let card = parse_explanation_card_content(&input, valid_card_json()).unwrap();
+    fn json_for_each_query_type_parses_correctly() {
+        let cases = [
+            (
+                input("market", None),
+                r#"{
+  "queryType": "word",
+  "sourceText": "market",
+  "headword": "market",
+  "partOfSpeech": "noun / verb",
+  "phonetic": "/ˈmɑːrkɪt/",
+  "basicMeanings": ["市场", "推广"],
+  "phrases": [],
+  "nearMeanings": [],
+  "examples": []
+}"#,
+                QueryType::Word,
+            ),
+            (
+                input("in progress", None),
+                r#"{
+  "queryType": "phrase",
+  "sourceText": "in progress",
+  "basicMeaning": "正在进行中",
+  "examples": []
+}"#,
+                QueryType::Phrase,
+            ),
+            (
+                input("The work is still in progress.", None),
+                r#"{
+  "queryType": "sentence",
+  "sourceText": "The work is still in progress.",
+  "translation": "这项工作仍在进行中。",
+  "keyPoints": []
+}"#,
+                QueryType::Sentence,
+            ),
+            (
+                input(
+                    "The first sentence explains the state. The second describes the next action.",
+                    None,
+                ),
+                r#"{
+  "queryType": "paragraph",
+  "sourceText": "The first sentence explains the state. The second describes the next action.",
+  "translation": "第一句解释当前状态。第二句描述下一步操作。",
+  "keyPoints": []
+}"#,
+                QueryType::Paragraph,
+            ),
+        ];
 
-        assert_eq!(card.headword, "market");
-        assert_eq!(card.examples.len(), 1);
+        for (input, json, expected_type) in cases {
+            let card = parse_explanation_card_content(&input, json).unwrap();
+            assert_eq!(card.query_type(), expected_type);
+        }
     }
 
     #[test]
     fn invalid_json_fails() {
-        let input = input_without_context();
-        let error = parse_explanation_card_content(&input, "{not-json").unwrap_err();
+        let error =
+            parse_explanation_card_content(&input("market", None), "{not-json").unwrap_err();
 
         assert!(error.contains("不是合法 ExplanationCard JSON"));
     }
 
     #[test]
     fn context_meaning_without_context_text_fails() {
-        let input = input_without_context();
         let content = r#"{
   "queryType": "word",
+  "sourceText": "market",
   "headword": "market",
-  "basicMeaning": "市场；销售；推广",
+  "basicMeanings": ["市场"],
   "contextMeaning": "在上下文中表示推广。",
   "phrases": [],
   "nearMeanings": [],
-  "examples": [
-    { "en": "They plan to market the product.", "zh": "他们计划推广这个产品。" }
-  ]
+  "examples": []
 }"#;
 
-        let error = parse_explanation_card_content(&input, content).unwrap_err();
+        let error = parse_explanation_card_content(&input("market", None), content).unwrap_err();
 
         assert!(error.contains("contextMeaning"));
     }
 
     #[test]
     #[ignore = "requires DEEPSEEK_API_KEY and network access"]
-    fn live_create_explanation_card_with_flash_model() {
+    fn live_create_explanation_cards_with_flash_model() {
         load_project_env_for_live_test();
         std::env::set_var("DEEPSEEK_MODEL", "deepseek-v4-flash");
 
-        let input = CaptureInput {
-            query_text: "market".to_string(),
-            context_text: Some("They plan to market the product in Europe.".to_string()),
-            source_type: SourceType::Manual,
-        };
+        let long_sentence = "This implementation keeps the original selection available while the asynchronous explanation request is running, so the result can still be placed beside the source sentence.";
+        let paragraph = "A reliable desktop reading tool needs to preserve the user's current focus while it gathers context from the foreground application. It should avoid stealing focus before capture, because doing so can destroy the selection that the user intended to explain. After capture succeeds, the tool can call a language model, validate the structured response, and place a compact result beside the original text. The result window should remain small for a single word, but it should grow for a sentence or paragraph and use internal scrolling when the content exceeds the available work area.";
+        let cases = [
+            ("instruction", QueryType::Word),
+            ("anchorRect", QueryType::Word),
+            (long_sentence, QueryType::Sentence),
+            (paragraph, QueryType::Paragraph),
+        ];
 
-        let card = tauri::async_runtime::block_on(create_explanation_card(input))
-            .expect("live DeepSeek ExplanationCard request should succeed");
+        for (query_text, expected_type) in cases {
+            let card =
+                tauri::async_runtime::block_on(create_explanation_card(input(query_text, None)))
+                    .expect("live DeepSeek ExplanationCard request should succeed");
 
-        assert_eq!(card.query_type, QueryType::Word);
-        assert!(!card.headword.trim().is_empty());
-        assert!(!card.basic_meaning.trim().is_empty());
-        assert!(!card.examples.is_empty());
-        assert!(card.examples.len() <= 2);
-        assert!(card
-            .examples
-            .iter()
-            .all(|example| !example.en.trim().is_empty() && !example.zh.trim().is_empty()));
+            assert_eq!(card.query_type(), expected_type);
+        }
     }
 }

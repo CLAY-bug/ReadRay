@@ -1,22 +1,15 @@
 import {
   type CSSProperties,
-  type ReactNode,
   useEffect,
   useLayoutEffect,
   useRef,
   useState,
 } from "react";
-
-export type AnchoredResult = {
-  word: string;
-  phonetic: string;
-  definition: string;
-  contextMeaning: string;
-  usage: string;
-  example: string;
-  exampleZh: string;
-  highlightText?: string;
-};
+import {
+  preferredAnchoredWidth,
+  type ExplanationResult,
+} from "../explanationViewModel";
+import ExplanationResultContent from "./ExplanationResultContent";
 
 export type AnchorRect = {
   x: number;
@@ -26,10 +19,13 @@ export type AnchorRect = {
 };
 
 type AnchoredResultPopoverProps = {
-  result: AnchoredResult;
+  result: ExplanationResult;
   anchorRect: AnchorRect | null;
   open: boolean;
   onOpenChange: (open: boolean) => void;
+  embedded?: boolean;
+  highlightText?: string;
+  onContentSizeChange?: (size: { width: number; height: number }) => void;
 };
 
 type PopoverSide = "top" | "bottom";
@@ -41,6 +37,7 @@ type PopoverPlacement = {
 
 const viewportMargin = 12;
 const anchorGap = 12;
+const windowInset = 8;
 
 function clamp(value: number, min: number, max: number) {
   return Math.max(min, Math.min(value, max));
@@ -52,11 +49,15 @@ function placePopover(
 ): PopoverPlacement {
   const viewportWidth = window.innerWidth;
   const viewportHeight = window.innerHeight;
-  const maxLeft = Math.max(viewportMargin, viewportWidth - popoverRect.width - viewportMargin);
+  const maxLeft = Math.max(
+    viewportMargin,
+    viewportWidth - popoverRect.width - viewportMargin,
+  );
   const preferredBottomTop = anchorRect.y + anchorRect.height + anchorGap;
   const hasBottomSpace =
     preferredBottomTop + popoverRect.height + viewportMargin <= viewportHeight;
-  const hasTopSpace = anchorRect.y - popoverRect.height - anchorGap >= viewportMargin;
+  const hasTopSpace =
+    anchorRect.y - popoverRect.height - anchorGap >= viewportMargin;
   const side: PopoverSide = hasBottomSpace || !hasTopSpace ? "bottom" : "top";
   const rawTop =
     side === "bottom"
@@ -65,7 +66,10 @@ function placePopover(
   const top = clamp(
     rawTop,
     viewportMargin,
-    Math.max(viewportMargin, viewportHeight - popoverRect.height - viewportMargin),
+    Math.max(
+      viewportMargin,
+      viewportHeight - popoverRect.height - viewportMargin,
+    ),
   );
   const left = clamp(
     anchorRect.x + anchorRect.width / 2 - popoverRect.width / 2,
@@ -88,23 +92,17 @@ function placePopover(
   };
 }
 
-function renderHighlightedText(text: string, highlightText?: string): ReactNode {
-  if (!highlightText) {
-    return text;
+function resultLabel(result: ExplanationResult) {
+  switch (result.kind) {
+    case "word":
+      return `${result.headword} 的单词解释`;
+    case "phrase":
+      return `${result.sourceText} 的短语解释`;
+    case "sentence":
+      return "所选句子的翻译与解释";
+    case "paragraph":
+      return "所选段落的翻译与解释";
   }
-
-  const start = text.indexOf(highlightText);
-  if (start === -1) {
-    return text;
-  }
-
-  return (
-    <>
-      {text.slice(0, start)}
-      <strong>{highlightText}</strong>
-      {text.slice(start + highlightText.length)}
-    </>
-  );
 }
 
 function AnchoredResultPopover({
@@ -112,15 +110,17 @@ function AnchoredResultPopover({
   anchorRect,
   open,
   onOpenChange,
+  embedded = false,
+  highlightText,
+  onContentSizeChange,
 }: AnchoredResultPopoverProps) {
   const popoverRef = useRef<HTMLElement>(null);
+  const lastReportedSize = useRef("");
   const [placement, setPlacement] = useState<PopoverPlacement | null>(null);
-  const [primaryContextMeaning, ...secondaryContextMeanings] =
-    result.contextMeaning.split("；");
-  const usageParts = result.usage.split(" = ");
+  const preferredWidth = preferredAnchoredWidth(result);
 
   useLayoutEffect(() => {
-    if (!open || !anchorRect || !popoverRef.current) {
+    if (embedded || !open || !anchorRect || !popoverRef.current) {
       return;
     }
 
@@ -131,7 +131,37 @@ function AnchoredResultPopover({
         height: measuredRect.height,
       }),
     );
-  }, [anchorRect, open, result]);
+  }, [anchorRect, embedded, open, result]);
+
+  useLayoutEffect(() => {
+    const element = popoverRef.current;
+    if (!embedded || !open || !element || !onContentSizeChange) {
+      return;
+    }
+
+    let animationFrame = 0;
+    const reportSize = () => {
+      window.cancelAnimationFrame(animationFrame);
+      animationFrame = window.requestAnimationFrame(() => {
+        const width = Math.ceil(preferredWidth + windowInset * 2);
+        const height = Math.ceil(element.scrollHeight + windowInset * 2 + 6);
+        const sizeKey = `${width}:${height}`;
+        if (lastReportedSize.current !== sizeKey) {
+          lastReportedSize.current = sizeKey;
+          onContentSizeChange({ width, height });
+        }
+      });
+    };
+
+    const observer = new ResizeObserver(reportSize);
+    observer.observe(element);
+    reportSize();
+
+    return () => {
+      observer.disconnect();
+      window.cancelAnimationFrame(animationFrame);
+    };
+  }, [embedded, onContentSizeChange, open, preferredWidth, result]);
 
   useEffect(() => {
     if (!open) {
@@ -148,59 +178,36 @@ function AnchoredResultPopover({
     return () => document.removeEventListener("keydown", handleKeyDown);
   }, [onOpenChange, open]);
 
-  if (!open || !anchorRect) {
+  if (!open || (!embedded && !anchorRect)) {
     return null;
   }
 
   return (
     <section
       ref={popoverRef}
-      className="anchored-result-popover"
-      data-side={placement?.side ?? "bottom"}
-      style={{
-        ...placement?.style,
-        visibility: placement ? "visible" : "hidden",
-      }}
-      aria-label={`${result.word} 的紧凑语境解释`}
+      className={`anchored-result-popover${
+        embedded ? " is-window-overlay" : ""
+      }`}
+      data-side={embedded ? "window" : placement?.side ?? "bottom"}
+      data-result-kind={result.kind}
+      style={
+        embedded
+          ? ({
+              visibility: "visible",
+              "--anchored-preferred-width": `${preferredWidth}px`,
+            } as CSSProperties)
+          : {
+              ...placement?.style,
+              visibility: placement ? "visible" : "hidden",
+            }
+      }
+      aria-label={resultLabel(result)}
     >
-      <header className="anchored-result-popover__header">
-        <h1 className="anchored-result-popover__word">{result.word}</h1>
-        <span className="anchored-result-popover__phonetic">
-          {result.phonetic}
-        </span>
-      </header>
-
-      <dl className="anchored-result-popover__meanings">
-        <div className="anchored-result-popover__row">
-          <dt>基础释义</dt>
-          <dd>{result.definition}</dd>
-        </div>
-        <div className="anchored-result-popover__row">
-          <dt>在这句里</dt>
-          <dd>
-            <strong>{primaryContextMeaning}</strong>
-            {secondaryContextMeanings.length > 0
-              ? `；${secondaryContextMeanings.join("；")}`
-              : ""}
-          </dd>
-        </div>
-        <div className="anchored-result-popover__row">
-          <dt>用法</dt>
-          <dd>
-            <strong>{usageParts[0]}</strong>
-            {usageParts[1] ? ` = ${usageParts[1]}` : ""}
-          </dd>
-        </div>
-      </dl>
-
-      <div className="anchored-result-popover__example" aria-label="例句和翻译">
-        <p className="anchored-result-popover__example-en">
-          {renderHighlightedText(result.example, result.highlightText)}
-        </p>
-        <p className="anchored-result-popover__example-zh">
-          {result.exampleZh}
-        </p>
-      </div>
+      <ExplanationResultContent
+        result={result}
+        highlightText={highlightText}
+        variant="anchored"
+      />
     </section>
   );
 }
