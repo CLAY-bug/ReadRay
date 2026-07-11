@@ -8,6 +8,7 @@ use tauri::{
 
 pub mod deepseek_explanation;
 pub mod explanation;
+pub mod learning_records;
 #[cfg(target_os = "windows")]
 pub mod windows_uia;
 
@@ -547,7 +548,6 @@ pub fn run() {
     let registered_uia_capture_shortcut = uia_capture_shortcut.clone();
 
     tauri::Builder::default()
-        .plugin(tauri_plugin_sql::Builder::default().build())
         .plugin(tauri_plugin_clipboard_manager::init())
         .plugin(
             #[cfg(desktop)]
@@ -582,6 +582,8 @@ pub fn run() {
         )
         .plugin(tauri_plugin_opener::init())
         .setup(move |app| {
+            learning_records::initialize_for_app(app.handle()).map_err(std::io::Error::other)?;
+
             #[cfg(desktop)]
             {
                 app.global_shortcut().register(registered_shortcut)?;
@@ -616,7 +618,11 @@ pub fn run() {
             begin_overlay_window_drag,
             drag_overlay_window,
             finish_overlay_window_drag,
-            deepseek_explanation::create_explanation_card
+            deepseek_explanation::create_explanation_card,
+            learning_records::list_learning_records,
+            learning_records::search_learning_records,
+            learning_records::get_learning_record,
+            learning_records::delete_learning_record
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

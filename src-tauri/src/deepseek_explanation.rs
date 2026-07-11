@@ -1,6 +1,7 @@
 use crate::explanation::{
     classify_query_type, validate_explanation_card, CaptureInput, ExplanationCard, QueryType,
 };
+use crate::learning_records;
 use crate::{DEEPSEEK_BASE_URL, DEFAULT_DEEPSEEK_MODEL};
 use serde::Deserialize;
 use serde_json::json;
@@ -25,7 +26,20 @@ struct DeepSeekMessage {
 }
 
 #[tauri::command]
-pub async fn create_explanation_card(input: CaptureInput) -> Result<ExplanationCard, String> {
+pub async fn create_explanation_card(
+    app: tauri::AppHandle,
+    input: CaptureInput,
+) -> Result<ExplanationCard, String> {
+    let card = create_explanation_card_for_input(&input).await?;
+    learning_records::save_for_app(&app, &input, &card)
+        .map_err(|error| format!("ExplanationCard 已生成，但学习记录保存失败：{error}"))?;
+
+    Ok(card)
+}
+
+pub(crate) async fn create_explanation_card_for_input(
+    input: &CaptureInput,
+) -> Result<ExplanationCard, String> {
     let query_type = classify_query_type(&input.query_text)?;
     let model =
         std::env::var("DEEPSEEK_MODEL").unwrap_or_else(|_| DEFAULT_DEEPSEEK_MODEL.to_string());
@@ -83,7 +97,7 @@ pub async fn create_explanation_card(input: CaptureInput) -> Result<ExplanationC
         .map_err(|error| format!("DeepSeek ExplanationCard 响应结构无法解析：{error}"))?;
     let content = extract_content(value)?;
 
-    parse_explanation_card_content(&input, &content)
+    parse_explanation_card_content(input, &content)
 }
 
 pub(crate) fn parse_explanation_card_content(
@@ -278,6 +292,7 @@ mod tests {
             query_text: query_text.to_string(),
             context_text: context_text.map(str::to_string),
             source_type: SourceType::Manual,
+            source_app: None,
         }
     }
 
@@ -392,9 +407,10 @@ mod tests {
         ];
 
         for (query_text, expected_type) in cases {
-            let card =
-                tauri::async_runtime::block_on(create_explanation_card(input(query_text, None)))
-                    .expect("live DeepSeek ExplanationCard request should succeed");
+            let card = tauri::async_runtime::block_on(create_explanation_card_for_input(&input(
+                query_text, None,
+            )))
+            .expect("live DeepSeek ExplanationCard request should succeed");
 
             assert_eq!(card.query_type(), expected_type);
         }

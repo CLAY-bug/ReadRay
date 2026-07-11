@@ -2,6 +2,7 @@ use serde::{Deserialize, Serialize};
 
 pub const MAX_QUERY_TEXT_LEN: usize = 4_096;
 const MAX_CONTEXT_TEXT_LEN: usize = 4_096;
+const MAX_SOURCE_APP_LEN: usize = 512;
 const MAX_SOURCE_TEXT_LEN: usize = 4_096;
 const MAX_HEADWORD_LEN: usize = 160;
 const MAX_PART_OF_SPEECH_LEN: usize = 80;
@@ -55,6 +56,8 @@ pub struct CaptureInput {
     pub query_text: String,
     pub context_text: Option<String>,
     pub source_type: SourceType,
+    #[serde(default)]
+    pub source_app: Option<String>,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -405,6 +408,12 @@ fn validate_capture_input(errors: &mut Vec<String>, input: &CaptureInput) -> Opt
         input.context_text.as_deref(),
         MAX_CONTEXT_TEXT_LEN,
     );
+    validate_optional_text_len(
+        errors,
+        "captureInput.sourceApp",
+        input.source_app.as_deref(),
+        MAX_SOURCE_APP_LEN,
+    );
 
     match classify_query_type(&input.query_text) {
         Ok(query_type) => Some(query_type),
@@ -647,6 +656,7 @@ mod tests {
             query_text: query_text.to_string(),
             context_text: context_text.map(str::to_string),
             source_type: SourceType::WindowsUia,
+            source_app: None,
         }
     }
 

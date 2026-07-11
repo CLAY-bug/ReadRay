@@ -26,3 +26,6 @@ src-tauri/target
 *.njsproj
 *.sln
 *.sw?
+
+#design
+design-open-design

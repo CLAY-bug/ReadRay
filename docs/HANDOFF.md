@@ -1,12 +1,12 @@
 # ReadRay 交接记录
 
-最后更新：2026-06-28
+最后更新：2026-07-10
 
 ## TL;DR
 
-- 当前状态：Tauri + React + TypeScript 脚手架已创建，前端构建通过，Git 已修复，比赛资料已恢复；Windows 上的 VS Build Tools / MSVC / Windows SDK 已修复，阶段 A 磁盘迁移已完成；阶段一桌面基础能力已完成第一轮工程验证。
+- 当前状态：阶段一 Tauri 基础能力、阶段二解释卡 MVP 和阶段三第一轮 SQLite 本地记忆数据底座已完成；手动输入与 Windows UIA 划词均已接入真实 DeepSeek 分型解释卡并在成功后自动追加学习事件。
 - 当前路线：Windows 原生，Tauri + React + TypeScript + Rust + SQLite。
-- 下一步：`UIA 捕获 -> DeepSeek -> 选区附近解释卡` 已完成第一轮正式接线；解释协议已按 word/phrase/sentence/paragraph 分型，并支持最长 4096 字符选区和内容驱动窗口尺寸。后续优先补齐更多应用兼容验证与长文本真实使用反馈。本机 `.env` 已配置 `DEEPSEEK_API_KEY`，无选区与划词查询均已接通。
+- 下一步：数据底座已稳定，后续可单独设计学习记录窗口并调用分页、搜索、类型筛选、单条读取和删除接口；不要在该 UI 任务中扩展复盘算法。
 - 当前约束：不使用通用 Agent 框架，不内置商业词典，不做 OCR、本地大模型或跨平台支持。
 - 交接原则：`HANDOFF.md` 只记录会影响下一次恢复上下文的信息，小型文档措辞和格式调整不记录。
 
@@ -109,14 +109,17 @@
 - 已完成正式划词接线：前端收到 UIA 捕获后清理 U+200B/U+FFFC，将退化上下文降级为 null，以 SourceType::WindowsUia 调用现有 DeepSeek command；Tauri 按物理 anchorRect、显示器 DPI 和工作区放置 anchored loading/result/error 小窗口。Codex App 的 `DeepSeek`、Obsidian 阅读区的 `hot session` 均真实返回解释卡。
 - 已完成分类型解释与自适应窗口第一轮实现：DeepSeek Flash 按本地 queryType 输出严格 JSON；前端不再把第一个 phrase 映射为“用法”，句子/段落优先展示完整翻译；锚定窗口按内容测量收缩或扩展，宽度随类型约为 500-700 像素，最大高度约为显示器工作区 70%，超出时内部滚动。
 - 已完成不联网 Rust 测试，并用本机 `.env` 对 word、camelCase 标识符、超过 120 字符的句子和段落完成四次真实 DeepSeek Flash 请求；模型返回的 sourceText 在 serde 前由捕获输入覆盖，避免模型改写原文。
+- 已完成阶段三第一轮 SQLite 本地记忆数据底座：Rust `learning_records` 使用 `rusqlite` bundled，在 Tauri 应用数据目录创建 `readray.sqlite3`；`schema_migrations` 记录已执行迁移，v1 追加保存每一次成功查询事件，不以重复文本覆盖旧记录。
+- 学习事件字段包含自增 ID、原始 queryText、标准化文本、queryType、sourceType、可选 sourceApp、可选 contextText、完整 ExplanationCard JSON、ExplanationCard schemaVersion、创建时间和可空 difficulty；当前不生成虚假难度，统一保存 `NULL`。
+- `create_explanation_card` 仍先完成 DeepSeek 解析与 validator，只有成功后才调用学习记录写入；manual 与 windows_uia 共用同一 command 链路。请求、解析、validator 或存储失败均不留下学习记录，并返回可诊断错误。
+- 已提供 Rust/Tauri commands：`list_learning_records`、`search_learning_records`、`get_learning_record`、`delete_learning_record`。前端不接触 SQL；学习记录窗口尚未实现。
 
 ## 下一步
 
-继续推进：阶段一基础桌面能力已经完成第一轮工程验证。当前最先要处理的阻塞：
+继续推进：阶段三数据底座已完成，下一项应单独设计学习记录窗口。
 
-- overlay 第一轮体验校准到此结束：拖动、当前进程内位置记忆、点击外部隐藏、`Ctrl+Alt+R` 重新呼出和真实查询链路已形成可继续开发的基础；现阶段不再继续调整默认窗口位置。
-- 划词链路首批范围限定为已验证的 Obsidian 与 Codex App 渲染内容区；锚定结果窗口已按实际内容自适应，下一步继续验证其他桌面应用和不同 DPI/多显示器边缘位置。
-- DeepSeek key 不再是当前本机阻塞；后续阶段二解释卡 MVP 可以复用现有 command，但不要把 SQLite schema 和上下文捕获混在 overlay 校准里。
+- UI 只调用 Rust 的分页、关键词搜索、queryType 筛选、单条读取和删除 commands，不向前端暴露 SQL 或数据库路径。
+- 继续保持每次成功查询为独立事件；重复查询聚合、高频词、趋势和复盘规划属于后续阶段。
 - 新环境仍需复制 `.env.example` 为 `.env` 后自行填写 `DEEPSEEK_API_KEY`；真实 `.env` 不提交。
 
 阶段一完成标准：
@@ -130,7 +133,7 @@
 
 ## 待解决问题
 
-- UI 设计完成后，专门研究“划词获取上下文”的技术 spike。目标输入模型应区分 `selectedText` 和 `contextText`：只拿到剪贴板单词时降级为普通查词；能通过 Windows UI Automation、应用适配器或后续 OCR 取得上下文时，才展示语境义。
+- SQLite v1 已按追加事件定义；后续若需要聚合或复盘状态，应增加独立表和新 migration，不回填或覆盖原始 learning_records 事件。
 - Obsidian 的 UIA provider 路径存在模式差异：编辑模式可直接从焦点 Edit 取得 TextPattern2，阅读模式需要从焦点/光标元素沿 Raw View 祖先链查找 Document。当前两种模式均可用，但仍需观察不同主题、页面结构和 Obsidian 版本下的稳定性。
 - Codex App 的渲染内容区使用 `TextPattern`，常见来源为 `cursorPoint` 或滚动容器祖先；编辑输入区使用 ProseMirror，选区和坐标可用，但 Paragraph 上下文不完整。正式接线不能把这种退化上下文当成完整语境。
 - 该能力不要求一开始支持所有应用，应先验证常用 Windows 桌面场景，例如 VS Code、Obsidian、Notion Desktop、WPS/Word、PDF 阅读器等。Electron 应用本质基于 Chromium，通常可能暴露无障碍树，但仍需逐应用验证。
@@ -140,8 +143,7 @@
 - C 盘空间已缓解但仍需留意；VS Build Tools 主体和 Windows Kits 仍在 C 盘，若空间再次吃紧，再评估卸载后重装 VS Build Tools 到 D 盘。
 - 本地查询分类是启发式规则，缩写、多句但很短的文本、缺少句末标点的长句仍可能被相邻类型吸收；优先通过真实样本调整规则，不增加第二次 LLM 分类请求。
 - 长段落输出受模型 JSON 稳定性和窗口最大高度约束；当前上限 4096 字符，不代表整页翻译能力。
-- UI 具体设计暂时不定。
-- SQLite schema 在解释卡和本地记忆阶段再设计。
+- 学习记录窗口的 UI 具体设计暂时不定，不与阶段三数据底座混合实现。
 
 ## 暂时不要做
 

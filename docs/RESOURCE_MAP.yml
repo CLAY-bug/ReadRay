@@ -5,7 +5,7 @@ project:
 
 meta:
   version: "1.0"
-  last_updated: "2026-06-28"
+  last_updated: "2026-07-10"
   updated_by: "Codex"
   source_of_truth: "docs/RESOURCE_MAP.yml"
   language: "zh-CN"
@@ -223,7 +223,7 @@ source_areas:
       - "接入 DeepSeek 结构化输出。"
       - "调整解释卡 schema、字段限长或校验规则。"
       - "把解释卡映射到 compact UI 或后续 SQLite 本地记忆。"
-    notes: "schema 是 ReadRay 中间协议，不是前端组件 props；当前使用 serde tagged enum 明确区分 word/phrase/sentence/paragraph。输入 queryText/contextText 上限为 4096 字符；无 contextText 时不允许 contextMeaning；句子和段落以完整 translation 为核心，不继承单词卡必填项。"
+    notes: "schema 是 ReadRay 中间协议，不是前端组件 props；当前使用 serde tagged enum 明确区分 word/phrase/sentence/paragraph。输入 queryText/contextText 上限为 4096 字符；CaptureInput 可选携带 sourceApp；无 contextText 时不允许 contextMeaning；句子和段落以完整 translation 为核心，不继承单词卡必填项。"
     risk: "不要在这里接真实 DeepSeek 查询链路、SQLite schema 或 UI 交互逻辑。"
 
   - path: "src-tauri/src/deepseek_explanation.rs"
@@ -233,8 +233,18 @@ source_areas:
       - "调整 create_explanation_card command。"
       - "排查 DeepSeek 结构化 JSON 输出、serde 解析或 validator 失败。"
       - "将 ExplanationCard 接入 compact UI 前的 Rust 层查询链路。"
-    notes: "command 输入为 CaptureInput，先在本地判断 word/phrase/sentence/paragraph，再使用对应 JSON schema prompt；请求使用 response_format=json_object，解析前以捕获输入覆盖 sourceText，随后 serde 解析并调用 validate_explanation_card。当前同时服务 manual 无选区输入和 windows_uia 划词解释卡，不做 SQLite。"
-    risk: "不要在日志、文档或提交文件中写入真实 DEEPSEEK_API_KEY；不要把 UI 映射和真实查询链路混成一次大改。"
+    notes: "command 输入为 CaptureInput，先在本地判断 word/phrase/sentence/paragraph，再使用对应 JSON schema prompt；请求使用 response_format=json_object，解析前以捕获输入覆盖 sourceText，随后 serde 解析并调用 validate_explanation_card。校验成功后统一调用 learning_records 自动保存；manual 无选区输入和 windows_uia 划词解释卡共用该链路。"
+    risk: "不要在日志、文档或提交文件中写入真实 DEEPSEEK_API_KEY；保存失败必须返回清晰错误，不能伪装为查询成功。"
+
+  - path: "src-tauri/src/learning_records.rs"
+    purpose: "阶段三 SQLite 学习事件迁移、Rust 存储边界和 Tauri 数据 commands。"
+    status: "active"
+    read_when:
+      - "调整学习记录 schema、迁移或存储字段。"
+      - "实现学习记录窗口、搜索、筛选、单条读取或删除。"
+      - "排查自动保存或应用数据目录中的 SQLite 问题。"
+    notes: "使用 rusqlite bundled，在 Tauri 应用数据目录创建 readray.sqlite3。schema_migrations 按版本执行；learning_records 按查询事件追加保存原文、标准化文本、queryType、sourceType、可选 sourceApp/contextText、完整 ExplanationCard JSON、schemaVersion、时间和可空 difficulty。前端只调用 list/search/get/delete commands，不接触 SQL。"
+    risk: "当前只做事件存储，不做去重、聚合、remembered/forgotten、趋势或历史 UI；新增 schema 必须追加 migration，不能改写已发布迁移。"
 
   - path: "scripts/"
     purpose: "辅助脚本目录。"

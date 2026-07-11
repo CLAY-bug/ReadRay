@@ -4,6 +4,7 @@ export type CaptureInput = {
   queryText: string;
   contextText?: string | null;
   sourceType: "manual" | "clipboard" | "windows_uia" | "app_adapter" | "ocr";
+  sourceApp?: string | null;
 };
 
 export type PhraseItem = {

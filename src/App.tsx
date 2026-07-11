@@ -2,7 +2,6 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { readText, writeText } from "@tauri-apps/plugin-clipboard-manager";
-import Database from "@tauri-apps/plugin-sql";
 import AnchoredResultPopover, {
   type AnchorRect,
 } from "./components/AnchoredResultPopover";
@@ -41,13 +40,6 @@ type DeepSeekSmokeResult = {
   contentPreview?: string;
 };
 
-type Stage1CheckRow = {
-  id: number;
-  label: string;
-  value: string;
-  created_at: string;
-};
-
 type PreviewMode = "anchored" | "command";
 type CommandStage = "input" | "loading" | "result";
 type AnchoredStage = "mock" | "loading" | "result" | "error";
@@ -57,6 +49,10 @@ type WindowsUiaCapture = {
   selectedText?: string | null;
   contextText?: string | null;
   anchorRect?: AnchorRect | null;
+  foreground?: {
+    executablePath?: string | null;
+    windowTitle?: string | null;
+  };
 };
 
 const idle: CheckResult = { state: "idle", detail: "未验证" };
@@ -113,6 +109,16 @@ function normalizeUiaText(value?: string | null) {
 function contextForQuery(selectedText: string, contextText?: string | null) {
   const normalized = normalizeUiaText(contextText);
   return normalized && normalized !== selectedText ? normalized : null;
+}
+
+function sourceAppForCapture(capture: WindowsUiaCapture) {
+  const executablePath = capture.foreground?.executablePath;
+  if (executablePath) {
+    const segments = executablePath.split(/[\\/]/);
+    return segments[segments.length - 1] || null;
+  }
+
+  return null;
 }
 
 function formatError(error: unknown) {
@@ -272,6 +278,7 @@ function App() {
       queryText: selectedText,
       contextText: contextForQuery(selectedText, capture.contextText),
       sourceType: "windows_uia",
+      sourceApp: sourceAppForCapture(capture),
     };
 
     try {
@@ -515,33 +522,17 @@ function App() {
   }
 
   async function testSqlite() {
-    setSqliteCheck({ state: "running", detail: "正在写入和读取 SQLite" });
+    setSqliteCheck({ state: "running", detail: "正在检查学习记录 SQLite" });
 
     try {
-      const db = await Database.load("sqlite:readray-stage1.db");
-      await db.execute(
-        "CREATE TABLE IF NOT EXISTS stage1_checks (id INTEGER PRIMARY KEY AUTOINCREMENT, label TEXT NOT NULL, value TEXT NOT NULL, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP)",
-      );
-
-      const value = `sqlite-${Date.now()}`;
-      await db.execute(
-        "INSERT INTO stage1_checks (label, value) VALUES ($1, $2)",
-        ["phase-one", value],
-      );
-
-      const rows = await db.select<Stage1CheckRow[]>(
-        "SELECT id, label, value, created_at FROM stage1_checks WHERE value = $1 ORDER BY id DESC LIMIT 1",
-        [value],
-      );
-
-      if (rows.length === 0) {
-        setSqliteCheck({ state: "error", detail: "写入后没有读到记录" });
-        return;
-      }
+      const result = await invoke<{ total: number }>("list_learning_records", {
+        page: 1,
+        pageSize: 1,
+      });
 
       setSqliteCheck({
         state: "ok",
-        detail: `读写成功：#${rows[0].id} ${rows[0].value}`,
+        detail: `学习记录数据库可读取，当前共 ${result.total} 条记录`,
       });
     } catch (error) {
       setSqliteCheck({ state: "error", detail: formatError(error) });
