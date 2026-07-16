@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, type MouseEvent } from "react";
 import type {
   MainAppNavigationId,
   MainAppViewModel,
@@ -16,8 +16,10 @@ type MainAppShellProps = {
   onViewAllConversations?: () => void;
   onTodayActionSelect?: (id: TodayActionId) => void;
   onSubmitPrompt?: (value: string) => void;
+  isMaximized?: boolean;
+  onStartDragging?: () => void;
   onMinimize?: () => void;
-  onMaximize?: () => void;
+  onToggleMaximize?: () => void;
   onClose?: () => void;
 };
 
@@ -31,8 +33,10 @@ function MainAppShell({
   onViewAllConversations = noop,
   onTodayActionSelect = noop,
   onSubmitPrompt = noop,
+  isMaximized = false,
+  onStartDragging = noop,
   onMinimize = noop,
-  onMaximize = noop,
+  onToggleMaximize = noop,
   onClose = noop,
 }: MainAppShellProps) {
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
@@ -49,9 +53,26 @@ function MainAppShell({
     return () => window.removeEventListener("keydown", handleShortcut);
   }, []);
 
+  function handleTitlebarMouseDown(event: MouseEvent<HTMLElement>) {
+    const target = event.target as HTMLElement;
+    if (event.button !== 0 || target.closest("button")) {
+      return;
+    }
+
+    if (event.detail === 2) {
+      onToggleMaximize();
+    } else {
+      onStartDragging();
+    }
+  }
+
   return (
     <div className={`rr-main-app${sidebarCollapsed ? " is-sidebar-collapsed" : ""}`}>
-      <header className="rr-main-titlebar" aria-label="ReadRay 窗口标题栏">
+      <header
+        className="rr-main-titlebar"
+        aria-label="ReadRay 窗口标题栏"
+        onMouseDown={handleTitlebarMouseDown}
+      >
         <div className="rr-main-brand-zone">
           <span className="rr-main-brand-mark">R</span>
           <span className="rr-main-brand-name">ReadRay</span>
@@ -71,8 +92,13 @@ function MainAppShell({
           <button className="rr-main-window-control" type="button" aria-label="最小化" onClick={onMinimize}>
             <MainAppIcon name="minimize" />
           </button>
-          <button className="rr-main-window-control" type="button" aria-label="最大化" onClick={onMaximize}>
-            <MainAppIcon name="maximize" />
+          <button
+            className="rr-main-window-control"
+            type="button"
+            aria-label={isMaximized ? "还原" : "最大化"}
+            onClick={onToggleMaximize}
+          >
+            <MainAppIcon name={isMaximized ? "restore" : "maximize"} />
           </button>
           <button className="rr-main-window-control is-close" type="button" aria-label="关闭" onClick={onClose}>
             <MainAppIcon name="close" />

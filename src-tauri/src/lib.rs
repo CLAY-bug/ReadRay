@@ -2,6 +2,7 @@ use serde::Serialize;
 use serde_json::json;
 use std::path::PathBuf;
 use std::sync::{Mutex, OnceLock};
+use std::time::{Duration, Instant};
 use tauri::{
     LogicalPosition, LogicalSize, PhysicalPosition, PhysicalSize, WebviewWindow, WindowEvent,
 };
@@ -16,6 +17,8 @@ pub mod quick_ai;
 pub mod windows_uia;
 
 const READRAY_SHORTCUT_LABEL: &str = "Ctrl+Alt+R";
+const MAIN_WINDOW_LABEL: &str = "main";
+const OVERLAY_WINDOW_LABEL: &str = "overlay";
 pub(crate) const DEEPSEEK_BASE_URL: &str = "https://api.deepseek.com";
 pub(crate) const DEFAULT_DEEPSEEK_MODEL: &str = "deepseek-v4-flash";
 
@@ -101,11 +104,62 @@ struct ActiveOverlayDrag {
     window_y: f64,
 }
 
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct OverlayIntent {
+    kind: &'static str,
+    #[cfg(target_os = "windows")]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    capture: Option<windows_uia::WindowsUiaCapture>,
+}
+
+impl OverlayIntent {
+    fn show_input() -> Self {
+        Self {
+            kind: "showInput",
+            #[cfg(target_os = "windows")]
+            capture: None,
+        }
+    }
+
+    #[cfg(target_os = "windows")]
+    fn uia_capture(capture: windows_uia::WindowsUiaCapture) -> Self {
+        Self {
+            kind: "uiaCapture",
+            capture: Some(capture),
+        }
+    }
+}
+
 static SAVED_OVERLAY_POSITION: OnceLock<Mutex<Option<SavedOverlayPosition>>> = OnceLock::new();
 static ACTIVE_OVERLAY_DRAG: OnceLock<Mutex<Option<ActiveOverlayDrag>>> = OnceLock::new();
+static PENDING_OVERLAY_INTENT: OnceLock<Mutex<Option<OverlayIntent>>> = OnceLock::new();
+static OVERLAY_FOCUS_GRACE_UNTIL: OnceLock<Mutex<Option<Instant>>> = OnceLock::new();
+#[cfg(target_os = "windows")]
+static PENDING_UIA_CAPTURE: OnceLock<Mutex<Option<windows_uia::WindowsUiaCapture>>> =
+    OnceLock::new();
 
 fn tauri_err(error: impl std::fmt::Display) -> String {
     error.to_string()
+}
+
+fn ensure_window_label(window: &WebviewWindow, expected: &str) -> Result<(), String> {
+    if window.label() == expected {
+        Ok(())
+    } else {
+        Err(format!(
+            "窗口命令要求 label={expected}，当前为 {}。",
+            window.label()
+        ))
+    }
+}
+
+fn ensure_overlay_window(window: &WebviewWindow) -> Result<(), String> {
+    ensure_window_label(window, OVERLAY_WINDOW_LABEL)
+}
+
+fn ensure_main_window(window: &WebviewWindow) -> Result<(), String> {
+    ensure_window_label(window, MAIN_WINDOW_LABEL)
 }
 
 fn saved_overlay_position() -> &'static Mutex<Option<SavedOverlayPosition>> {
@@ -114,6 +168,39 @@ fn saved_overlay_position() -> &'static Mutex<Option<SavedOverlayPosition>> {
 
 fn active_overlay_drag() -> &'static Mutex<Option<ActiveOverlayDrag>> {
     ACTIVE_OVERLAY_DRAG.get_or_init(|| Mutex::new(None))
+}
+
+fn pending_overlay_intent() -> &'static Mutex<Option<OverlayIntent>> {
+    PENDING_OVERLAY_INTENT.get_or_init(|| Mutex::new(None))
+}
+
+fn set_pending_overlay_intent(intent: OverlayIntent) -> Result<(), String> {
+    let mut pending = pending_overlay_intent().lock().map_err(tauri_err)?;
+    *pending = Some(intent);
+    Ok(())
+}
+
+fn overlay_focus_grace_until() -> &'static Mutex<Option<Instant>> {
+    OVERLAY_FOCUS_GRACE_UNTIL.get_or_init(|| Mutex::new(None))
+}
+
+fn start_overlay_focus_grace() {
+    if let Ok(mut grace_until) = overlay_focus_grace_until().lock() {
+        *grace_until = Some(Instant::now() + Duration::from_millis(350));
+    }
+}
+
+fn overlay_focus_grace_active() -> bool {
+    overlay_focus_grace_until()
+        .lock()
+        .ok()
+        .and_then(|grace_until| *grace_until)
+        .is_some_and(|grace_until| Instant::now() < grace_until)
+}
+
+#[cfg(target_os = "windows")]
+fn pending_uia_capture() -> &'static Mutex<Option<windows_uia::WindowsUiaCapture>> {
+    PENDING_UIA_CAPTURE.get_or_init(|| Mutex::new(None))
 }
 
 fn save_overlay_position(x: i32, y: i32, scale_factor: f64) -> Result<(), String> {
@@ -271,8 +358,21 @@ fn place_anchored_overlay_window(
 }
 
 fn show_and_focus(window: &WebviewWindow) -> Result<(), String> {
+    start_overlay_focus_grace();
     window.show().map_err(tauri_err)?;
-    window.set_focus().map_err(tauri_err)
+    window.set_focus().map_err(tauri_err)?;
+
+    let retry_window = window.clone();
+    std::thread::spawn(move || {
+        std::thread::sleep(Duration::from_millis(90));
+        if matches!(retry_window.is_visible(), Ok(true))
+            && matches!(retry_window.is_focused(), Ok(false))
+        {
+            let _ = retry_window.set_focus();
+        }
+    });
+
+    Ok(())
 }
 
 fn toggle_window_visibility(window: &WebviewWindow) -> Result<bool, String> {
@@ -291,6 +391,7 @@ fn toggle_window_visibility(window: &WebviewWindow) -> Result<bool, String> {
 
 #[tauri::command]
 fn stage1_status(window: tauri::WebviewWindow) -> Result<WindowState, String> {
+    ensure_overlay_window(&window)?;
     Ok(WindowState {
         visible: window.is_visible().map_err(tauri_err)?,
         always_on_top: false,
@@ -303,15 +404,17 @@ fn shortcut_label() -> &'static str {
 }
 
 #[tauri::command]
-fn toggle_main_window(window: tauri::WebviewWindow) -> Result<bool, String> {
+fn toggle_overlay_window(window: tauri::WebviewWindow) -> Result<bool, String> {
+    ensure_overlay_window(&window)?;
     toggle_window_visibility(&window)
 }
 
 #[tauri::command]
-fn set_main_window_always_on_top(
+fn set_overlay_window_always_on_top(
     window: WebviewWindow,
     enabled: bool,
 ) -> Result<WindowState, String> {
+    ensure_overlay_window(&window)?;
     window.set_always_on_top(enabled).map_err(tauri_err)?;
     if enabled {
         show_and_focus(&window)?;
@@ -325,6 +428,7 @@ fn set_main_window_always_on_top(
 
 #[tauri::command]
 fn prepare_overlay_input_window(window: WebviewWindow) -> Result<(), String> {
+    ensure_overlay_window(&window)?;
     resize_overlay_window(&window, OverlayWindowStage::Input)?;
     window.set_always_on_top(true).map_err(tauri_err)?;
     show_and_focus(&window)
@@ -332,6 +436,7 @@ fn prepare_overlay_input_window(window: WebviewWindow) -> Result<(), String> {
 
 #[tauri::command]
 fn set_overlay_window_stage(window: WebviewWindow, stage: &str) -> Result<(), String> {
+    ensure_overlay_window(&window)?;
     let overlay_stage = match stage {
         "input" | "loading" => OverlayWindowStage::Input,
         "result" => OverlayWindowStage::Result,
@@ -344,8 +449,68 @@ fn set_overlay_window_stage(window: WebviewWindow, stage: &str) -> Result<(), St
 
 #[tauri::command]
 fn hide_overlay_window(window: WebviewWindow) -> Result<(), String> {
+    ensure_overlay_window(&window)?;
     let _ = remember_overlay_position(&window);
     window.hide().map_err(tauri_err)
+}
+
+#[tauri::command]
+fn take_overlay_intent(window: WebviewWindow) -> Result<Option<OverlayIntent>, String> {
+    ensure_overlay_window(&window)?;
+    let intent = pending_overlay_intent().lock().map_err(tauri_err)?.take();
+
+    if let Some(intent) = intent.as_ref() {
+        eprintln!("READRAY_OVERLAY_INTENT_TAKEN={}", intent.kind);
+    }
+
+    Ok(intent)
+}
+
+#[tauri::command]
+fn main_window_is_maximized(window: WebviewWindow) -> Result<bool, String> {
+    ensure_main_window(&window)?;
+    window.is_maximized().map_err(tauri_err)
+}
+
+#[tauri::command]
+fn minimize_main_window(window: WebviewWindow) -> Result<(), String> {
+    ensure_main_window(&window)?;
+    window.minimize().map_err(tauri_err)
+}
+
+#[tauri::command]
+fn toggle_main_window_maximized(window: WebviewWindow) -> Result<bool, String> {
+    ensure_main_window(&window)?;
+    if window.is_maximized().map_err(tauri_err)? {
+        window.unmaximize().map_err(tauri_err)?;
+        Ok(false)
+    } else {
+        window.maximize().map_err(tauri_err)?;
+        Ok(true)
+    }
+}
+
+#[tauri::command]
+fn start_main_window_drag(window: WebviewWindow) -> Result<(), String> {
+    ensure_main_window(&window)?;
+    window.start_dragging().map_err(tauri_err)
+}
+
+#[tauri::command]
+fn hide_main_window(window: WebviewWindow) -> Result<(), String> {
+    ensure_main_window(&window)?;
+    window.hide().map_err(tauri_err)
+}
+
+#[cfg(target_os = "windows")]
+fn show_anchored_overlay_window(
+    window: &WebviewWindow,
+    stage: AnchoredOverlayStage,
+    anchor_rect: &windows_uia::ScreenRect,
+) -> Result<(), String> {
+    place_anchored_overlay_window(window, stage.logical_size(), anchor_rect)?;
+    window.set_always_on_top(true).map_err(tauri_err)?;
+    show_and_focus(window)
 }
 
 #[cfg(target_os = "windows")]
@@ -355,6 +520,7 @@ fn present_anchored_overlay_window(
     stage: &str,
     anchor_rect: windows_uia::ScreenRect,
 ) -> Result<(), String> {
+    ensure_overlay_window(&window)?;
     let anchored_stage = match stage {
         "loading" => AnchoredOverlayStage::Loading,
         "result" => AnchoredOverlayStage::Result,
@@ -362,9 +528,7 @@ fn present_anchored_overlay_window(
         other => return Err(format!("未知 anchored overlay stage：{other}")),
     };
 
-    place_anchored_overlay_window(&window, anchored_stage.logical_size(), &anchor_rect)?;
-    window.set_always_on_top(true).map_err(tauri_err)?;
-    show_and_focus(&window)
+    show_anchored_overlay_window(&window, anchored_stage, &anchor_rect)
 }
 
 #[cfg(target_os = "windows")]
@@ -375,6 +539,7 @@ fn resize_anchored_overlay_window(
     height: f64,
     anchor_rect: windows_uia::ScreenRect,
 ) -> Result<(), String> {
+    ensure_overlay_window(&window)?;
     if !width.is_finite() || !height.is_finite() || width <= 0.0 || height <= 0.0 {
         return Err("anchored overlay 尺寸必须是有限的正数。".to_string());
     }
@@ -385,6 +550,7 @@ fn resize_anchored_overlay_window(
 #[cfg(target_os = "windows")]
 #[tauri::command]
 fn hide_anchored_overlay_window(window: WebviewWindow) -> Result<(), String> {
+    ensure_overlay_window(&window)?;
     window.hide().map_err(tauri_err)
 }
 
@@ -394,6 +560,7 @@ fn begin_overlay_window_drag(
     pointer_x: f64,
     pointer_y: f64,
 ) -> Result<(), String> {
+    ensure_overlay_window(&window)?;
     let position = window.outer_position().map_err(tauri_err)?;
     let scale_factor = window.scale_factor().map_err(tauri_err)?;
     let mut active_drag = active_overlay_drag().lock().map_err(tauri_err)?;
@@ -414,6 +581,7 @@ fn drag_overlay_window(
     pointer_x: f64,
     pointer_y: f64,
 ) -> Result<(), String> {
+    ensure_overlay_window(&window)?;
     let Some(active_drag) = *active_overlay_drag().lock().map_err(tauri_err)? else {
         return Ok(());
     };
@@ -429,6 +597,7 @@ fn drag_overlay_window(
 
 #[tauri::command]
 fn finish_overlay_window_drag(window: WebviewWindow) -> Result<(), String> {
+    ensure_overlay_window(&window)?;
     *active_overlay_drag().lock().map_err(tauri_err)? = None;
     remember_overlay_position(&window)
 }
@@ -557,27 +726,107 @@ pub fn run() {
             tauri_plugin_global_shortcut::Builder::new()
                 .with_handler(move |app, shortcut, event| {
                     #[cfg(target_os = "windows")]
-                    if shortcut == &uia_capture_shortcut
-                        && matches!(event.state(), ShortcutState::Pressed)
-                    {
-                        let capture = windows_uia::capture_foreground();
-                        match serde_json::to_string(&capture) {
-                            Ok(json) => eprintln!("READRAY_UIA_CAPTURE={json}"),
-                            Err(error) => {
-                                eprintln!("READRAY_UIA_CAPTURE_SERIALIZE_ERROR={error}")
+                    if shortcut == &uia_capture_shortcut {
+                        match event.state() {
+                            ShortcutState::Pressed => {
+                                let capture = windows_uia::capture_foreground();
+                                match serde_json::to_string(&capture) {
+                                    Ok(json) => eprintln!("READRAY_UIA_CAPTURE={json}"),
+                                    Err(error) => {
+                                        eprintln!("READRAY_UIA_CAPTURE_SERIALIZE_ERROR={error}")
+                                    }
+                                }
+
+                                match pending_uia_capture().lock() {
+                                    Ok(mut pending) => *pending = Some(capture),
+                                    Err(error) => {
+                                        eprintln!("READRAY_UIA_PENDING_CAPTURE_ERROR={error}")
+                                    }
+                                }
+                            }
+                            ShortcutState::Released => {
+                                let capture = match pending_uia_capture().lock() {
+                                    Ok(mut pending) => pending.take(),
+                                    Err(error) => {
+                                        eprintln!("READRAY_UIA_PENDING_CAPTURE_ERROR={error}");
+                                        None
+                                    }
+                                };
+
+                                if let Some(capture) = capture {
+                                    let loading_anchor = capture.anchor_rect.clone().filter(|_| {
+                                        capture
+                                            .selected_text
+                                            .as_deref()
+                                            .is_some_and(|text| !text.trim().is_empty())
+                                    });
+
+                                    if let Err(error) = set_pending_overlay_intent(
+                                        OverlayIntent::uia_capture(capture),
+                                    ) {
+                                        eprintln!("READRAY_OVERLAY_INTENT_ERROR={error}");
+                                        return;
+                                    }
+
+                                    if let Some(anchor_rect) = loading_anchor {
+                                        if let Some(window) =
+                                            app.get_webview_window(OVERLAY_WINDOW_LABEL)
+                                        {
+                                            if let Err(error) = show_anchored_overlay_window(
+                                                &window,
+                                                AnchoredOverlayStage::Loading,
+                                                &anchor_rect,
+                                            ) {
+                                                eprintln!(
+                                                    "READRAY_ANCHORED_OVERLAY_WAKE_ERROR={error}"
+                                                );
+                                            } else {
+                                                eprintln!("READRAY_ANCHORED_OVERLAY_WAKE=ok");
+                                            }
+                                        }
+                                    }
+
+                                    if let Err(error) = app.emit_to(
+                                        OVERLAY_WINDOW_LABEL,
+                                        "readray://overlay-intent",
+                                        (),
+                                    ) {
+                                        eprintln!("READRAY_OVERLAY_INTENT_EMIT_ERROR={error}");
+                                    }
+                                }
                             }
                         }
-                        let _ = app.emit("readray://uia-capture", capture);
                         return;
                     }
 
                     if shortcut == &readray_shortcut
-                        && matches!(event.state(), ShortcutState::Pressed)
+                        && matches!(event.state(), ShortcutState::Released)
                     {
-                        if let Some(window) = app.get_webview_window("main") {
-                            let _ = resize_overlay_window(&window, OverlayWindowStage::Input);
-                            let _ = show_and_focus(&window);
-                            let _ = app.emit("readray://show-input", ());
+                        eprintln!("READRAY_OVERLAY_SHORTCUT=released");
+                        if let Some(window) = app.get_webview_window(OVERLAY_WINDOW_LABEL) {
+                            if let Err(error) =
+                                set_pending_overlay_intent(OverlayIntent::show_input())
+                            {
+                                eprintln!("READRAY_OVERLAY_INTENT_ERROR={error}");
+                                return;
+                            }
+                            if let Err(error) =
+                                resize_overlay_window(&window, OverlayWindowStage::Input)
+                            {
+                                eprintln!("READRAY_OVERLAY_RESIZE_ERROR={error}");
+                            }
+                            if let Err(error) = show_and_focus(&window) {
+                                eprintln!("READRAY_OVERLAY_SHOW_ERROR={error}");
+                            } else {
+                                eprintln!("READRAY_OVERLAY_SHOW=ok");
+                            }
+                            if let Err(error) =
+                                app.emit_to(OVERLAY_WINDOW_LABEL, "readray://overlay-intent", ())
+                            {
+                                eprintln!("READRAY_OVERLAY_INTENT_EMIT_ERROR={error}");
+                            }
+                        } else {
+                            eprintln!("READRAY_OVERLAY_WINDOW_MISSING");
                         }
                     }
                 })
@@ -597,21 +846,42 @@ pub fn run() {
 
             Ok(())
         })
-        .on_window_event(|window, event| {
-            if let WindowEvent::Focused(false) = event {
+        .on_window_event(|window, event| match event {
+            WindowEvent::Focused(false) if window.label() == OVERLAY_WINDOW_LABEL => {
+                if overlay_focus_grace_active() {
+                    eprintln!("READRAY_OVERLAY_FOCUS=lost_ignored");
+                } else {
+                    eprintln!("READRAY_OVERLAY_FOCUS=lost");
+                    let _ = window.hide();
+                    let _ = window.emit("readray://hidden", ());
+                }
+            }
+            WindowEvent::CloseRequested { api, .. } if window.label() == MAIN_WINDOW_LABEL => {
+                api.prevent_close();
+                let _ = window.hide();
+            }
+            WindowEvent::CloseRequested { api, .. } if window.label() == OVERLAY_WINDOW_LABEL => {
+                api.prevent_close();
                 let _ = window.hide();
                 let _ = window.emit("readray://hidden", ());
             }
+            _ => {}
         })
         .invoke_handler(tauri::generate_handler![
             stage1_status,
             shortcut_label,
-            toggle_main_window,
-            set_main_window_always_on_top,
+            toggle_overlay_window,
+            set_overlay_window_always_on_top,
             deepseek_smoke_test,
             prepare_overlay_input_window,
             set_overlay_window_stage,
             hide_overlay_window,
+            take_overlay_intent,
+            main_window_is_maximized,
+            minimize_main_window,
+            toggle_main_window_maximized,
+            start_main_window_drag,
+            hide_main_window,
             #[cfg(target_os = "windows")]
             present_anchored_overlay_window,
             #[cfg(target_os = "windows")]

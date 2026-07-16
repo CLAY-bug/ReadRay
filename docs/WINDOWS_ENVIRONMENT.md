@@ -47,7 +47,8 @@ pnpm tauri dev
 
 ### Git 与 GitHub
 
-- 当前远端为 `git@github.com:CLAY-bug/ReadRay.git`，SSH fetch/push 已验证可用。
+- 当前远端固定为 `https://github.com/CLAY-bug/ReadRay.git`，普通 fetch/push 使用 Git Credential Manager 处理 HTTPS 凭据，不使用 SSH remote。
+- 本机 Git for Windows 的全局 OpenSSL 后端曾在 HTTPS fetch 时出现 `TLS connect error`；ReadRay 仓库已用本地配置 `http.sslBackend=schannel` 验证可访问 GitHub，不需要修改系统代理或回退 SSH。
 - 当前开发流程直接维护 `main`。用户只要求“提交并上传 GitHub”时，默认使用本地 Git 提交后执行 `git push origin main`。
 - 本机当前没有 `gh`。普通 commit/push 不依赖 GitHub CLI，不需要为此先检查或安装 `gh`；只有明确需要创建或管理 PR，且现有 GitHub connector 不能完成时，才检查 `gh`。
 - `design-open-design/` 不属于 ReadRay 提交范围；暂存时使用明确文件列表，不使用会把该目录带入提交的 `git add -A`。

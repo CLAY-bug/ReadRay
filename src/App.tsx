@@ -61,6 +61,10 @@ type WindowsUiaCapture = {
   };
 };
 
+type OverlayIntent =
+  | { kind: "showInput"; capture?: null }
+  | { kind: "uiaCapture"; capture?: WindowsUiaCapture | null };
+
 const idle: CheckResult = { state: "idle", detail: "未验证" };
 
 const mockExplanationResult: ExplanationResult = {
@@ -192,9 +196,6 @@ function OverlayApp() {
       .then((state) => setAlwaysOnTop(state.alwaysOnTop))
       .catch(() => undefined);
 
-    invoke("prepare_overlay_input_window").catch((error) => {
-      setWindowCheck({ state: "warn", detail: formatError(error) });
-    });
   }, []);
 
   useEffect(() => {
@@ -362,20 +363,44 @@ function OverlayApp() {
     [],
   );
 
-  useEffect(() => {
-    let unlistenShowInput: (() => void) | undefined;
-    let unlistenHidden: (() => void) | undefined;
-    let unlistenUiaCapture: (() => void) | undefined;
+  const consumeOverlayIntent = useCallback(async () => {
+    try {
+      const intent = await invoke<OverlayIntent | null>("take_overlay_intent");
+      if (!intent) {
+        return;
+      }
 
-    listen("readray://show-input", () => {
-      showCommandOverlay();
-    })
+      if (intent.kind === "showInput") {
+        showCommandOverlay();
+        return;
+      }
+
+      if (intent.capture) {
+        await runAnchoredQuery(intent.capture);
+      }
+    } catch (error) {
+      setWindowCheck({ state: "warn", detail: formatError(error) });
+    }
+  }, [runAnchoredQuery, showCommandOverlay]);
+
+  useEffect(() => {
+    let unlistenOverlayIntent: (() => void) | undefined;
+    let unlistenHidden: (() => void) | undefined;
+
+    const handleOverlayIntent = () => {
+      void consumeOverlayIntent();
+    };
+
+    listen("readray://overlay-intent", handleOverlayIntent)
       .then((dispose) => {
-        unlistenShowInput = dispose;
+        unlistenOverlayIntent = dispose;
       })
       .catch((error) => {
         setWindowCheck({ state: "warn", detail: formatError(error) });
       });
+
+    window.addEventListener("focus", handleOverlayIntent);
+    void consumeOverlayIntent();
 
     listen("readray://hidden", () => {
       setCommandOpen(false);
@@ -389,22 +414,12 @@ function OverlayApp() {
         setWindowCheck({ state: "warn", detail: formatError(error) });
       });
 
-    listen<WindowsUiaCapture>("readray://uia-capture", (event) => {
-      void runAnchoredQuery(event.payload);
-    })
-      .then((dispose) => {
-        unlistenUiaCapture = dispose;
-      })
-      .catch((error) => {
-        setWindowCheck({ state: "warn", detail: formatError(error) });
-      });
-
     return () => {
-      unlistenShowInput?.();
+      window.removeEventListener("focus", handleOverlayIntent);
+      unlistenOverlayIntent?.();
       unlistenHidden?.();
-      unlistenUiaCapture?.();
     };
-  }, [runAnchoredQuery, showCommandOverlay]);
+  }, [consumeOverlayIntent]);
 
   function showPreviewPopover() {
     anchoredRequestId.current += 1;
@@ -605,7 +620,7 @@ function OverlayApp() {
   async function toggleWindow() {
     setWindowCheck({ state: "running", detail: "正在切换窗口" });
     try {
-      const visible = await invoke<boolean>("toggle_main_window");
+      const visible = await invoke<boolean>("toggle_overlay_window");
       setWindowCheck({
         state: "ok",
         detail: visible ? "窗口已显示并聚焦" : "窗口已隐藏",
@@ -623,7 +638,7 @@ function OverlayApp() {
     });
 
     try {
-      const state = await invoke<WindowState>("set_main_window_always_on_top", {
+      const state = await invoke<WindowState>("set_overlay_window_always_on_top", {
         enabled: nextValue,
       });
       setAlwaysOnTop(state.alwaysOnTop);
@@ -894,10 +909,73 @@ function App() {
   const view = new URLSearchParams(window.location.search).get("view");
 
   if (view === "main") {
-    return <MainAppShell viewModel={mainAppFixture} />;
+    return <MainAppWindow />;
   }
 
   return <OverlayApp />;
+}
+
+function MainAppWindow() {
+  const [isMaximized, setIsMaximized] = useState(false);
+  const isTauriRuntime = "__TAURI_INTERNALS__" in window;
+
+  useEffect(() => {
+    if (!isTauriRuntime) {
+      return;
+    }
+
+    function syncMaximizedState() {
+      invoke<boolean>("main_window_is_maximized")
+        .then(setIsMaximized)
+        .catch((error) => console.error("ReadRay 主窗口状态读取失败：", error));
+    }
+
+    syncMaximizedState();
+    window.addEventListener("resize", syncMaximizedState);
+    return () => window.removeEventListener("resize", syncMaximizedState);
+  }, [isTauriRuntime]);
+
+  const runMainWindowCommand = useCallback(
+    async <T,>(command: string): Promise<T | undefined> => {
+      if (!isTauriRuntime) {
+        return undefined;
+      }
+
+      try {
+        return await invoke<T>(command);
+      } catch (error) {
+        console.error(`ReadRay 主窗口命令失败（${command}）：`, error);
+        return undefined;
+      }
+    },
+    [isTauriRuntime],
+  );
+
+  const toggleMaximized = useCallback(async () => {
+    const nextState = await runMainWindowCommand<boolean>(
+      "toggle_main_window_maximized",
+    );
+    if (typeof nextState === "boolean") {
+      setIsMaximized(nextState);
+    }
+  }, [runMainWindowCommand]);
+
+  return (
+    <MainAppShell
+      viewModel={mainAppFixture}
+      isMaximized={isMaximized}
+      onStartDragging={() => {
+        void runMainWindowCommand("start_main_window_drag");
+      }}
+      onMinimize={() => {
+        void runMainWindowCommand("minimize_main_window");
+      }}
+      onToggleMaximize={toggleMaximized}
+      onClose={() => {
+        void runMainWindowCommand("hide_main_window");
+      }}
+    />
+  );
 }
 
 export default App;

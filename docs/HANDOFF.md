@@ -1,12 +1,12 @@
 # ReadRay 交接记录
 
-最后更新：2026-07-15
+最后更新：2026-07-16
 
 ## TL;DR
 
-- 当前状态：阶段一 Tauri 基础能力、阶段二解释卡 MVP、阶段三 SQLite/Quick AI 数据底座已完成；正常主应用的“今天”首页和全局侧栏已建立独立前端预览。
+- 当前状态：阶段一 Tauri 基础能力、阶段二解释卡 MVP、阶段三 SQLite/Quick AI 数据底座已完成；正常主应用“今天”首页已接入独立 Tauri 主窗口，并与快捷 overlay 共存。
 - 当前路线：Windows 原生，Tauri + React + TypeScript + Rust + SQLite。
-- 下一步：工程化正常主应用的独立 Tauri 窗口，并将首页摘要、最近对话和输入提交接到现有 Rust 数据边界；快捷 overlay/Quick AI 窗口继续保持独立。
+- 下一步：将首页摘要、最近对话和输入提交接到现有 Rust 数据边界；快捷 overlay/Quick AI 窗口继续保持独立。
 - 当前约束：不使用通用 Agent 框架，不内置商业词典，不做 OCR、本地大模型或跨平台支持。
 - 交接原则：`HANDOFF.md` 只记录会影响下一次恢复上下文的信息，小型文档措辞和格式调整不记录。
 
@@ -28,7 +28,7 @@
 - `src/components/MainAppShell.tsx` / `MainSidebar.tsx` / `TodayPage.tsx`：正常主应用壳、全局导航与“今天”首页。
 - `src/mainAppViewModel.ts` / `src/styles/main-app.css`：主应用有类型 fixture 和独立浅色视觉样式。
 - `src/styles/tokens.css`：ReadRay Graphite + Amber 轻量样式 token。
-- `src-tauri/`：Tauri v2 / Rust 原生层脚手架源码；当前 Tauri 主窗口配置已调整为无边框、透明、置顶 overlay 壳。
+- `src-tauri/`：Tauri v2 / Rust 原生层脚手架源码；当前同时配置正常主窗口 `main` 与快捷浮窗 `overlay`。
 - `src-tauri/src/windows_uia.rs`：Windows UI Automation 上下文捕获与正式划词输入来源；当前已接入 DeepSeek 锚定解释卡。
 - `src-tauri/src/explanation.rs`：四类 ExplanationCard 中间协议、CaptureInput、查询类型判断和 Rust validator。
 - `src-tauri/src/deepseek_explanation.rs`：分类型 DeepSeek 结构化查询、prompt、响应解析和 validator 装配。
@@ -55,13 +55,15 @@
 - `AGENTS.md` 只保留会改变 Codex 行为的规则；背景信息、阶段计划和技术细节放到 `docs/`。
 - `HANDOFF.md` 只记录会影响恢复上下文的信息，不作为操作流水账。
 - 写新代码前先找现有扩展点，复用优先，单一职责，最小改动，不无理由新增依赖。
-- 本机命令和发布流程优先采用 `docs/WINDOWS_ENVIRONMENT.md` 的已验证基线：Codex 显式使用 D 盘本机 pnpm；普通 GitHub commit/push 通过现有 SSH remote 直推 `main`，不因本机缺少 `gh` 而阻塞；启动 Tauri dev 前先检查 ReadRay 相关进程和 1420 端口。
+- 本机命令和发布流程优先采用 `docs/WINDOWS_ENVIRONMENT.md` 的已验证基线：Codex 显式使用 D 盘本机 pnpm；普通 GitHub commit/push 通过 HTTPS remote 直推 `main`，不因本机缺少 `gh` 而阻塞；启动 Tauri dev 前先检查 ReadRay 相关进程和 1420 端口。
 - 不得在非空项目根目录使用带覆盖或强制语义的初始化命令；如确需使用，必须先确认 Git 可用或完成备份，并说明会影响哪些文件。
 - ReadRay 的差异化不能停留在“复制一个单词后快捷查词”；后续需要研究 Windows 跨应用划词上下文捕获：用户只选中单词时，尽可能获取所在句子或段落作为 `contextText`，再生成语境义。
 - 暂不做浏览器插件方向，因为浏览器已有沉浸式翻译、陪读蛙等成熟同类工具；优先面向 Windows 桌面应用，尤其是 Electron 类应用和常用阅读/写作软件。
 - 原 Tauri compact preview 曾作为开发模拟舞台：外层 ReadRay 窗口模拟桌面/阅读环境，mock selected word 模拟真实划词，AnchoredResultPopover 模拟未来贴近真实选区出现的结果浮层；当前默认主体验已切到无选区桌面 overlay，最终产品不应出现大背景舞台。
-- 无选区 overlay 是当前优先体验：启动显示输入态浮层，Esc 或窗口失焦隐藏窗口，`Ctrl+Alt+R` 重新呼出输入态；输入态/结果态可通过浮层顶部拖动，拖动后的位置会在当前进程内记住；结果态由前端请求 Rust 调整窗口尺寸。
+- 无选区 overlay 由 `Ctrl+Alt+R` 显式呼出输入态，Esc 或窗口失焦隐藏；输入态/结果态可通过浮层顶部拖动，拖动后的位置会在当前进程内记住；结果态由前端请求 Rust 调整窗口尺寸。
 - 当前窗口位置方案已经接受：无拖动记录时使用屏幕偏上区域作为默认位置，拖动后优先恢复当前进程内记录的位置；现阶段不再继续校准默认位置。
+- Tauri 窗口角色固定为 `main` 与 `overlay`：`main` 加载 `index.html?view=main`，显示在任务栏并允许调整大小；`overlay` 加载 `index.html`，启动隐藏、置顶且跳过任务栏。两类窗口命令按 label 校验，主窗口状态不得写入 overlay 位置缓存。
+- 主窗口关闭策略暂定为隐藏而非退出进程，使全局快捷键和隐藏的 overlay 继续存活；当前没有托盘或“重新打开主窗口”入口，该生命周期缺口留待后续单独处理。
 - Windows UIA 捕获必须在 ReadRay show/focus 前完成；`Ctrl+Alt+U` 触发划词捕获并显示选区附近的真实 DeepSeek 解释卡，`Ctrl+Alt+R` 保持无选区居中输入流程。两条链路共享 create_explanation_card，不接 SQLite、OCR 或剪贴板辅助。
 - 正式交互分为两种状态：有选区和 `anchorRect` 时显示锚定结果浮层；无选区时通过快捷键呼出居中输入框，用户手动输入后再切换到结果态。
 - ExplanationCard 是 ReadRay 的中间协议，服务 DeepSeek 结构化输出、compact UI 映射和后续 SQLite 本地记忆；它不是某个前端组件的 props。
@@ -88,7 +90,7 @@
 - 迁移后已验证 `rustup show home`、`cargo -V`、`rustc -V`、`pnpm build`、`pnpm tauri info` 和 `cargo check --manifest-path src-tauri\Cargo.toml`。
 - 已接入 Tauri 官方插件：`global-shortcut`、`clipboard-manager`；SQLite 由 Rust `rusqlite` bundled 负责，不再使用前端 SQL 插件。
 - 已新增阶段一验证面板：窗口显示/隐藏、窗口置顶、剪贴板读写、SQLite 读写、DeepSeek API smoke test。
-- 已在 Rust 层注册全局快捷键 `Ctrl+Alt+R`，用于显示/隐藏主窗口。
+- 已在 Rust 层注册全局快捷键 `Ctrl+Alt+R`，用于呼出快捷 overlay 的无选区输入态。
 - DeepSeek smoke test 通过 Rust command 调用，读取 `DEEPSEEK_API_KEY`；默认模型为 `deepseek-v4-flash`，可用 `DEEPSEEK_MODEL` 覆盖。
 - Tauri 启动时已通过 Rust `dotenvy` 从项目根目录加载 `.env`，因此 DeepSeek smoke test 可读取 `.env` 中的 `DEEPSEEK_API_KEY`。
 - 新增验证后已通过 `cargo fmt --manifest-path src-tauri\Cargo.toml`、`pnpm build`、`cargo check --manifest-path src-tauri\Cargo.toml`、`pnpm tauri info`。
@@ -106,7 +108,7 @@
 - 已将 ExplanationCard 重构为 `word` / `phrase` / `sentence` / `paragraph` 四类 serde tagged enum；validator 按类型执行必填、文本限长、数组限长、双语例句和上下文约束，CaptureInput 上限与 UIA 对齐到 4096 字符。
 - 已新增 Rust command `create_explanation_card`：输入 `CaptureInput`，调用 DeepSeek JSON Output，解析为 `ExplanationCard`，再调用 `validate_explanation_card`；失败时区分请求失败、HTTP 非成功、响应结构解析失败、JSON 内容解析失败和 validator 失败；当前未接 compact UI。
 - 无选区居中输入已接入真实查询：提交时构造 `CaptureInput { queryText, contextText: null, sourceType: manual }`，调用 `create_explanation_card`，成功后映射到 `CenteredResultPanel`，失败时复用输入框的 error-lite 状态；当前不展示未定义标准的 difficulty，短语行已修复长英文和中文解释重叠问题；未改划词浮层、UI Automation、SQLite 或历史功能。
-- 已把 compact preview 迁移为真实桌面 overlay 壳：Tauri 主窗口无边框、透明、置顶、不可缩放并跳过任务栏；输入/loading 态窗口为 720×104，错误态 720×132，结果态 800×560；前端通过 `prepare_overlay_input_window`、`set_overlay_window_stage`、`hide_overlay_window` 控制显示、尺寸和隐藏。
+- 已把 compact preview 迁移为真实桌面 overlay 壳：`overlay` 窗口无边框、透明、置顶、不可缩放并跳过任务栏；输入/loading 态窗口为 720×104，错误态 720×132，结果态 800×560；前端通过 `set_overlay_window_stage`、`hide_overlay_window` 控制尺寸和隐藏。
 - 已完成第一轮 overlay 行为校准：无拖动记录时输入框定位到屏幕偏上区域；输入态和结果态提供拖拽区域，前端拖动手势调用 Rust commands 移动窗口并在当前进程内显式记住位置，后续快捷键呼出优先恢复该位置；窗口失焦时自动隐藏；产品浮层默认不显示右上角开发控件，开发期可用 `Ctrl+Shift+D` 临时显示；默认浮层厚黑阴影已移除，仅保留边界线。当前体验已接受，不再继续微调窗口位置。
 - 已新增 Windows UI Automation spike：Windows target 直接依赖 `windows 0.61.3`，只启用 Foundation、COM、Ole、Threading、Accessibility 和 WindowsAndMessaging feature；捕获前台进程、窗口标题、焦点元素诊断，优先 `TextPattern2`、回退 `TextPattern`，并分别返回 `selectedText`、Paragraph `contextText` 和物理屏幕坐标 `anchorRect`。
 - Obsidian 1.12.7 真实验证结果：编辑模式和阅读模式的单词、短语、无选区、滚动后选区均按预期通过；有选区时分别取得 `selectedText`、Paragraph `contextText` 和物理屏幕像素 `anchorRect`，无选区时三项均为 `null`。阅读模式不能只检查焦点元素本身，需要沿 Raw View 祖先链找到 Document 的 `TextPattern2`；成功样本未使用 MSAA/IAccessible2 或剪贴板辅助。
@@ -120,21 +122,23 @@
 - 已提供 Rust/Tauri commands：`list_learning_records`、`search_learning_records`、`get_learning_record`、`delete_learning_record`。前端不接触 SQL；学习记录窗口尚未实现。
 - 已完成 Ctrl+Alt+R 居中窗口 Quick AI 第一版：默认仍为解释输入，按 Tab 进入 Quick AI；有输入时自动作为首条消息，空输入创建空白对话；支持 Enter 发送、Shift+Enter 换行、Ctrl+N 新建对话和 Esc 隐藏。
 - Quick AI 使用独立普通 chat/completions 请求，不复用 ExplanationCard JSON；ExplanationCard 与 Quick AI 仅共用 `.env`、DeepSeek model/API key 和 HTTP 错误边界，默认模型为 `deepseek-v4-flash`。
-- 正常主应用与快捷 overlay 是两个独立展示入口：默认入口继续运行现有 Tauri overlay，浏览器 `/?view=main` 只挂载主应用前端预览且不执行 overlay 的 Tauri commands/events。
+- 正常主应用与快捷 overlay 已建立独立 Tauri 窗口：正常启动只显示 `main` 主应用，隐藏的 `overlay` 继续监听全局快捷键和 UIA 事件；主窗口失焦不隐藏，只有 overlay 失焦自动隐藏。
+- 快捷 overlay 的呼出意图由 Rust 先原子保存，再由前端在事件、窗口获焦或挂载时领取；程序化呼出有短暂焦点保护。这避免隐藏 WebView 漏事件导致 `Ctrl+Alt+R` 只能呼出一次，或 `Ctrl+Alt+U` 错误沿用居中输入态。
 - 主应用左侧栏只允许用户手动折叠，不根据窗口宽度自动折叠；展开宽度 252px，折叠宽度 72px。
 - SQLite migration v2 新增 `quick_ai_conversations` 和 `quick_ai_messages`，每条消息保存 role、content、sequence 和时间；与 `learning_records` 完全分表，结构可供未来主应用读取并继续对话。
 - Quick AI 已完成真实 DeepSeek Flash 两轮连续对话和真实窗口 smoke：第二轮能使用第一轮上下文；Ctrl+N 与 Esc 行为通过。当前响应按纯文本展示，不解析 Markdown。
 - 已按 `design-open-design/readray-today-2.html` 重建正常主应用“今天”首页：包含无边框外壳和标题栏、全局侧栏、最近对话、三个学习入口和底部输入框；数据来自有类型 fixture，所有入口通过回调预留接线，不伪造后端功能。
 - 主应用前端已在 1440×900、1024×768、侧栏展开/折叠和多行输入状态完成 Chromium 截图验证；视口无横向溢出，主内容不与侧栏或窗口控件重叠。
+- 主应用标题栏已接通原生拖动、最小化、最大化/恢复和隐藏；主窗口初始尺寸为 1180×760、最小尺寸为 840×600，无边框、可缩放并显示在任务栏。
 
 ## 下一步
 
-继续推进：主应用首页前端恢复点已建立，下一项应由工程化会话创建正常主应用的独立 Tauri 窗口并接入真实数据。
+继续推进：主应用与快捷 overlay 的多窗口基础已建立，下一项是按已有 Rust 边界接入主应用真实数据。
 
 - UI 只调用 Rust 的分页、关键词搜索、queryType 筛选、单条读取和删除 commands，不向前端暴露 SQL 或数据库路径。
 - 继续保持每次成功查询为独立事件；重复查询聚合、高频词、趋势和复盘规划属于后续阶段。
 - Quick AI 的对话历史列表、删除、重命名和主应用入口留待主应用任务；当前只提供 create/get/send commands。
-- 正常主应用后续需要接线：标题栏最小化/最大化/关闭、独立窗口创建与显示、今天摘要聚合、最近对话查询、首页输入转入持续对话；不要复用或改变现有 overlay 的窗口尺寸和快捷键行为。
+- 正常主应用后续需要接线：今天摘要聚合、最近对话查询、首页输入转入持续对话；不要复用或改变现有 overlay 的窗口尺寸和快捷键行为。
 - 新环境仍需复制 `.env.example` 为 `.env` 后自行填写 `DEEPSEEK_API_KEY`；真实 `.env` 不提交。
 
 阶段一完成标准：
@@ -160,6 +164,7 @@
 - 长段落输出受模型 JSON 稳定性和窗口最大高度约束；当前上限 4096 字符，不代表整页翻译能力。
 - 学习记录窗口的 UI 具体设计暂时不定，不与阶段三数据底座混合实现。
 - Quick AI 当前不渲染 Markdown，也不做流式输出；长回复需要等待完整响应后一次显示，这是后续体验优化点，不影响当前多轮对话闭环。
+- 主窗口关闭后当前只隐藏并保持后台快捷键能力，但没有托盘、单实例或重新显示主窗口入口；发布前需要确定“关闭即隐藏”是否为正式产品策略，并补齐重新进入主应用的路径。
 
 ## 暂时不要做
 

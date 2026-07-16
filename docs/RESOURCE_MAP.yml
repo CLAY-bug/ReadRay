@@ -5,7 +5,7 @@ project:
 
 meta:
   version: "1.1"
-  last_updated: "2026-07-15"
+  last_updated: "2026-07-16"
   updated_by: "Codex"
   source_of_truth: "docs/RESOURCE_MAP.yml"
   language: "zh-CN"
@@ -132,7 +132,7 @@ source_areas:
     status: "active"
     read_when:
       - "开发解释卡、历史页、复盘页、设置页。"
-    notes: "Tauri + Vite + React + TypeScript 脚手架入口；App.tsx 默认保留 Ctrl+Alt+R 无选区解释输入、Quick AI 和 UIA 锚定卡链路；浏览器访问 ?view=main 时只渲染主应用前端预览，不执行 overlay 的 Tauri invoke/listen。"
+    notes: "Tauri + Vite + React + TypeScript 脚手架入口；App.tsx 按 URL 区分 main 与 overlay：main 只装配主应用窗口控制，默认入口继续承载 Ctrl+Alt+R 无选区解释、Quick AI 和 UIA 锚定卡链路。"
     risk: "不要在前端入口塞入原生系统逻辑。"
 
   - path: "src/components/MainAppShell.tsx"
@@ -141,8 +141,8 @@ source_areas:
     read_when:
       - "调整正常主应用壳、标题栏、侧栏折叠或首页装配。"
       - "将主应用接入独立 Tauri 窗口。"
-    notes: "当前使用有类型 fixture，通过 ?view=main 进入开发预览；只负责主应用前端状态和回调边界，不调用 Rust 或数据库。"
-    risk: "不要把快捷 overlay 状态机迁入主应用组件；正式窗口控制需由后续 Tauri 工程化任务接线。"
+    notes: "当前使用有类型 fixture，通过 ?view=main 进入主应用；标题栏回调已接通 Rust 原生拖动、最小化、最大化/恢复和隐藏，组件本身仍不读取数据库。"
+    risk: "不要把快捷 overlay 状态机迁入主应用组件；主应用业务入口仍只保留回调，不伪造后端功能。"
 
   - path: "src/components/MainSidebar.tsx"
     purpose: "主应用全局左侧栏，包含新对话、学习导航、最近对话、查看全部和设置入口。"
@@ -262,8 +262,17 @@ source_areas:
     status: "active"
     read_when:
       - "开发全局快捷键、剪贴板、窗口行为、SQLite 命令、原生配置。"
-    notes: "当前包含 Tauri v2 配置、Rust入口和桌面插件。lib.rs 除居中 input/result 窗口外，还提供 anchored loading/result/error 的物理像素定位和 resize_anchored_overlay_window：按 UIA anchorRect 所在显示器、DPI 和工作区把小窗口放在选区下方或上方，最大高度约为工作区 70%；锚定窗口不会覆盖用户保存的居中窗口位置。"
+    notes: "当前包含 Tauri v2 配置、Rust入口和桌面插件。窗口 label 固定为 main 与 overlay：main 加载 index.html?view=main、正常显示在任务栏；overlay 加载 index.html、启动隐藏并继续承载居中与锚定浮窗。lib.rs 对两类窗口命令做 label 校验，只有 overlay 失焦时自动隐藏；快捷键意图先保存在 Rust，再由 overlay 前端原子领取，避免隐藏 WebView 漏事件。"
     risk: "不要把 UI 状态和业务展示逻辑塞进 Rust 层。"
+
+  - path: "src-tauri/tauri.conf.json"
+    purpose: "ReadRay 主应用与快捷 overlay 的多窗口静态配置。"
+    status: "active"
+    read_when:
+      - "调整窗口 label、入口 URL、初始尺寸、任务栏或无边框行为。"
+      - "排查启动时主应用和快捷 overlay 的显示策略。"
+    notes: "main 为 1180×760、最小 840×600 的可缩放无边框主窗口；overlay 保留透明、置顶、跳过任务栏且启动隐藏的浮窗配置。"
+    risk: "两类窗口必须保持独立 URL、尺寸和生命周期；不要把 main 的位置或显示状态写入 overlay 的进程内位置缓存。"
 
   - path: "src-tauri/src/windows_uia.rs"
     purpose: "Windows UI Automation 上下文捕获 spike。"

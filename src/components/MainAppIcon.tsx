@@ -14,6 +14,7 @@ export type MainAppIconName =
   | "chat"
   | "minimize"
   | "maximize"
+  | "restore"
   | "close";
 
 type MainAppIconProps = {
@@ -52,6 +53,8 @@ function IconPaths({ name }: MainAppIconProps) {
       return <path d="M4 12h16" />;
     case "maximize":
       return <rect x="5" y="5" width="14" height="14" rx="1" />;
+    case "restore":
+      return <><path d="M8 8V5h11v11h-3" /><rect x="5" y="8" width="11" height="11" rx="1" /></>;
     case "close":
       return <path d="m6 6 12 12M18 6 6 18" />;
   }

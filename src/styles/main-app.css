@@ -71,6 +71,7 @@
   align-items: stretch;
   border-bottom: 1px solid var(--rr-main-border-soft);
   background: #f0efeb;
+  cursor: default;
   user-select: none;
 }
 

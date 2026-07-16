@@ -12,7 +12,25 @@
   "app": {
     "windows": [
       {
+        "label": "main",
         "title": "ReadRay",
+        "url": "index.html?view=main",
+        "width": 1180,
+        "height": 760,
+        "minWidth": 840,
+        "minHeight": 600,
+        "center": true,
+        "decorations": false,
+        "transparent": false,
+        "alwaysOnTop": false,
+        "resizable": true,
+        "skipTaskbar": false,
+        "shadow": true
+      },
+      {
+        "label": "overlay",
+        "title": "ReadRay Overlay",
+        "url": "index.html",
         "width": 720,
         "height": 104,
         "minWidth": 680,
@@ -23,7 +41,8 @@
         "alwaysOnTop": true,
         "resizable": false,
         "skipTaskbar": true,
-        "shadow": false
+        "shadow": false,
+        "visible": false
       }
     ],
     "security": {
