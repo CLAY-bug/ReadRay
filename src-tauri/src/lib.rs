@@ -6,9 +6,12 @@ use tauri::{
     LogicalPosition, LogicalSize, PhysicalPosition, PhysicalSize, WebviewWindow, WindowEvent,
 };
 
+pub mod conversations;
+pub mod deepseek_client;
 pub mod deepseek_explanation;
 pub mod explanation;
 pub mod learning_records;
+pub mod quick_ai;
 #[cfg(target_os = "windows")]
 pub mod windows_uia;
 
@@ -622,7 +625,10 @@ pub fn run() {
             learning_records::list_learning_records,
             learning_records::search_learning_records,
             learning_records::get_learning_record,
-            learning_records::delete_learning_record
+            learning_records::delete_learning_record,
+            quick_ai::create_quick_ai_conversation,
+            quick_ai::get_quick_ai_conversation,
+            quick_ai::send_quick_ai_message
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

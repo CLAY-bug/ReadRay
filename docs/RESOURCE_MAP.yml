@@ -4,8 +4,8 @@ project:
   repo_root: "."
 
 meta:
-  version: "1.0"
-  last_updated: "2026-07-10"
+  version: "1.1"
+  last_updated: "2026-07-15"
   updated_by: "Codex"
   source_of_truth: "docs/RESOURCE_MAP.yml"
   language: "zh-CN"
@@ -132,8 +132,49 @@ source_areas:
     status: "active"
     read_when:
       - "开发解释卡、历史页、复盘页、设置页。"
-    notes: "Tauri + Vite + React + TypeScript 脚手架入口；App.tsx 保留 Ctrl+Alt+R 无选区输入链路，并监听 readray://uia-capture：清理 UIA 上下文后以 windows_uia CaptureInput 调用 create_explanation_card，再按 word/phrase/sentence/paragraph 映射到选区附近解释卡。mock 划词浮层和阶段验证控件保留为开发辅助，默认隐藏，可用 Ctrl+Shift+D 临时显示。"
+    notes: "Tauri + Vite + React + TypeScript 脚手架入口；App.tsx 默认保留 Ctrl+Alt+R 无选区解释输入、Quick AI 和 UIA 锚定卡链路；浏览器访问 ?view=main 时只渲染主应用前端预览，不执行 overlay 的 Tauri invoke/listen。"
     risk: "不要在前端入口塞入原生系统逻辑。"
+
+  - path: "src/components/MainAppShell.tsx"
+    purpose: "ReadRay 正常主应用的无边框外壳、标题栏和首页装配边界。"
+    status: "active"
+    read_when:
+      - "调整正常主应用壳、标题栏、侧栏折叠或首页装配。"
+      - "将主应用接入独立 Tauri 窗口。"
+    notes: "当前使用有类型 fixture，通过 ?view=main 进入开发预览；只负责主应用前端状态和回调边界，不调用 Rust 或数据库。"
+    risk: "不要把快捷 overlay 状态机迁入主应用组件；正式窗口控制需由后续 Tauri 工程化任务接线。"
+
+  - path: "src/components/MainSidebar.tsx"
+    purpose: "主应用全局左侧栏，包含新对话、学习导航、最近对话、查看全部和设置入口。"
+    status: "active"
+    read_when:
+      - "调整主应用导航结构、最近对话展示或手动折叠态。"
+    notes: "默认宽 252px，用户手动折叠为 72px 纯图标栏；不根据窗口宽度自动折叠，最近对话不显示圆点。"
+    risk: "入口当前只触发回调，不应在组件内伪造页面跳转或读取后端数据。"
+
+  - path: "src/components/TodayPage.tsx"
+    purpose: "主应用首页“今天”的摘要、学习入口和底部输入框。"
+    status: "active"
+    read_when:
+      - "调整今天页内容层级、学习入口或首页输入交互。"
+    notes: "输入框支持 Enter 提交、Shift+Enter 换行和 96px 内自适应高度；所有学习入口和提交行为只通过 props 回调预留接线。"
+    risk: "本轮不实现复习、写作、记忆、完整对话页或真实数据查询。"
+
+  - path: "src/mainAppViewModel.ts"
+    purpose: "主应用首页和侧栏的有类型前端 fixture/view model。"
+    status: "active"
+    read_when:
+      - "替换今天页 mock 数据或接入真实主应用数据查询。"
+    notes: "只包含设计稿确认的导航、最近对话、摘要和三个学习入口；不模拟后端状态。"
+    risk: "接真实数据时保持 view model 边界，不让页面组件直接读取 SQLite。"
+
+  - path: "src/styles/main-app.css"
+    purpose: "正常主应用首页与全局侧栏的局部视觉样式。"
+    status: "active"
+    read_when:
+      - "调整 readray-today-2 主应用视觉、响应式布局或侧栏状态。"
+    notes: "样式全部使用 rr-main-* 作用域，避免污染 Graphite overlay；忠实复刻浅色设计稿，不新增 UI 库。"
+    risk: "不要把主应用浅色 token 写回 overlay 的 tokens.css。"
 
   - path: "src/components/AnchoredResultPopover.tsx"
     purpose: "MVP compact UI 的锚定划词结果浮层组件骨架。"
@@ -189,6 +230,24 @@ source_areas:
     notes: "当前由 App 传入 query 和 ExplanationCard 映射后的四类 result；顶部保留可编辑用户输入，内容区复用 ExplanationResultContent，内部可滚动，面板顶部提供拖拽区域。不做聊天流、底部操作按钮、历史、收藏、复盘或设置入口。"
     risk: "不要把它扩展成完整结果页或 AI 对话界面；它只服务 MVP compact 主动查询结果态。"
 
+  - path: "src/components/QuickAiPanel.tsx"
+    purpose: "Ctrl+Alt+R 居中窗口中的 Quick AI 多轮对话面板。"
+    status: "active"
+    read_when:
+      - "调整 Quick AI 消息展示、输入框或键盘交互。"
+      - "排查 Enter、Shift+Enter、Ctrl+N 或 Esc 行为。"
+    notes: "通过 Tab 从默认解释输入进入；支持空白新对话、有内容时作为首条消息、多轮连续发送和新建对话。只消费 Rust 返回的 ConversationSnapshot，不读取数据库或调用 DeepSeek。"
+    risk: "不要扩展成主应用、历史页、工具调用或通用聊天框架；当前按纯文本展示模型响应。"
+
+  - path: "src/types/quickAi.ts"
+    purpose: "Quick AI conversation/message 的前端只读类型。"
+    status: "active"
+    read_when:
+      - "Rust Quick AI 对话协议发生变化。"
+      - "实现未来主应用读取或继续历史对话。"
+    notes: "字段名与 Rust serde camelCase 输出保持一致。"
+    risk: "不要在前端复制数据库 schema 或自行拼接历史上下文。"
+
   - path: "src/styles/tokens.css"
     purpose: "ReadRay 前端轻量样式 token。"
     status: "active"
@@ -236,6 +295,33 @@ source_areas:
     notes: "command 输入为 CaptureInput，先在本地判断 word/phrase/sentence/paragraph，再使用对应 JSON schema prompt；请求使用 response_format=json_object，解析前以捕获输入覆盖 sourceText，随后 serde 解析并调用 validate_explanation_card。校验成功后统一调用 learning_records 自动保存；manual 无选区输入和 windows_uia 划词解释卡共用该链路。"
     risk: "不要在日志、文档或提交文件中写入真实 DEEPSEEK_API_KEY；保存失败必须返回清晰错误，不能伪装为查询成功。"
 
+  - path: "src-tauri/src/deepseek_client.rs"
+    purpose: "DeepSeek API key、模型选择和 chat/completions HTTP 错误边界。"
+    status: "active"
+    read_when:
+      - "新增或排查 DeepSeek 请求链路。"
+      - "调整共享请求、HTTP 状态或响应结构错误分类。"
+    notes: "ExplanationCard 与 Quick AI 共用该传输边界；默认模型仍为 deepseek-v4-flash，不记录或返回 API key。"
+    risk: "这里只负责 HTTP 传输，不放 ExplanationCard prompt、Quick AI system prompt 或业务存储。"
+
+  - path: "src-tauri/src/conversations.rs"
+    purpose: "Quick AI conversation/message SQLite 仓库和序列化协议。"
+    status: "active"
+    read_when:
+      - "调整 Quick AI 对话持久化或继续历史对话。"
+      - "实现未来主应用对话历史读取。"
+    notes: "保存 ConversationSnapshot、user/assistant message 和严格递增 sequence；与 learning_records 使用同一应用数据数据库，但写入独立 quick_ai_conversations/quick_ai_messages 表。"
+    risk: "不要把 Quick AI 消息写入 learning_records；当前不实现历史列表、删除、长期记忆或检索增强。"
+
+  - path: "src-tauri/src/quick_ai.rs"
+    purpose: "Quick AI 多轮 DeepSeek 请求、上下文装配和 Tauri commands。"
+    status: "active"
+    read_when:
+      - "调整 Quick AI system prompt、上下文窗口或发送流程。"
+      - "排查 create/get/send Quick AI commands。"
+    notes: "独立于 ExplanationCard JSON 协议；使用最近最多 40 条已保存消息和当前用户消息请求 DeepSeek，成功后将 user/assistant exchange 事务写入 SQLite。"
+    risk: "不接学习记录检索、工具调用、联网搜索、长期记忆或通用 Agent 框架。"
+
   - path: "src-tauri/src/learning_records.rs"
     purpose: "阶段三 SQLite 学习事件迁移、Rust 存储边界和 Tauri 数据 commands。"
     status: "active"
@@ -243,7 +329,7 @@ source_areas:
       - "调整学习记录 schema、迁移或存储字段。"
       - "实现学习记录窗口、搜索、筛选、单条读取或删除。"
       - "排查自动保存或应用数据目录中的 SQLite 问题。"
-    notes: "使用 rusqlite bundled，在 Tauri 应用数据目录创建 readray.sqlite3。schema_migrations 按版本执行；learning_records 按查询事件追加保存原文、标准化文本、queryType、sourceType、可选 sourceApp/contextText、完整 ExplanationCard JSON、schemaVersion、时间和可空 difficulty。前端只调用 list/search/get/delete commands，不接触 SQL。"
+    notes: "使用 rusqlite bundled，在 Tauri 应用数据目录创建 readray.sqlite3。schema_migrations 按版本执行：v1 创建 learning_records，v2 创建独立 Quick AI conversation/message 表；learning_records 仍按解释查询事件追加保存。前端不接触 SQL。"
     risk: "当前只做事件存储，不做去重、聚合、remembered/forgotten、趋势或历史 UI；新增 schema 必须追加 migration，不能改写已发布迁移。"
 
   - path: "scripts/"
@@ -311,7 +397,7 @@ external_refs:
     read_when: "接入 DeepSeek OpenAI-compatible API 时。"
     risk: "API 参数和模型名可能变化，需要查官方当前文档。"
 
-  - name: "SQLite / Tauri SQL 文档"
+  - name: "SQLite / rusqlite 文档"
     purpose: "实现本地持久化。"
     read_when: "设计或排查 SQLite 读写时。"
-    risk: "插件版本和权限配置需要按当前 Tauri 版本确认。"
+    risk: "迁移必须追加版本，bundled SQLite feature 和打包结果需要保持可验证。"

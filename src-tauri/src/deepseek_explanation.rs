@@ -1,8 +1,8 @@
+use crate::deepseek_client::{configured_model, post_chat_completion};
 use crate::explanation::{
     classify_query_type, validate_explanation_card, CaptureInput, ExplanationCard, QueryType,
 };
 use crate::learning_records;
-use crate::{DEEPSEEK_BASE_URL, DEFAULT_DEEPSEEK_MODEL};
 use serde::Deserialize;
 use serde_json::json;
 
@@ -41,12 +41,7 @@ pub(crate) async fn create_explanation_card_for_input(
     input: &CaptureInput,
 ) -> Result<ExplanationCard, String> {
     let query_type = classify_query_type(&input.query_text)?;
-    let model =
-        std::env::var("DEEPSEEK_MODEL").unwrap_or_else(|_| DEFAULT_DEEPSEEK_MODEL.to_string());
-    let api_key = match std::env::var("DEEPSEEK_API_KEY") {
-        Ok(value) if !value.trim().is_empty() => value,
-        _ => return Err("未设置 DEEPSEEK_API_KEY，无法创建 ExplanationCard。".to_string()),
-    };
+    let model = configured_model();
 
     let user_prompt = build_user_prompt(&input, query_type)?;
     let request_body = json!({
@@ -69,32 +64,8 @@ pub(crate) async fn create_explanation_card_for_input(
         "temperature": EXPLANATION_CARD_TEMPERATURE
     });
 
-    let response = reqwest::Client::new()
-        .post(format!("{DEEPSEEK_BASE_URL}/chat/completions"))
-        .bearer_auth(api_key)
-        .json(&request_body)
-        .send()
-        .await
-        .map_err(|error| format!("DeepSeek ExplanationCard 请求失败：{error}"))?;
-
-    let status = response.status();
-    if !status.is_success() {
-        let status_code = status.as_u16();
-        let value: serde_json::Value = response.json().await.unwrap_or_else(|_| json!({}));
-        let message = value
-            .get("error")
-            .and_then(|error| error.get("message"))
-            .and_then(|message| message.as_str())
-            .unwrap_or("DeepSeek API 返回非成功状态。");
-        return Err(format!(
-            "DeepSeek ExplanationCard 请求返回 HTTP {status_code}：{message}"
-        ));
-    }
-
-    let value: DeepSeekChatResponse = response
-        .json()
-        .await
-        .map_err(|error| format!("DeepSeek ExplanationCard 响应结构无法解析：{error}"))?;
+    let value: DeepSeekChatResponse =
+        post_chat_completion("DeepSeek ExplanationCard", &request_body).await?;
     let content = extract_content(value)?;
 
     parse_explanation_card_content(input, &content)

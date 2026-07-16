@@ -1,12 +1,12 @@
 # ReadRay 交接记录
 
-最后更新：2026-07-10
+最后更新：2026-07-15
 
 ## TL;DR
 
-- 当前状态：阶段一 Tauri 基础能力、阶段二解释卡 MVP 和阶段三第一轮 SQLite 本地记忆数据底座已完成；手动输入与 Windows UIA 划词均已接入真实 DeepSeek 分型解释卡并在成功后自动追加学习事件。
+- 当前状态：阶段一 Tauri 基础能力、阶段二解释卡 MVP、阶段三 SQLite/Quick AI 数据底座已完成；正常主应用的“今天”首页和全局侧栏已建立独立前端预览。
 - 当前路线：Windows 原生，Tauri + React + TypeScript + Rust + SQLite。
-- 下一步：数据底座已稳定，后续可单独设计学习记录窗口并调用分页、搜索、类型筛选、单条读取和删除接口；不要在该 UI 任务中扩展复盘算法。
+- 下一步：工程化正常主应用的独立 Tauri 窗口，并将首页摘要、最近对话和输入提交接到现有 Rust 数据边界；快捷 overlay/Quick AI 窗口继续保持独立。
 - 当前约束：不使用通用 Agent 框架，不内置商业词典，不做 OCR、本地大模型或跨平台支持。
 - 交接原则：`HANDOFF.md` 只记录会影响下一次恢复上下文的信息，小型文档措辞和格式调整不记录。
 
@@ -24,11 +24,16 @@
 - `src/explanationViewModel.ts` / `src/types/explanation.ts`：Rust 协议的前端判别类型和展示映射。
 - `src/components/CenteredCommandInput.tsx`：MVP compact UI 的无选区居中输入组件骨架，当前由 App 传入真实查询状态。
 - `src/components/CenteredResultPanel.tsx`：MVP compact UI 的无选区输入后居中结果面板骨架，当前由 App 传入 ExplanationCard 映射后的真实查询结果。
+- `src/components/QuickAiPanel.tsx` / `src/types/quickAi.ts`：Quick AI 多轮对话视图及前端协议。
+- `src/components/MainAppShell.tsx` / `MainSidebar.tsx` / `TodayPage.tsx`：正常主应用壳、全局导航与“今天”首页。
+- `src/mainAppViewModel.ts` / `src/styles/main-app.css`：主应用有类型 fixture 和独立浅色视觉样式。
 - `src/styles/tokens.css`：ReadRay Graphite + Amber 轻量样式 token。
 - `src-tauri/`：Tauri v2 / Rust 原生层脚手架源码；当前 Tauri 主窗口配置已调整为无边框、透明、置顶 overlay 壳。
 - `src-tauri/src/windows_uia.rs`：Windows UI Automation 上下文捕获与正式划词输入来源；当前已接入 DeepSeek 锚定解释卡。
 - `src-tauri/src/explanation.rs`：四类 ExplanationCard 中间协议、CaptureInput、查询类型判断和 Rust validator。
 - `src-tauri/src/deepseek_explanation.rs`：分类型 DeepSeek 结构化查询、prompt、响应解析和 validator 装配。
+- `src-tauri/src/deepseek_client.rs`：ExplanationCard 与 Quick AI 共用的 DeepSeek HTTP 边界。
+- `src-tauri/src/conversations.rs` / `src-tauri/src/quick_ai.rs`：Quick AI SQLite 对话仓库、多轮上下文请求和 Tauri commands。
 - `package.json` / `pnpm-lock.yaml`：pnpm 前端依赖和脚本。
 - `src-tauri/Cargo.lock`：Rust / Tauri 依赖锁定文件。
 - `resource/`：已恢复的比赛官网页面、附件和文本抽取。
@@ -81,7 +86,7 @@
 - 已完成阶段 A 磁盘迁移：`C:\Users\19150\.cargo`、`C:\Users\19150\.rustup` 和 `C:\ProgramData\Microsoft\VisualStudio\Packages` 通过 Junction 指向 D 盘缓存目录。
 - VS `CachePath` 已设置为 `D:\app_cache\vs\Packages`，迁移备份已删除；C 盘剩余空间从约 4.94 GB 提升到约 8.21 GB。
 - 迁移后已验证 `rustup show home`、`cargo -V`、`rustc -V`、`pnpm build`、`pnpm tauri info` 和 `cargo check --manifest-path src-tauri\Cargo.toml`。
-- 已接入 Tauri 官方插件：`global-shortcut`、`clipboard-manager`、`sql`。
+- 已接入 Tauri 官方插件：`global-shortcut`、`clipboard-manager`；SQLite 由 Rust `rusqlite` bundled 负责，不再使用前端 SQL 插件。
 - 已新增阶段一验证面板：窗口显示/隐藏、窗口置顶、剪贴板读写、SQLite 读写、DeepSeek API smoke test。
 - 已在 Rust 层注册全局快捷键 `Ctrl+Alt+R`，用于显示/隐藏主窗口。
 - DeepSeek smoke test 通过 Rust command 调用，读取 `DEEPSEEK_API_KEY`；默认模型为 `deepseek-v4-flash`，可用 `DEEPSEEK_MODEL` 覆盖。
@@ -113,13 +118,23 @@
 - 学习事件字段包含自增 ID、原始 queryText、标准化文本、queryType、sourceType、可选 sourceApp、可选 contextText、完整 ExplanationCard JSON、ExplanationCard schemaVersion、创建时间和可空 difficulty；当前不生成虚假难度，统一保存 `NULL`。
 - `create_explanation_card` 仍先完成 DeepSeek 解析与 validator，只有成功后才调用学习记录写入；manual 与 windows_uia 共用同一 command 链路。请求、解析、validator 或存储失败均不留下学习记录，并返回可诊断错误。
 - 已提供 Rust/Tauri commands：`list_learning_records`、`search_learning_records`、`get_learning_record`、`delete_learning_record`。前端不接触 SQL；学习记录窗口尚未实现。
+- 已完成 Ctrl+Alt+R 居中窗口 Quick AI 第一版：默认仍为解释输入，按 Tab 进入 Quick AI；有输入时自动作为首条消息，空输入创建空白对话；支持 Enter 发送、Shift+Enter 换行、Ctrl+N 新建对话和 Esc 隐藏。
+- Quick AI 使用独立普通 chat/completions 请求，不复用 ExplanationCard JSON；ExplanationCard 与 Quick AI 仅共用 `.env`、DeepSeek model/API key 和 HTTP 错误边界，默认模型为 `deepseek-v4-flash`。
+- 正常主应用与快捷 overlay 是两个独立展示入口：默认入口继续运行现有 Tauri overlay，浏览器 `/?view=main` 只挂载主应用前端预览且不执行 overlay 的 Tauri commands/events。
+- 主应用左侧栏只允许用户手动折叠，不根据窗口宽度自动折叠；展开宽度 252px，折叠宽度 72px。
+- SQLite migration v2 新增 `quick_ai_conversations` 和 `quick_ai_messages`，每条消息保存 role、content、sequence 和时间；与 `learning_records` 完全分表，结构可供未来主应用读取并继续对话。
+- Quick AI 已完成真实 DeepSeek Flash 两轮连续对话和真实窗口 smoke：第二轮能使用第一轮上下文；Ctrl+N 与 Esc 行为通过。当前响应按纯文本展示，不解析 Markdown。
+- 已按 `design-open-design/readray-today-2.html` 重建正常主应用“今天”首页：包含无边框外壳和标题栏、全局侧栏、最近对话、三个学习入口和底部输入框；数据来自有类型 fixture，所有入口通过回调预留接线，不伪造后端功能。
+- 主应用前端已在 1440×900、1024×768、侧栏展开/折叠和多行输入状态完成 Chromium 截图验证；视口无横向溢出，主内容不与侧栏或窗口控件重叠。
 
 ## 下一步
 
-继续推进：阶段三数据底座已完成，下一项应单独设计学习记录窗口。
+继续推进：主应用首页前端恢复点已建立，下一项应由工程化会话创建正常主应用的独立 Tauri 窗口并接入真实数据。
 
 - UI 只调用 Rust 的分页、关键词搜索、queryType 筛选、单条读取和删除 commands，不向前端暴露 SQL 或数据库路径。
 - 继续保持每次成功查询为独立事件；重复查询聚合、高频词、趋势和复盘规划属于后续阶段。
+- Quick AI 的对话历史列表、删除、重命名和主应用入口留待主应用任务；当前只提供 create/get/send commands。
+- 正常主应用后续需要接线：标题栏最小化/最大化/关闭、独立窗口创建与显示、今天摘要聚合、最近对话查询、首页输入转入持续对话；不要复用或改变现有 overlay 的窗口尺寸和快捷键行为。
 - 新环境仍需复制 `.env.example` 为 `.env` 后自行填写 `DEEPSEEK_API_KEY`；真实 `.env` 不提交。
 
 阶段一完成标准：
@@ -144,6 +159,7 @@
 - 本地查询分类是启发式规则，缩写、多句但很短的文本、缺少句末标点的长句仍可能被相邻类型吸收；优先通过真实样本调整规则，不增加第二次 LLM 分类请求。
 - 长段落输出受模型 JSON 稳定性和窗口最大高度约束；当前上限 4096 字符，不代表整页翻译能力。
 - 学习记录窗口的 UI 具体设计暂时不定，不与阶段三数据底座混合实现。
+- Quick AI 当前不渲染 Markdown，也不做流式输出；长回复需要等待完整响应后一次显示，这是后续体验优化点，不影响当前多轮对话闭环。
 
 ## 暂时不要做
 

@@ -14,6 +14,7 @@ type CenteredCommandInputProps = {
   loading: boolean;
   error?: string;
   onSubmit: (value: string) => void;
+  onQuickAi: (value: string) => void;
   onOpenChange: (open: boolean) => void;
 };
 
@@ -24,6 +25,7 @@ function CenteredCommandInput({
   loading,
   error,
   onSubmit,
+  onQuickAi,
   onOpenChange,
 }: CenteredCommandInputProps) {
   const inputRef = useRef<HTMLInputElement>(null);
@@ -56,6 +58,14 @@ function CenteredCommandInput({
     if (event.key === "Escape") {
       event.preventDefault();
       onOpenChange(false);
+      return;
+    }
+
+    if (event.key === "Tab") {
+      event.preventDefault();
+      if (!loading) {
+        onQuickAi(trimmedValue);
+      }
       return;
     }
 
@@ -133,6 +143,10 @@ function CenteredCommandInput({
           onChange={(event) => onValueChange(event.target.value)}
           onKeyDown={handleKeyDown}
         />
+        <span className="centered-command-input__quick-ai" aria-hidden="true">
+          <span>Quick AI</span>
+          <kbd>Tab</kbd>
+        </span>
         <span className="centered-command-input__state" aria-hidden="true">
           <span className="centered-command-input__loading-dot" />
         </span>

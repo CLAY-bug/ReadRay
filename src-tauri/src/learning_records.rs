@@ -9,7 +9,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use tauri::{AppHandle, Manager};
 
 const DATABASE_FILE_NAME: &str = "readray.sqlite3";
-const DATABASE_SCHEMA_VERSION: i64 = 1;
+const DATABASE_SCHEMA_VERSION: i64 = 2;
 pub const EXPLANATION_CARD_SCHEMA_VERSION: i64 = 1;
 const DEFAULT_PAGE: u32 = 1;
 const DEFAULT_PAGE_SIZE: u32 = 20;
@@ -35,7 +35,32 @@ CREATE INDEX idx_learning_records_query_type_created_at ON learning_records(quer
 CREATE INDEX idx_learning_records_normalized_text ON learning_records(normalized_text);
 "#;
 
-const MIGRATIONS: &[(i64, &str)] = &[(DATABASE_SCHEMA_VERSION, MIGRATION_1)];
+const MIGRATION_2: &str = r#"
+CREATE TABLE quick_ai_conversations (
+  id INTEGER PRIMARY KEY,
+  title TEXT,
+  model TEXT NOT NULL,
+  created_at_unix_ms INTEGER NOT NULL,
+  updated_at_unix_ms INTEGER NOT NULL
+);
+
+CREATE TABLE quick_ai_messages (
+  id INTEGER PRIMARY KEY,
+  conversation_id INTEGER NOT NULL REFERENCES quick_ai_conversations(id) ON DELETE CASCADE,
+  role TEXT NOT NULL CHECK (role IN ('user', 'assistant')),
+  content TEXT NOT NULL,
+  sequence INTEGER NOT NULL,
+  created_at_unix_ms INTEGER NOT NULL,
+  UNIQUE(conversation_id, sequence)
+);
+
+CREATE INDEX idx_quick_ai_conversations_updated_at
+  ON quick_ai_conversations(updated_at_unix_ms DESC, id DESC);
+CREATE INDEX idx_quick_ai_messages_conversation_sequence
+  ON quick_ai_messages(conversation_id, sequence);
+"#;
+
+const MIGRATIONS: &[(i64, &str)] = &[(1, MIGRATION_1), (DATABASE_SCHEMA_VERSION, MIGRATION_2)];
 
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -82,17 +107,9 @@ struct LearningRecordStore {
 
 impl LearningRecordStore {
     fn open(path: &Path) -> Result<Self, String> {
-        let parent = path
-            .parent()
-            .ok_or_else(|| format!("学习记录数据库路径缺少父目录：{}", path.display()))?;
-        fs::create_dir_all(parent)
-            .map_err(|error| format!("学习记录数据库目录无法创建：{error}"))?;
-
-        let mut connection =
-            Connection::open(path).map_err(|error| format!("学习记录数据库无法打开：{error}"))?;
-        migrate(&mut connection)?;
-
-        Ok(Self { connection })
+        Ok(Self {
+            connection: open_database(path)?,
+        })
     }
 
     fn save(&self, input: &CaptureInput, card: &ExplanationCard) -> Result<LearningRecord, String> {
@@ -203,7 +220,27 @@ impl LearningRecordStore {
 }
 
 pub fn initialize_for_app(app: &AppHandle) -> Result<(), String> {
-    LearningRecordStore::open(&database_path_for_app(app)?).map(|_| ())
+    open_database_for_app(app).map(|_| ())
+}
+
+pub(crate) fn open_database_for_app(app: &AppHandle) -> Result<Connection, String> {
+    open_database(&database_path_for_app(app)?)
+}
+
+pub(crate) fn open_database(path: &Path) -> Result<Connection, String> {
+    let parent = path
+        .parent()
+        .ok_or_else(|| format!("ReadRay 数据库路径缺少父目录：{}", path.display()))?;
+    fs::create_dir_all(parent).map_err(|error| format!("ReadRay 数据库目录无法创建：{error}"))?;
+
+    let mut connection =
+        Connection::open(path).map_err(|error| format!("ReadRay 数据库无法打开：{error}"))?;
+    connection
+        .execute_batch("PRAGMA foreign_keys = ON;")
+        .map_err(|error| format!("ReadRay 数据库外键配置失败：{error}"))?;
+    migrate(&mut connection)?;
+
+    Ok(connection)
 }
 
 pub fn save_for_app(
@@ -452,7 +489,7 @@ fn source_type_from_storage(value: &str) -> Result<SourceType, String> {
     }
 }
 
-fn unix_time_ms() -> Result<i64, String> {
+pub(crate) fn unix_time_ms() -> Result<i64, String> {
     let duration = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map_err(|error| format!("系统时间早于 Unix epoch，无法记录学习事件：{error}"))?;

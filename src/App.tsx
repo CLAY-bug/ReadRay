@@ -9,6 +9,8 @@ import CenteredCommandInput from "./components/CenteredCommandInput";
 import CenteredResultPanel, {
   type CenteredResult,
 } from "./components/CenteredResultPanel";
+import MainAppShell from "./components/MainAppShell";
+import QuickAiPanel from "./components/QuickAiPanel";
 import {
   mapExplanationCard,
   type ExplanationResult,
@@ -17,7 +19,10 @@ import type {
   CaptureInput,
   ExplanationCard,
 } from "./types/explanation";
+import type { QuickAiConversation } from "./types/quickAi";
+import { mainAppFixture } from "./mainAppViewModel";
 import "./App.css";
+import "./styles/main-app.css";
 
 type CheckState = "idle" | "running" | "ok" | "warn" | "error";
 
@@ -41,6 +46,7 @@ type DeepSeekSmokeResult = {
 };
 
 type PreviewMode = "anchored" | "command";
+type CenteredMode = "explanation" | "quick-ai";
 type CommandStage = "input" | "loading" | "result";
 type AnchoredStage = "mock" | "loading" | "result" | "error";
 type OverlayWindowStage = "input" | "loading" | "result" | "error";
@@ -125,7 +131,7 @@ function formatError(error: unknown) {
   return error instanceof Error ? error.message : String(error);
 }
 
-function App() {
+function OverlayApp() {
   const previewAnchorRef = useRef<HTMLDivElement>(null);
   const [shortcutLabel, setShortcutLabel] = useState("Ctrl+Alt+R");
   const [windowCheck, setWindowCheck] = useState<CheckResult>(idle);
@@ -143,12 +149,21 @@ function App() {
   const [anchoredError, setAnchoredError] = useState<string>();
   const [showDevControls, setShowDevControls] = useState(false);
   const [commandOpen, setCommandOpen] = useState(true);
+  const [centeredMode, setCenteredMode] =
+    useState<CenteredMode>("explanation");
   const [commandValue, setCommandValue] = useState("");
   const [commandStage, setCommandStage] = useState<CommandStage>("input");
   const [commandError, setCommandError] = useState<string | undefined>();
   const [centeredResult, setCenteredResult] =
     useState<CenteredResult>(mockExplanationResult);
+  const [quickAiConversation, setQuickAiConversation] =
+    useState<QuickAiConversation | null>(null);
+  const [quickAiDraft, setQuickAiDraft] = useState("");
+  const [quickAiPendingMessage, setQuickAiPendingMessage] = useState<string>();
+  const [quickAiLoading, setQuickAiLoading] = useState(false);
+  const [quickAiError, setQuickAiError] = useState<string>();
   const anchoredRequestId = useRef(0);
+  const quickAiRequestId = useRef(0);
   const anchoredSourceRect = useRef<AnchorRect | null>(null);
 
   const updatePreviewAnchorRect = useCallback(() => {
@@ -205,9 +220,12 @@ function App() {
     return () => window.removeEventListener("keydown", handleDevControlsToggle);
   }, []);
 
-  const overlayWindowStage: OverlayWindowStage = commandError
-    ? "error"
-    : commandStage;
+  const overlayWindowStage: OverlayWindowStage =
+    centeredMode === "quick-ai"
+      ? "result"
+      : commandError
+        ? "error"
+        : commandStage;
 
   useEffect(() => {
     if (!commandOpen || previewMode !== "command") {
@@ -226,12 +244,23 @@ function App() {
     setCommandError(undefined);
   }, []);
 
+  const clearQuickAiState = useCallback(() => {
+    quickAiRequestId.current += 1;
+    setQuickAiConversation(null);
+    setQuickAiDraft("");
+    setQuickAiPendingMessage(undefined);
+    setQuickAiLoading(false);
+    setQuickAiError(undefined);
+  }, []);
+
   const showCommandOverlay = useCallback(() => {
     anchoredRequestId.current += 1;
     clearCommandState();
+    clearQuickAiState();
+    setCenteredMode("explanation");
     setPreviewMode("command");
     setCommandOpen(true);
-  }, [clearCommandState]);
+  }, [clearCommandState, clearQuickAiState]);
 
   const closeAnchoredOverlay = useCallback(async () => {
     anchoredRequestId.current += 1;
@@ -425,6 +454,11 @@ function App() {
 
   async function handleCommandOpenChange(nextOpen: boolean) {
     clearCommandState();
+    if (!nextOpen) {
+      quickAiRequestId.current += 1;
+      setQuickAiPendingMessage(undefined);
+      setQuickAiLoading(false);
+    }
     setCommandOpen(nextOpen);
     if (!nextOpen) {
       try {
@@ -465,6 +499,106 @@ function App() {
     } catch (error) {
       setCommandStage("input");
       setCommandError(formatError(error));
+    }
+  }
+
+  async function sendQuickAiMessage(
+    value: string,
+    conversationId: number | null,
+  ) {
+    const content = value.trim();
+    if (!content || quickAiLoading) {
+      return;
+    }
+
+    const requestId = quickAiRequestId.current + 1;
+    quickAiRequestId.current = requestId;
+    setQuickAiDraft("");
+    setQuickAiPendingMessage(content);
+    setQuickAiLoading(true);
+    setQuickAiError(undefined);
+
+    try {
+      const conversation = await invoke<QuickAiConversation>(
+        "send_quick_ai_message",
+        {
+          conversationId,
+          content,
+        },
+      );
+      if (quickAiRequestId.current !== requestId) {
+        return;
+      }
+      setQuickAiConversation(conversation);
+      setQuickAiPendingMessage(undefined);
+      setQuickAiLoading(false);
+    } catch (error) {
+      if (quickAiRequestId.current !== requestId) {
+        return;
+      }
+      setQuickAiDraft(content);
+      setQuickAiPendingMessage(undefined);
+      setQuickAiLoading(false);
+      setQuickAiError(formatError(error));
+    }
+  }
+
+  async function enterQuickAi(initialValue: string) {
+    const initialMessage = initialValue.trim();
+    clearQuickAiState();
+    setCenteredMode("quick-ai");
+    setCommandValue("");
+    setCommandError(undefined);
+
+    if (initialMessage) {
+      await sendQuickAiMessage(initialMessage, null);
+      return;
+    }
+
+    const requestId = quickAiRequestId.current + 1;
+    quickAiRequestId.current = requestId;
+    setQuickAiLoading(true);
+    try {
+      const conversation = await invoke<QuickAiConversation>(
+        "create_quick_ai_conversation",
+      );
+      if (quickAiRequestId.current !== requestId) {
+        return;
+      }
+      setQuickAiConversation(conversation);
+      setQuickAiLoading(false);
+    } catch (error) {
+      if (quickAiRequestId.current !== requestId) {
+        return;
+      }
+      setQuickAiLoading(false);
+      setQuickAiError(formatError(error));
+    }
+  }
+
+  async function createNewQuickAiConversation() {
+    const requestId = quickAiRequestId.current + 1;
+    quickAiRequestId.current = requestId;
+    setQuickAiConversation(null);
+    setQuickAiDraft("");
+    setQuickAiPendingMessage(undefined);
+    setQuickAiError(undefined);
+    setQuickAiLoading(true);
+    try {
+      const conversation = await invoke<QuickAiConversation>(
+        "create_quick_ai_conversation",
+      );
+      if (quickAiRequestId.current !== requestId) {
+        return;
+      }
+      setQuickAiConversation(conversation);
+      setQuickAiLoading(false);
+    } catch (error) {
+      if (quickAiRequestId.current !== requestId) {
+        return;
+      }
+      setQuickAiLoading(false);
+      setQuickAiError(formatError(error));
     }
   }
 
@@ -621,25 +755,43 @@ function App() {
             </section>
           )
         ) : (
-          <>
-            <CenteredCommandInput
-              value={commandValue}
-              onValueChange={handleCommandValueChange}
-              open={commandOpen && commandStage !== "result"}
-              loading={commandStage === "loading"}
-              error={commandError}
-              onSubmit={submitCommand}
+          centeredMode === "quick-ai" ? (
+            <QuickAiPanel
+              open={commandOpen}
+              conversation={quickAiConversation}
+              draft={quickAiDraft}
+              pendingMessage={quickAiPendingMessage}
+              loading={quickAiLoading}
+              error={quickAiError}
+              onDraftChange={setQuickAiDraft}
+              onSend={(value) =>
+                void sendQuickAiMessage(value, quickAiConversation?.id ?? null)
+              }
+              onNewConversation={() => void createNewQuickAiConversation()}
               onOpenChange={handleCommandOpenChange}
             />
-            <CenteredResultPanel
-              query={commandValue}
-              result={centeredResult}
-              open={commandOpen && commandStage === "result"}
-              onQueryChange={handleCommandValueChange}
-              onSubmit={submitCommand}
-              onOpenChange={handleCommandOpenChange}
-            />
-          </>
+          ) : (
+            <>
+              <CenteredCommandInput
+                value={commandValue}
+                onValueChange={handleCommandValueChange}
+                open={commandOpen && commandStage !== "result"}
+                loading={commandStage === "loading"}
+                error={commandError}
+                onSubmit={submitCommand}
+                onQuickAi={(value) => void enterQuickAi(value)}
+                onOpenChange={handleCommandOpenChange}
+              />
+              <CenteredResultPanel
+                query={commandValue}
+                result={centeredResult}
+                open={commandOpen && commandStage === "result"}
+                onQueryChange={handleCommandValueChange}
+                onSubmit={submitCommand}
+                onOpenChange={handleCommandOpenChange}
+              />
+            </>
+          )
         )}
       </section>
 
@@ -736,6 +888,16 @@ function App() {
       ) : null}
     </main>
   );
+}
+
+function App() {
+  const view = new URLSearchParams(window.location.search).get("view");
+
+  if (view === "main") {
+    return <MainAppShell viewModel={mainAppFixture} />;
+  }
+
+  return <OverlayApp />;
 }
 
 export default App;
