@@ -960,7 +960,7 @@ function MainAppWindow() {
     }
   }, [runMainWindowCommand]);
 
-  return (
+  const mainApp = (
     <MainAppShell
       viewModel={mainAppFixture}
       isMaximized={isMaximized}
@@ -976,6 +976,12 @@ function MainAppWindow() {
       }}
     />
   );
+
+  if (isTauriRuntime) {
+    return mainApp;
+  }
+
+  return <div className="rr-main-preview-canvas">{mainApp}</div>;
 }
 
 export default App;

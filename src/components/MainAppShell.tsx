@@ -66,6 +66,19 @@ function MainAppShell({
     }
   }
 
+  const collapseButton = (
+    <button
+      className="rr-main-collapse"
+      type="button"
+      aria-label={sidebarCollapsed ? "展开左侧栏" : "折叠左侧栏"}
+      aria-expanded={!sidebarCollapsed}
+      title={`${sidebarCollapsed ? "展开" : "折叠"}左侧栏（Ctrl+B）`}
+      onClick={() => setSidebarCollapsed((collapsed) => !collapsed)}
+    >
+      <MainAppIcon name="panel" />
+    </button>
+  );
+
   return (
     <div className={`rr-main-app${sidebarCollapsed ? " is-sidebar-collapsed" : ""}`}>
       <header
@@ -74,18 +87,9 @@ function MainAppShell({
         onMouseDown={handleTitlebarMouseDown}
       >
         <div className="rr-main-brand-zone">
-          <span className="rr-main-brand-mark">R</span>
-          <span className="rr-main-brand-name">ReadRay</span>
-          <button
-            className="rr-main-collapse"
-            type="button"
-            aria-label={sidebarCollapsed ? "展开左侧栏" : "折叠左侧栏"}
-            aria-expanded={!sidebarCollapsed}
-            title={`${sidebarCollapsed ? "展开" : "折叠"}左侧栏（Ctrl+B）`}
-            onClick={() => setSidebarCollapsed((collapsed) => !collapsed)}
-          >
-            <MainAppIcon name="panel" />
-          </button>
+          {!sidebarCollapsed && <span className="rr-main-brand-mark">R</span>}
+          {!sidebarCollapsed && <span className="rr-main-brand-name">ReadRay</span>}
+          {collapseButton}
         </div>
         <div className="rr-main-drag-zone">今天</div>
         <div className="rr-main-window-controls" aria-label="窗口控制">

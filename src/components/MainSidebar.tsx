@@ -1,3 +1,4 @@
+import { useLayoutEffect, useRef, useState } from "react";
 import type {
   MainAppNavigationId,
   MainAppNavigationItem,
@@ -15,6 +16,41 @@ type MainSidebarProps = {
   onRecentConversationSelect: (id: string) => void;
   onViewAllConversations: () => void;
 };
+
+type RecentConversationTitleProps = {
+  title: string;
+};
+
+function RecentConversationTitle({ title }: RecentConversationTitleProps) {
+  const titleRef = useRef<HTMLSpanElement>(null);
+  const [isOverflowing, setIsOverflowing] = useState(false);
+
+  useLayoutEffect(() => {
+    const titleElement = titleRef.current;
+    if (!titleElement) {
+      return;
+    }
+
+    const updateOverflow = () => {
+      setIsOverflowing(titleElement.scrollWidth > titleElement.clientWidth);
+    };
+
+    updateOverflow();
+    void document.fonts.ready.then(updateOverflow);
+    const observer = new ResizeObserver(updateOverflow);
+    observer.observe(titleElement);
+    return () => observer.disconnect();
+  }, [title]);
+
+  return (
+    <span
+      ref={titleRef}
+      className={`rr-main-recent-text${isOverflowing ? " is-overflowing" : ""}`}
+    >
+      {title}
+    </span>
+  );
+}
 
 function MainSidebar({
   collapsed,
@@ -72,7 +108,7 @@ function MainSidebar({
               title={conversation.title}
               onClick={() => onRecentConversationSelect(conversation.id)}
             >
-              <span className="rr-main-recent-text">{conversation.title}</span>
+              <RecentConversationTitle title={conversation.title} />
             </button>
           ))}
         </div>
@@ -81,7 +117,6 @@ function MainSidebar({
           type="button"
           onClick={onViewAllConversations}
         >
-          <MainAppIcon name="more" />
           <span className="rr-main-view-all-label">查看全部对话</span>
         </button>
       </section>

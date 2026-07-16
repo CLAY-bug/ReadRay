@@ -8,6 +8,15 @@ type TodayPageProps = {
   onSubmitPrompt: (value: string) => void;
 };
 
+function resizePromptInput(input: HTMLTextAreaElement) {
+  input.style.height = "auto";
+  const maxHeight = Number.parseFloat(window.getComputedStyle(input).maxHeight);
+  const contentHeight = input.scrollHeight;
+
+  input.style.height = `${Math.min(contentHeight, maxHeight)}px`;
+  input.style.overflowY = contentHeight > maxHeight ? "auto" : "hidden";
+}
+
 function TodayPage({
   viewModel,
   onActionSelect,
@@ -22,9 +31,19 @@ function TodayPage({
       return;
     }
 
-    input.style.height = "auto";
-    input.style.height = `${Math.min(input.scrollHeight, 96)}px`;
+    resizePromptInput(input);
   }, [draft]);
+
+  useLayoutEffect(() => {
+    const resizeInput = () => {
+      if (inputRef.current) {
+        resizePromptInput(inputRef.current);
+      }
+    };
+
+    window.addEventListener("resize", resizeInput);
+    return () => window.removeEventListener("resize", resizeInput);
+  }, []);
 
   function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -93,10 +112,6 @@ function TodayPage({
               <MainAppIcon name="send" />
             </button>
           </form>
-          <div className="rr-main-composer-meta">
-            <span>Enter 发送 · Shift + Enter 换行</span>
-            <span>对话与学习记录保存在本地</span>
-          </div>
         </div>
       </section>
     </main>

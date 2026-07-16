@@ -173,7 +173,7 @@ source_areas:
     status: "active"
     read_when:
       - "调整 readray-today-2 主应用视觉、响应式布局或侧栏状态。"
-    notes: "样式全部使用 rr-main-* 作用域，避免污染 Graphite overlay；忠实复刻浅色设计稿，不新增 UI 库。"
+    notes: "样式全部使用 rr-main-* 作用域，避免污染 Graphite overlay；以 readray-today-2 的 1440×900 为设计基准，通过主应用容器宽度等比缩放侧栏、正文和输入框，展开侧栏约占 17.5%、主列约占 52.8%；本机 150% DPI 下以 1024×640 逻辑窗口对应设计稿的物理观感，纯浏览器预览使用同尺寸居中桌面画布，Tauri 主窗口仍铺满自身，不新增 UI 库。"
     risk: "不要把主应用浅色 token 写回 overlay 的 tokens.css。"
 
   - path: "src/components/AnchoredResultPopover.tsx"
@@ -271,7 +271,7 @@ source_areas:
     read_when:
       - "调整窗口 label、入口 URL、初始尺寸、任务栏或无边框行为。"
       - "排查启动时主应用和快捷 overlay 的显示策略。"
-    notes: "main 为 1180×760、最小 840×600 的可缩放无边框主窗口；overlay 保留透明、置顶、跳过任务栏且启动隐藏的浮窗配置。"
+    notes: "main 为 1024×640、最小 840×600 的可缩放无边框主窗口；该初始尺寸用于在本机 150% DPI 下对应 readray-today-2 的 1440×900 设计观感；overlay 保留透明、置顶、跳过任务栏且启动隐藏的浮窗配置。"
     risk: "两类窗口必须保持独立 URL、尺寸和生命周期；不要把 main 的位置或显示状态写入 overlay 的进程内位置缓存。"
 
   - path: "src-tauri/src/windows_uia.rs"
