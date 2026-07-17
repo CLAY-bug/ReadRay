@@ -1,0 +1,280 @@
+export type MemoryRecordType = "word" | "phrase" | "sentence" | "paragraph";
+
+export type MemoryFilterId = "all" | MemoryRecordType;
+
+export type MemoryRecordGroup = "今天" | "昨天" | "更早";
+
+export type MemoryFilterItem = {
+  id: MemoryFilterId;
+  label: string;
+};
+
+export type MemoryHistoryOccurrence = {
+  time: string;
+  app: string;
+  context: string;
+};
+
+export type MemoryRecordItem = {
+  id: string;
+  group: MemoryRecordGroup;
+  query: string;
+  summary: string;
+  app: string;
+  time: string;
+  type: MemoryRecordType;
+  typeLabel: string;
+  phonetic: string;
+  part: string;
+  definition: string;
+  meaning: string;
+  sentence: string;
+  translation: string;
+  sourceTime: string;
+  history: MemoryHistoryOccurrence[];
+};
+
+export type MemoryPageViewModel = {
+  heading: string;
+  totalCount: number;
+  searchPlaceholder: string;
+  groups: MemoryRecordGroup[];
+  filters: MemoryFilterItem[];
+  records: MemoryRecordItem[];
+};
+
+export const memoryPageFixture: MemoryPageViewModel = {
+  heading: "记忆",
+  totalCount: 128,
+  searchPlaceholder: "搜索查过的单词、短语或句子",
+  groups: ["今天", "昨天", "更早"],
+  filters: [
+    { id: "all", label: "全部" },
+    { id: "word", label: "单词" },
+    { id: "phrase", label: "短语" },
+    { id: "sentence", label: "句子" },
+    { id: "paragraph", label: "段落" },
+  ],
+  records: [
+    {
+      id: "instruction",
+      group: "今天",
+      query: "instruction",
+      summary: "指令；说明；操作要求",
+      app: "Obsidian",
+      time: "09:42",
+      type: "word",
+      typeLabel: "单词",
+      phonetic: "/ɪnˈstrʌkʃən/",
+      part: "n.",
+      definition: "指令；说明；操作要求。",
+      meaning:
+        "在这里指需要交给系统执行的一组明确操作要求，而不是课堂上的一般性“指导”。",
+      sentence:
+        "Follow the instruction carefully before changing the project configuration.",
+      translation: "在修改项目配置之前，请仔细遵循这条操作说明。",
+      sourceTime: "今天 09:42",
+      history: [
+        {
+          time: "7 月 12 日 21:18",
+          app: "Codex",
+          context:
+            "The instruction layer determines how the agent should respond to the task.",
+        },
+        {
+          time: "7 月 8 日 16:06",
+          app: "VS Code",
+          context: "Each instruction is validated before the workflow starts.",
+        },
+      ],
+    },
+    {
+      id: "carry-out",
+      group: "今天",
+      query: "carry out",
+      summary: "执行；完成（计划、任务或实验）",
+      app: "Codex",
+      time: "08:16",
+      type: "phrase",
+      typeLabel: "短语",
+      phonetic: "/ˈkæri aʊt/",
+      part: "phr. v.",
+      definition: "执行；完成；实施。",
+      meaning:
+        "强调把已经决定或安排好的任务真正做完，常用于计划、测试、实验和职责。",
+      sentence:
+        "The team will carry out a small usability test before implementation.",
+      translation: "团队会在正式实现前进行一次小规模可用性测试。",
+      sourceTime: "今天 08:16",
+      history: [
+        {
+          time: "7 月 10 日 14:32",
+          app: "Obsidian",
+          context:
+            "We need to carry out the evaluation under the same conditions.",
+        },
+      ],
+    },
+    {
+      id: "context-circumstance",
+      group: "今天",
+      query: "context 与 circumstance 的区别",
+      summary: "前者强调语境，后者强调影响事件的客观情况",
+      app: "Obsidian",
+      time: "07:54",
+      type: "phrase",
+      typeLabel: "短语",
+      phonetic: "",
+      part: "对比",
+      definition:
+        "context 指帮助理解语言或事件的背景信息；circumstance 指事件发生时的条件与处境。",
+      meaning:
+        "阅读文本时优先用 context 表示“上下文”；描述限制决策的现实条件时更适合 circumstance。",
+      sentence:
+        "The word changes meaning in this context, but the decision was reasonable under the circumstances.",
+      translation:
+        "这个词在此语境下含义不同，但在当时的情况下，这个决定是合理的。",
+      sourceTime: "今天 07:54",
+      history: [],
+    },
+    {
+      id: "sentence-review",
+      group: "昨天",
+      query: "The review should focus on evidence rather than intuition.",
+      summary: "评审应关注证据，而不是依赖直觉",
+      app: "VS Code",
+      time: "22:08",
+      type: "sentence",
+      typeLabel: "句子",
+      phonetic: "",
+      part: "完整句",
+      definition: "评审应把证据作为判断依据，而不是凭直觉下结论。",
+      meaning:
+        "这里的 review 更接近技术评审或方案审查，focus on 表示把注意力集中在某个判断标准上。",
+      sentence: "The review should focus on evidence rather than intuition.",
+      translation: "评审应关注证据，而不是依赖直觉。",
+      sourceTime: "昨天 22:08",
+      history: [],
+    },
+    {
+      id: "anchor-rect",
+      group: "昨天",
+      query: "anchor rectangle",
+      summary: "用于定位浮层的锚点矩形区域",
+      app: "VS Code",
+      time: "18:31",
+      type: "phrase",
+      typeLabel: "短语",
+      phonetic: "",
+      part: "技术术语",
+      definition: "锚点矩形；用于描述界面元素位置和边界的矩形区域。",
+      meaning:
+        "在 ReadRay 中，它表示用户选中文本所在的屏幕区域，浮层会依据该区域决定出现位置和翻转方向。",
+      sentence:
+        "Position the popover relative to the anchor rectangle and flip it when space is limited.",
+      translation: "相对于锚点矩形放置浮层，并在空间不足时翻转位置。",
+      sourceTime: "昨天 18:31",
+      history: [],
+    },
+    {
+      id: "sentence-assumption",
+      group: "昨天",
+      query: "Make the assumption explicit before changing the implementation.",
+      summary: "修改实现前，先明确说明所作的假设",
+      app: "Codex",
+      time: "15:27",
+      type: "sentence",
+      typeLabel: "句子",
+      phonetic: "",
+      part: "完整句",
+      definition: "在修改实现方案之前，把依赖的前提条件清楚地说出来。",
+      meaning:
+        "explicit 强调“明确写出、不可依赖暗示”；assumption 是尚未被验证但当前工作依赖的前提。",
+      sentence: "Make the assumption explicit before changing the implementation.",
+      translation: "修改实现前，先明确说明所作的假设。",
+      sourceTime: "昨天 15:27",
+      history: [],
+    },
+    {
+      id: "paragraph-design",
+      group: "更早",
+      query: "A quiet interface does not compete for attention…",
+      summary: "安静的界面不争夺注意力，而是在需要时提供清晰帮助",
+      app: "Obsidian",
+      time: "7 月 13 日",
+      type: "paragraph",
+      typeLabel: "段落",
+      phonetic: "",
+      part: "段落",
+      definition: "讨论克制界面如何在不打断用户的前提下提供帮助。",
+      meaning:
+        "quiet 不只是视觉上的低对比，也强调交互层面不主动制造任务感和提醒压力。",
+      sentence:
+        "A quiet interface does not compete for attention. It stays out of the way, preserves context, and offers clear help at the moment it is needed.",
+      translation:
+        "安静的界面不会争夺注意力。它尽量不打扰，保留原有语境，并在真正需要时提供清晰帮助。",
+      sourceTime: "7 月 13 日 20:44",
+      history: [],
+    },
+    {
+      id: "retrieve",
+      group: "更早",
+      query: "retrieve",
+      summary: "检索；取回；重新找出",
+      app: "Codex",
+      time: "7 月 12 日",
+      type: "word",
+      typeLabel: "单词",
+      phonetic: "/rɪˈtriːv/",
+      part: "v.",
+      definition: "取回；检索；重新获得。",
+      meaning:
+        "在知识与信息系统中，通常指根据查询从已有记录中找回相关内容。",
+      sentence:
+        "The assistant can retrieve the original context without interrupting your reading flow.",
+      translation: "助手可以找回原始语境，而不会打断你的阅读节奏。",
+      sourceTime: "7 月 12 日 11:03",
+      history: [],
+    },
+    {
+      id: "scope-drift",
+      group: "更早",
+      query: "scope drift",
+      summary: "范围漂移；任务边界在执行中逐渐扩大",
+      app: "Codex",
+      time: "7 月 11 日",
+      type: "phrase",
+      typeLabel: "短语",
+      phonetic: "",
+      part: "项目术语",
+      definition: "范围漂移；工作内容在缺少明确决策的情况下超出原定边界。",
+      meaning:
+        "这里强调执行过程逐渐偏离已经确认的任务范围，而不只是一次明确的需求变更。",
+      sentence:
+        "Keep the acceptance criteria visible to prevent scope drift during implementation.",
+      translation: "让验收标准保持可见，以防实现过程中出现范围漂移。",
+      sourceTime: "7 月 11 日 17:20",
+      history: [],
+    },
+    {
+      id: "unobtrusive",
+      group: "更早",
+      query: "unobtrusive",
+      summary: "不突兀的；不引人注意的；不打扰的",
+      app: "Obsidian",
+      time: "7 月 9 日",
+      type: "word",
+      typeLabel: "单词",
+      phonetic: "/ˌʌnəbˈtruːsɪv/",
+      part: "adj.",
+      definition: "不显眼的；不打扰人的；克制存在的。",
+      meaning:
+        "用于界面时，指功能随时可用，但不会用明显提醒或多余控件抢占用户注意力。",
+      sentence:
+        "The scrollbar should remain unobtrusive until the user starts scrolling.",
+      translation: "滚动条应保持不显眼，直到用户开始滚动。",
+      sourceTime: "7 月 9 日 10:36",
+      history: [],
+    },
+  ],
+};

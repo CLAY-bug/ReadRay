@@ -1,4 +1,10 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+  type CSSProperties,
+} from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { readText, writeText } from "@tauri-apps/plugin-clipboard-manager";
@@ -21,6 +27,7 @@ import type {
 } from "./types/explanation";
 import type { QuickAiConversation } from "./types/quickAi";
 import { mainAppFixture } from "./mainAppViewModel";
+import { memoryPageFixture } from "./memoryViewModel";
 import "./App.css";
 import "./styles/main-app.css";
 
@@ -35,6 +42,10 @@ type WindowState = {
   visible: boolean;
   alwaysOnTop: boolean;
 };
+
+const MAIN_APP_DESIGN_WIDTH = 1440;
+const MAIN_APP_DESIGN_HEIGHT = 900;
+const MAIN_APP_PREVIEW_GUTTER = 48;
 
 type DeepSeekSmokeResult = {
   configured: boolean;
@@ -917,7 +928,36 @@ function App() {
 
 function MainAppWindow() {
   const [isMaximized, setIsMaximized] = useState(false);
+  const [previewScale, setPreviewScale] = useState(1);
   const isTauriRuntime = "__TAURI_INTERNALS__" in window;
+
+  useEffect(() => {
+    if (isTauriRuntime) {
+      return;
+    }
+
+    function syncPreviewScale() {
+      const availableWidth = Math.max(
+        window.innerWidth - MAIN_APP_PREVIEW_GUTTER,
+        1,
+      );
+      const availableHeight = Math.max(
+        window.innerHeight - MAIN_APP_PREVIEW_GUTTER,
+        1,
+      );
+      setPreviewScale(
+        Math.min(
+          availableWidth / MAIN_APP_DESIGN_WIDTH,
+          availableHeight / MAIN_APP_DESIGN_HEIGHT,
+          1,
+        ),
+      );
+    }
+
+    syncPreviewScale();
+    window.addEventListener("resize", syncPreviewScale);
+    return () => window.removeEventListener("resize", syncPreviewScale);
+  }, [isTauriRuntime]);
 
   useEffect(() => {
     if (!isTauriRuntime) {
@@ -963,6 +1003,7 @@ function MainAppWindow() {
   const mainApp = (
     <MainAppShell
       viewModel={mainAppFixture}
+      memoryViewModel={memoryPageFixture}
       isMaximized={isMaximized}
       onStartDragging={() => {
         void runMainWindowCommand("start_main_window_drag");
@@ -981,7 +1022,18 @@ function MainAppWindow() {
     return mainApp;
   }
 
-  return <div className="rr-main-preview-canvas">{mainApp}</div>;
+  return (
+    <div
+      className="rr-main-preview-canvas"
+      style={
+        {
+          "--rr-main-preview-scale": previewScale,
+        } as CSSProperties
+      }
+    >
+      {mainApp}
+    </div>
+  );
 }
 
 export default App;

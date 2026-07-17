@@ -15,7 +15,10 @@ export type MainAppIconName =
   | "minimize"
   | "maximize"
   | "restore"
-  | "close";
+  | "close"
+  | "search"
+  | "chevron"
+  | "back";
 
 type MainAppIconProps = {
   name: MainAppIconName;
@@ -57,6 +60,12 @@ function IconPaths({ name }: MainAppIconProps) {
       return <><path d="M8 8V5h11v11h-3" /><rect x="5" y="8" width="11" height="11" rx="1" /></>;
     case "close":
       return <path d="m6 6 12 12M18 6 6 18" />;
+    case "search":
+      return <><circle cx="11" cy="11" r="6.5" /><path d="m16 16 4 4" /></>;
+    case "chevron":
+      return <path d="m7 10 5 5 5-5" />;
+    case "back":
+      return <path d="M19 12H5M11 18l-6-6 6-6" />;
   }
 }
 

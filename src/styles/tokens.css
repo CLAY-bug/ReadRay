@@ -1,3 +1,43 @@
+@font-face {
+  font-family: "ReadRay Geist";
+  src: url("../assets/fonts/Geist-Variable.woff2") format("woff2");
+  font-style: normal;
+  font-weight: 100 900;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: "ReadRay Geist Mono";
+  src: url("../assets/fonts/GeistMono-Variable.woff2") format("woff2");
+  font-style: normal;
+  font-weight: 100 900;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: "ReadRay Newsreader";
+  src: url("../assets/fonts/Newsreader-Variable.woff2") format("woff2");
+  font-style: normal;
+  font-weight: 200 800;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: "ReadRay Source Han Sans SC";
+  src: url("../assets/fonts/SourceHanSansSC-Variable.woff2") format("woff2");
+  font-style: normal;
+  font-weight: 100 900;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: "ReadRay Source Han Serif SC";
+  src: url("../assets/fonts/SourceHanSerifSC-Variable.woff2") format("woff2");
+  font-style: normal;
+  font-weight: 100 900;
+  font-display: swap;
+}
+
 :root {
   --rr-color-graphite-950: #0d0d0b;
   --rr-color-graphite-900: #171512;
@@ -25,9 +65,11 @@
   --rr-space-5: 20px;
   --rr-space-6: 24px;
 
-  --rr-font-stack:
-    Inter, "Segoe UI", system-ui, -apple-system, BlinkMacSystemFont, "Microsoft YaHei",
-    sans-serif;
+  --rr-font-display:
+    "ReadRay Geist", "ReadRay Source Han Sans SC", system-ui, sans-serif;
+  --rr-font-stack: var(--rr-font-display);
+  --rr-font-body:
+    "ReadRay Newsreader", "ReadRay Source Han Serif SC", ui-serif, serif;
   --rr-font-mono:
-    "Cascadia Mono", "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
+    "ReadRay Geist Mono", "ReadRay Source Han Sans SC", ui-monospace, monospace;
 }

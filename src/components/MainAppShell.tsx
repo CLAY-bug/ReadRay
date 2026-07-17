@@ -4,12 +4,15 @@ import type {
   MainAppViewModel,
   TodayActionId,
 } from "../mainAppViewModel";
+import type { MemoryPageViewModel } from "../memoryViewModel";
 import MainAppIcon from "./MainAppIcon";
 import MainSidebar from "./MainSidebar";
+import MemoryPage from "./MemoryPage";
 import TodayPage from "./TodayPage";
 
 type MainAppShellProps = {
   viewModel: MainAppViewModel;
+  memoryViewModel: MemoryPageViewModel;
   onNewConversation?: () => void;
   onNavigate?: (id: MainAppNavigationId) => void;
   onRecentConversationSelect?: (id: string) => void;
@@ -27,6 +30,7 @@ const noop = () => undefined;
 
 function MainAppShell({
   viewModel,
+  memoryViewModel,
   onNewConversation = noop,
   onNavigate = noop,
   onRecentConversationSelect = noop,
@@ -40,6 +44,8 @@ function MainAppShell({
   onClose = noop,
 }: MainAppShellProps) {
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+  const [activeNavigationId, setActiveNavigationId] =
+    useState<MainAppNavigationId>("today");
 
   useEffect(() => {
     function handleShortcut(event: KeyboardEvent) {
@@ -64,6 +70,13 @@ function MainAppShell({
     } else {
       onStartDragging();
     }
+  }
+
+  function handleNavigate(id: MainAppNavigationId) {
+    if (id === "today" || id === "memory") {
+      setActiveNavigationId(id);
+    }
+    onNavigate(id);
   }
 
   const collapseButton = (
@@ -91,7 +104,9 @@ function MainAppShell({
           {!sidebarCollapsed && <span className="rr-main-brand-name">ReadRay</span>}
           {collapseButton}
         </div>
-        <div className="rr-main-drag-zone">今天</div>
+        <div className="rr-main-drag-zone">
+          {activeNavigationId === "memory" ? "记忆" : "今天"}
+        </div>
         <div className="rr-main-window-controls" aria-label="窗口控制">
           <button className="rr-main-window-control" type="button" aria-label="最小化" onClick={onMinimize}>
             <MainAppIcon name="minimize" />
@@ -115,17 +130,21 @@ function MainAppShell({
           collapsed={sidebarCollapsed}
           navigation={viewModel.navigation}
           recentConversations={viewModel.recentConversations}
-          activeNavigationId="today"
+          activeNavigationId={activeNavigationId}
           onNewConversation={onNewConversation}
-          onNavigate={onNavigate}
+          onNavigate={handleNavigate}
           onRecentConversationSelect={onRecentConversationSelect}
           onViewAllConversations={onViewAllConversations}
         />
-        <TodayPage
-          viewModel={viewModel.today}
-          onActionSelect={onTodayActionSelect}
-          onSubmitPrompt={onSubmitPrompt}
-        />
+        {activeNavigationId === "memory" ? (
+          <MemoryPage viewModel={memoryViewModel} />
+        ) : (
+          <TodayPage
+            viewModel={viewModel.today}
+            onActionSelect={onTodayActionSelect}
+            onSubmitPrompt={onSubmitPrompt}
+          />
+        )}
       </div>
     </div>
   );

@@ -27,7 +27,7 @@
 - `src/components/QuickAiPanel.tsx` / `src/types/quickAi.ts`：Quick AI 多轮对话视图及前端协议。
 - `src/components/MainAppShell.tsx` / `MainSidebar.tsx` / `TodayPage.tsx`：正常主应用壳、全局导航与“今天”首页。
 - `src/mainAppViewModel.ts` / `src/styles/main-app.css`：主应用有类型 fixture 和独立浅色视觉样式。
-- `src/assets/fonts/`：主应用随包内嵌的 Geist、Commit Mono、Noto Sans SC 字体及对应许可证。
+- `src/assets/fonts/`：应用随包内嵌的 Geist、Geist Mono、Newsreader、思源黑体和思源宋体变量字体及对应 OFL 许可证。
 - `src/styles/tokens.css`：ReadRay Graphite + Amber 轻量样式 token。
 - `src-tauri/`：Tauri v2 / Rust 原生层脚手架源码；当前同时配置正常主窗口 `main` 与快捷浮窗 `overlay`。
 - `src-tauri/src/windows_uia.rs`：Windows UI Automation 上下文捕获与正式划词输入来源；当前已接入 DeepSeek 锚定解释卡。
@@ -120,25 +120,27 @@
 - 已完成阶段三第一轮 SQLite 本地记忆数据底座：Rust `learning_records` 使用 `rusqlite` bundled，在 Tauri 应用数据目录创建 `readray.sqlite3`；`schema_migrations` 记录已执行迁移，v1 追加保存每一次成功查询事件，不以重复文本覆盖旧记录。
 - 学习事件字段包含自增 ID、原始 queryText、标准化文本、queryType、sourceType、可选 sourceApp、可选 contextText、完整 ExplanationCard JSON、ExplanationCard schemaVersion、创建时间和可空 difficulty；当前不生成虚假难度，统一保存 `NULL`。
 - `create_explanation_card` 仍先完成 DeepSeek 解析与 validator，只有成功后才调用学习记录写入；manual 与 windows_uia 共用同一 command 链路。请求、解析、validator 或存储失败均不留下学习记录，并返回可诊断错误。
-- 已提供 Rust/Tauri commands：`list_learning_records`、`search_learning_records`、`get_learning_record`、`delete_learning_record`。前端不接触 SQL；学习记录窗口尚未实现。
+- 已提供 Rust/Tauri commands：`list_learning_records`、`search_learning_records`、`get_learning_record`、`delete_learning_record`。前端不接触 SQL；主应用“记忆”页已有 fixture 交互骨架，但尚未接入这些 commands。
 - 已完成 Ctrl+Alt+R 居中窗口 Quick AI 第一版：默认仍为解释输入，按 Tab 进入 Quick AI；有输入时自动作为首条消息，空输入创建空白对话；支持 Enter 发送、Shift+Enter 换行、Ctrl+N 新建对话和 Esc 隐藏。
 - Quick AI 使用独立普通 chat/completions 请求，不复用 ExplanationCard JSON；ExplanationCard 与 Quick AI 仅共用 `.env`、DeepSeek model/API key 和 HTTP 错误边界，默认模型为 `deepseek-v4-flash`。
 - 正常主应用与快捷 overlay 已建立独立 Tauri 窗口：正常启动只显示 `main` 主应用，隐藏的 `overlay` 继续监听全局快捷键和 UIA 事件；主窗口失焦不隐藏，只有 overlay 失焦自动隐藏。
 - 快捷 overlay 的呼出意图由 Rust 先原子保存，再由前端在事件、窗口获焦或挂载时领取；程序化呼出有短暂焦点保护。这避免隐藏 WebView 漏事件导致 `Ctrl+Alt+R` 只能呼出一次，或 `Ctrl+Alt+U` 错误沿用居中输入态。
-- 主应用左侧栏只允许用户手动折叠，不根据窗口宽度自动折叠；1440×900 设计坐标中的展开/折叠宽度为 252/72px，默认 0.75 统一缩放后实际为 189/54px。展开态显示品牌和折叠按钮，折叠态隐藏品牌、只在侧栏顶部居中显示展开按钮。
+- 主应用左侧栏只允许用户手动折叠，不根据窗口宽度自动折叠；默认 1440×900 / scale 1 下展开与折叠宽度为 252/72px。展开态显示品牌和折叠按钮，折叠态隐藏品牌、只在侧栏顶部居中显示展开按钮。
 - SQLite migration v2 新增 `quick_ai_conversations` 和 `quick_ai_messages`，每条消息保存 role、content、sequence 和时间；与 `learning_records` 完全分表，结构可供未来主应用读取并继续对话。
 - Quick AI 已完成真实 DeepSeek Flash 两轮连续对话和真实窗口 smoke：第二轮能使用第一轮上下文；Ctrl+N 与 Esc 行为通过。当前响应按纯文本展示，不解析 Markdown。
 - 已按 `design-open-design/readray-today-2.html` 重建正常主应用“今天”首页：包含无边框外壳和标题栏、全局侧栏、最近对话、三个学习入口和底部输入框；数据来自有类型 fixture，所有入口通过回调预留接线，不伪造后端功能。
-- 主应用以 `readray-today-2.html` 的 1440×900 为唯一设计坐标，侧栏、标题栏、图标和盒模型共用 `--rr-main-design-scale: 0.75`；文字使用固定字号，不再随拖拽窗口缩放，主内容宽度和间距仅在独立响应式规则中调整。纯浏览器 `?view=main` 使用居中的 1080×675 预览画布，真实 Tauri 主窗口仍铺满自身。
-- 主应用正式内嵌 Geist、Commit Mono 和 Noto Sans SC，并提交相应许可证；侧栏品牌/导航、最近对话和分组标签最终字号分别为 15/14/12px，正式 UI 不依赖本机字体安装。
+- 主应用全局外壳、“今天”页与“记忆”页统一以 1440×900 和 `--rr-main-design-scale: 1` 为默认基线，不再混用外壳 0.75、内容区 1.0 两套比例。浏览器预览始终排版完整 1440×900 画布，再按可用空间做单一整体缩放；主应用响应式断点改由应用容器尺寸触发，避免较小的预览视口错误压缩页面节奏。
+- 应用默认字体已更新为随包内嵌的 Geist + Source Han Sans SC（界面）、Newsreader + Source Han Serif SC（阅读正文）、Geist Mono + Source Han Sans SC（元信息），并提交四份对应 OFL。五个字体文件与本机 OpenDesign 源资源的 SHA-256 一致，完整字体约增加 34MB 应用资源，正式 UI 不依赖联网或本机安装。
 - 最近对话标题只在 `scrollWidth > clientWidth` 时应用右侧渐隐，未溢出的短标题完整显示；“查看全部对话”不再使用前置省略号。侧栏折叠后只显示居中的展开控件，不在内容标题区放置侧栏开关。
 - 首页输入框已移除底部快捷键和本地保存提示；输入内容变化或窗口缩放时按真实 `scrollHeight` 自动增高和回缩，高度上限为随窗口变化的 120–240px，达到上限后保留内部滚动但隐藏原生滚动条，不再出现上下箭头。
-- 主应用标题栏已接通原生拖动、最小化、最大化/恢复和隐藏；主窗口初始尺寸为 1080×675、最小尺寸为 840×600，无边框、可缩放并显示在任务栏，Windows/Tauri 原生阴影和页面外阴影均已关闭。
-- 最终验证基于本机 150% DPI、真实 Tauri WebView 和浏览器预览分别完成；记录到的 Tauri DPR 为 1.5，侧栏字体在窗口拖拽时保持不变，多行输入可完整展开；`pnpm build` 与 `pnpm tauri dev` 均通过，未改 overlay、Quick AI、UIA、DeepSeek、SQLite 或快捷键行为。
+- 主应用标题栏已接通原生拖动、最小化、最大化/恢复和隐藏；主窗口初始尺寸为 1440×900、最小尺寸为 840×600，无边框、可缩放并显示在任务栏，Windows/Tauri 原生阴影和页面外阴影均已关闭。
+- 本机 150% DPI 的真实 Tauri WebView 实测为 `innerWidth=1440`、`innerHeight=900`、`devicePixelRatio=1.5`；主应用 1440×900、标题栏 44px、展开侧栏 252px、导航行 38px、记忆内容壳 1048px、搜索框 44px、记录列 368px。品牌/导航/最近对话 computed font-size 分别为 14/14/13px，均实际命中随包字体。`pnpm build` 与 `pnpm tauri dev` 均通过，未改 overlay、Quick AI、UIA、DeepSeek、SQLite 或快捷键行为。
+- 已按 `design-open-design/readray-memory-font-comparison.html` 重新实现主应用“记忆”内容区：复用现有 MainAppShell、MainSidebar 和标题栏，包含动态记录数、搜索、四类查询筛选、分组列表、键盘导航、选中详情和“过去的出现”展开；980px 以下切换为列表/详情单栏并提供返回入口。当前数据与交互均为有类型前端 fixture，不调用 Rust、SQLite 或 DeepSeek。
+- “记忆”与“今天”在同一主应用外壳内切换；侧栏仍只允许手动折叠，折叠态继续隐藏品牌并保留导航/设置图标，记忆选中态保持可见。记忆页样式只使用 `rr-memory-*` 作用域，没有改变 overlay、Quick AI、UIA、快捷键或原生窗口行为。
 
 ## 下一步
 
-继续推进：主应用与快捷 overlay 的多窗口基础已建立，下一项是按已有 Rust 边界接入主应用真实数据。
+继续推进：主应用与快捷 overlay 的多窗口基础已建立；记忆页视觉交互骨架完成后，下一项是按已有 Rust 边界接入主应用真实数据。
 
 - UI 只调用 Rust 的分页、关键词搜索、queryType 筛选、单条读取和删除 commands，不向前端暴露 SQL 或数据库路径。
 - 继续保持每次成功查询为独立事件；重复查询聚合、高频词、趋势和复盘规划属于后续阶段。
@@ -167,7 +169,7 @@
 - C 盘空间已缓解但仍需留意；VS Build Tools 主体和 Windows Kits 仍在 C 盘，若空间再次吃紧，再评估卸载后重装 VS Build Tools 到 D 盘。
 - 本地查询分类是启发式规则，缩写、多句但很短的文本、缺少句末标点的长句仍可能被相邻类型吸收；优先通过真实样本调整规则，不增加第二次 LLM 分类请求。
 - 长段落输出受模型 JSON 稳定性和窗口最大高度约束；当前上限 4096 字符，不代表整页翻译能力。
-- 学习记录窗口的 UI 具体设计暂时不定，不与阶段三数据底座混合实现。
+- 记忆页当前只使用有类型 fixture；接入真实学习记录时，应映射现有分页、关键词搜索、queryType 筛选和单条读取 commands，不让前端直接读取 SQLite。
 - Quick AI 当前不渲染 Markdown，也不做流式输出；长回复需要等待完整响应后一次显示，这是后续体验优化点，不影响当前多轮对话闭环。
 - 主窗口关闭后当前只隐藏并保持后台快捷键能力，但没有托盘、单实例或重新显示主窗口入口；发布前需要确定“关闭即隐藏”是否为正式产品策略，并补齐重新进入主应用的路径。
 
