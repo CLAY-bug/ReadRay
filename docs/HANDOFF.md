@@ -1,10 +1,10 @@
 # ReadRay 交接记录
 
-最后更新：2026-07-16
+最后更新：2026-07-17
 
 ## TL;DR
 
-- 当前状态：阶段一 Tauri 基础能力、阶段二解释卡 MVP、阶段三 SQLite/Quick AI 数据底座已完成；正常主应用“今天”首页已接入独立 Tauri 主窗口，并与快捷 overlay 共存。
+- 当前状态：阶段一 Tauri 基础能力、阶段二解释卡 MVP、阶段三 SQLite/Quick AI 数据底座已完成；正常主应用“今天”首页的最终视觉和输入交互已在真实 Tauri 主窗口完成验证，并与快捷 overlay 共存。
 - 当前路线：Windows 原生，Tauri + React + TypeScript + Rust + SQLite。
 - 下一步：将首页摘要、最近对话和输入提交接到现有 Rust 数据边界；快捷 overlay/Quick AI 窗口继续保持独立。
 - 当前约束：不使用通用 Agent 框架，不内置商业词典，不做 OCR、本地大模型或跨平台支持。
@@ -27,6 +27,7 @@
 - `src/components/QuickAiPanel.tsx` / `src/types/quickAi.ts`：Quick AI 多轮对话视图及前端协议。
 - `src/components/MainAppShell.tsx` / `MainSidebar.tsx` / `TodayPage.tsx`：正常主应用壳、全局导航与“今天”首页。
 - `src/mainAppViewModel.ts` / `src/styles/main-app.css`：主应用有类型 fixture 和独立浅色视觉样式。
+- `src/assets/fonts/`：主应用随包内嵌的 Geist、Commit Mono、Noto Sans SC 字体及对应许可证。
 - `src/styles/tokens.css`：ReadRay Graphite + Amber 轻量样式 token。
 - `src-tauri/`：Tauri v2 / Rust 原生层脚手架源码；当前同时配置正常主窗口 `main` 与快捷浮窗 `overlay`。
 - `src-tauri/src/windows_uia.rs`：Windows UI Automation 上下文捕获与正式划词输入来源；当前已接入 DeepSeek 锚定解释卡。
@@ -124,13 +125,16 @@
 - Quick AI 使用独立普通 chat/completions 请求，不复用 ExplanationCard JSON；ExplanationCard 与 Quick AI 仅共用 `.env`、DeepSeek model/API key 和 HTTP 错误边界，默认模型为 `deepseek-v4-flash`。
 - 正常主应用与快捷 overlay 已建立独立 Tauri 窗口：正常启动只显示 `main` 主应用，隐藏的 `overlay` 继续监听全局快捷键和 UIA 事件；主窗口失焦不隐藏，只有 overlay 失焦自动隐藏。
 - 快捷 overlay 的呼出意图由 Rust 先原子保存，再由前端在事件、窗口获焦或挂载时领取；程序化呼出有短暂焦点保护。这避免隐藏 WebView 漏事件导致 `Ctrl+Alt+R` 只能呼出一次，或 `Ctrl+Alt+U` 错误沿用居中输入态。
-- 主应用左侧栏只允许用户手动折叠，不根据窗口宽度自动折叠；展开宽度 252px，折叠宽度 72px。
+- 主应用左侧栏只允许用户手动折叠，不根据窗口宽度自动折叠；1440×900 设计坐标中的展开/折叠宽度为 252/72px，默认 0.75 统一缩放后实际为 189/54px。展开态显示品牌和折叠按钮，折叠态隐藏品牌、只在侧栏顶部居中显示展开按钮。
 - SQLite migration v2 新增 `quick_ai_conversations` 和 `quick_ai_messages`，每条消息保存 role、content、sequence 和时间；与 `learning_records` 完全分表，结构可供未来主应用读取并继续对话。
 - Quick AI 已完成真实 DeepSeek Flash 两轮连续对话和真实窗口 smoke：第二轮能使用第一轮上下文；Ctrl+N 与 Esc 行为通过。当前响应按纯文本展示，不解析 Markdown。
 - 已按 `design-open-design/readray-today-2.html` 重建正常主应用“今天”首页：包含无边框外壳和标题栏、全局侧栏、最近对话、三个学习入口和底部输入框；数据来自有类型 fixture，所有入口通过回调预留接线，不伪造后端功能。
-- 主应用前端已在 1440×900、1024×768、侧栏展开/折叠和多行输入状态完成 Chromium 截图验证；视口无横向溢出，主内容不与侧栏或窗口控件重叠。
-- 主应用已按 `readray-today-2.html` 的 1440×900 构图建立容器内等比视觉基准：侧栏约占主应用宽度 17.5%，内容主列约占 52.8%，标题、摘要、任务行和底部输入框同步缩放并设置可读上下限；纯浏览器 `?view=main` 使用居中的 1024×640 桌面画布，真实 Tauri 主窗口仍铺满自身。
-- 主应用标题栏已接通原生拖动、最小化、最大化/恢复和隐藏；考虑本机 150% DPI，主窗口初始尺寸为 1024×640，用于对应设计稿 1440×900 的物理观感，最小尺寸仍为 840×600，无边框、可缩放并显示在任务栏。
+- 主应用以 `readray-today-2.html` 的 1440×900 为唯一设计坐标，侧栏、标题栏、图标和盒模型共用 `--rr-main-design-scale: 0.75`；文字使用固定字号，不再随拖拽窗口缩放，主内容宽度和间距仅在独立响应式规则中调整。纯浏览器 `?view=main` 使用居中的 1080×675 预览画布，真实 Tauri 主窗口仍铺满自身。
+- 主应用正式内嵌 Geist、Commit Mono 和 Noto Sans SC，并提交相应许可证；侧栏品牌/导航、最近对话和分组标签最终字号分别为 15/14/12px，正式 UI 不依赖本机字体安装。
+- 最近对话标题只在 `scrollWidth > clientWidth` 时应用右侧渐隐，未溢出的短标题完整显示；“查看全部对话”不再使用前置省略号。侧栏折叠后只显示居中的展开控件，不在内容标题区放置侧栏开关。
+- 首页输入框已移除底部快捷键和本地保存提示；输入内容变化或窗口缩放时按真实 `scrollHeight` 自动增高和回缩，高度上限为随窗口变化的 120–240px，达到上限后保留内部滚动但隐藏原生滚动条，不再出现上下箭头。
+- 主应用标题栏已接通原生拖动、最小化、最大化/恢复和隐藏；主窗口初始尺寸为 1080×675、最小尺寸为 840×600，无边框、可缩放并显示在任务栏，Windows/Tauri 原生阴影和页面外阴影均已关闭。
+- 最终验证基于本机 150% DPI、真实 Tauri WebView 和浏览器预览分别完成；记录到的 Tauri DPR 为 1.5，侧栏字体在窗口拖拽时保持不变，多行输入可完整展开；`pnpm build` 与 `pnpm tauri dev` 均通过，未改 overlay、Quick AI、UIA、DeepSeek、SQLite 或快捷键行为。
 
 ## 下一步
 
