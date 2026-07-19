@@ -9,6 +9,7 @@ import MainAppIcon from "./MainAppIcon";
 import MainSidebar from "./MainSidebar";
 import MemoryPage from "./MemoryPage";
 import TodayPage from "./TodayPage";
+import WritingPage from "./WritingPage";
 
 type MainAppShellProps = {
   viewModel: MainAppViewModel;
@@ -46,6 +47,8 @@ function MainAppShell({
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [activeNavigationId, setActiveNavigationId] =
     useState<MainAppNavigationId>("today");
+  const [writingLibraryRequest, setWritingLibraryRequest] = useState(0);
+  const [writingWindowTitle, setWritingWindowTitle] = useState("写作");
 
   useEffect(() => {
     function handleShortcut(event: KeyboardEvent) {
@@ -73,10 +76,20 @@ function MainAppShell({
   }
 
   function handleNavigate(id: MainAppNavigationId) {
-    if (id === "today" || id === "memory") {
+    if (id === "today" || id === "memory" || id === "writing") {
       setActiveNavigationId(id);
     }
+    if (id === "writing") {
+      setWritingLibraryRequest((request) => request + 1);
+    }
     onNavigate(id);
+  }
+
+  function handleTodayActionSelect(id: TodayActionId) {
+    if (id === "writing") {
+      handleNavigate("writing");
+    }
+    onTodayActionSelect(id);
   }
 
   const collapseButton = (
@@ -105,7 +118,9 @@ function MainAppShell({
           {collapseButton}
         </div>
         <div className="rr-main-drag-zone">
-          {activeNavigationId === "memory" ? "记忆" : "今天"}
+          {activeNavigationId === "memory"
+            ? "记忆"
+            : activeNavigationId === "writing" ? writingWindowTitle : "今天"}
         </div>
         <div className="rr-main-window-controls" aria-label="窗口控制">
           <button className="rr-main-window-control" type="button" aria-label="最小化" onClick={onMinimize}>
@@ -138,10 +153,15 @@ function MainAppShell({
         />
         {activeNavigationId === "memory" ? (
           <MemoryPage viewModel={memoryViewModel} />
+        ) : activeNavigationId === "writing" ? (
+          <WritingPage
+            libraryRequest={writingLibraryRequest}
+            onWindowTitleChange={setWritingWindowTitle}
+          />
         ) : (
           <TodayPage
             viewModel={viewModel.today}
-            onActionSelect={onTodayActionSelect}
+            onActionSelect={handleTodayActionSelect}
             onSubmitPrompt={onSubmitPrompt}
           />
         )}

@@ -30,6 +30,7 @@ import { mainAppFixture } from "./mainAppViewModel";
 import { memoryPageFixture } from "./memoryViewModel";
 import "./App.css";
 import "./styles/main-app.css";
+import "./styles/writing-page.css";
 
 type CheckState = "idle" | "running" | "ok" | "warn" | "error";
 

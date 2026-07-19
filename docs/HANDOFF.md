@@ -1,10 +1,10 @@
 # ReadRay 交接记录
 
-最后更新：2026-07-17
+最后更新：2026-07-18
 
 ## TL;DR
 
-- 当前状态：阶段一 Tauri 基础能力、阶段二解释卡 MVP、阶段三 SQLite/Quick AI 数据底座已完成；正常主应用“今天”首页的最终视觉和输入交互已在真实 Tauri 主窗口完成验证，并与快捷 overlay 共存。
+- 当前状态：阶段一 Tauri 基础能力、阶段二解释卡 MVP、阶段三 SQLite/Quick AI 数据底座已完成；正常主应用“今天”“记忆”和“写作”三个内容页已复用同一 App Shell，其中写作页已完成设计稿的全状态前端交互骨架，并与快捷 overlay 共存。
 - 当前路线：Windows 原生，Tauri + React + TypeScript + Rust + SQLite。
 - 下一步：将首页摘要、最近对话和输入提交接到现有 Rust 数据边界；快捷 overlay/Quick AI 窗口继续保持独立。
 - 当前约束：不使用通用 Agent 框架，不内置商业词典，不做 OCR、本地大模型或跨平台支持。
@@ -27,6 +27,8 @@
 - `src/components/QuickAiPanel.tsx` / `src/types/quickAi.ts`：Quick AI 多轮对话视图及前端协议。
 - `src/components/MainAppShell.tsx` / `MainSidebar.tsx` / `TodayPage.tsx`：正常主应用壳、全局导航与“今天”首页。
 - `src/mainAppViewModel.ts` / `src/styles/main-app.css`：主应用有类型 fixture 和独立浅色视觉样式。
+- `src/components/WritingPage.tsx` / `WritingEditor.tsx` / `WritingCoach.tsx` / `WritingCompareView.tsx` / `WritingLibrary.tsx`：写作草稿、辅助问答、文章检查、对比、完成稿和文章库交互骨架。
+- `src/writingViewModel.ts` / `src/writingRepository.ts` / `src/styles/writing-page.css`：写作类型与 fixture、可替换前端演示 repository、独立 `rr-writing-*` 样式；当前 repository 使用 localStorage 只为演示刷新恢复，不是正式 SQLite 方案。
 - `src/assets/fonts/`：应用随包内嵌的 Geist、Geist Mono、Newsreader、思源黑体和思源宋体变量字体及对应 OFL 许可证。
 - `src/styles/tokens.css`：ReadRay Graphite + Amber 轻量样式 token。
 - `src-tauri/`：Tauri v2 / Rust 原生层脚手架源码；当前同时配置正常主窗口 `main` 与快捷浮窗 `overlay`。
@@ -137,6 +139,10 @@
 - 本机 150% DPI 的真实 Tauri WebView 实测为 `innerWidth=1440`、`innerHeight=900`、`devicePixelRatio=1.5`；主应用 1440×900、标题栏 44px、展开侧栏 252px、导航行 38px、记忆内容壳 1048px、搜索框 44px、记录列 368px。品牌/导航/最近对话 computed font-size 分别为 14/14/13px，均实际命中随包字体。`pnpm build` 与 `pnpm tauri dev` 均通过，未改 overlay、Quick AI、UIA、DeepSeek、SQLite 或快捷键行为。
 - 已按 `design-open-design/readray-memory-font-comparison.html` 重新实现主应用“记忆”内容区：复用现有 MainAppShell、MainSidebar 和标题栏，包含动态记录数、搜索、四类查询筛选、分组列表、键盘导航、选中详情和“过去的出现”展开；980px 以下切换为列表/详情单栏并提供返回入口。当前数据与交互均为有类型前端 fixture，不调用 Rust、SQLite 或 DeepSeek。
 - “记忆”与“今天”在同一主应用外壳内切换；侧栏仍只允许手动折叠，折叠态继续隐藏品牌并保留导航/设置图标，记忆选中态保持可见。记忆页样式只使用 `rr-memory-*` 作用域，没有改变 overlay、Quick AI、UIA、快捷键或原生窗口行为。
+- 已按 `design-open-design/readray-writing-2.html` 在现有 MainAppShell 中实现“写作”页：写作导航和“今天”页写作入口进入本地文章库，支持空白稿/已有稿、标题与正文编辑、自动保存演示、文档切换、选区菜单、“问 ReadRay”多轮追问、四类写作教练问题、定位/修改/进一步提示/参考/忽略、多轮检查、双栏文本差异、写作模式总结、完成版本和继续修改。
+- 写作编辑区沿用 1440×900 / scale 1：纸张宽 680px、正文 18px / 1.68 行高、编辑列上限 736px；草稿/完成稿未打开辅助栏时纸张视觉居中，检查或辅助打开后自然重排。900px 以下教练保持 320px 右侧覆盖层，正文列宽不变；全局侧栏仍只允许用户手动在 252/72px 间折叠。
+- 写作状态和分析内容来自 `writingViewModel.ts` 的有类型 fixture；`WritingRepository` 隔离了页面与刷新恢复实现，当前 `BrowserWritingDemoRepository` 使用 localStorage，仅作为前端演示，未接 Rust、SQLite、DeepSeek、Quick AI、UIA 或真实写作分析接口。
+- 写作页已通过本机 pnpm 构建，并在浏览器 1440×900 与模拟真实应用 840×600 容器完成交互验收：文章库搜索/筛选/排序、空稿、已有稿、选区辅助、追问、问题操作、本轮改动保留、第二轮重新筛选、删除/新增差异、完成稿版本回看、长标题、720 词长正文、侧栏展开/折叠和窄窗教练覆盖均通过；未修改 Tauri 窗口、overlay、快捷键或设计稿目录。
 
 ## 下一步
 

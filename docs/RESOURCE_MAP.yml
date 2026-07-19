@@ -4,8 +4,8 @@ project:
   repo_root: "."
 
 meta:
-  version: "1.1"
-  last_updated: "2026-07-16"
+  version: "1.2"
+  last_updated: "2026-07-18"
   updated_by: "Codex"
   source_of_truth: "docs/RESOURCE_MAP.yml"
   language: "zh-CN"
@@ -131,7 +131,7 @@ source_areas:
     purpose: "React 前端源码。"
     status: "active"
     read_when:
-      - "开发解释卡、历史页、复盘页、设置页。"
+      - "开发解释卡、历史页、写作页、复盘页、设置页。"
     notes: "Tauri + Vite + React + TypeScript 脚手架入口；App.tsx 按 URL 区分 main 与 overlay：main 只装配主应用窗口控制，默认入口继续承载 Ctrl+Alt+R 无选区解释、Quick AI 和 UIA 锚定卡链路。"
     risk: "不要在前端入口塞入原生系统逻辑。"
 
@@ -141,7 +141,7 @@ source_areas:
     read_when:
       - "调整正常主应用壳、标题栏、侧栏折叠或首页装配。"
       - "将主应用接入独立 Tauri 窗口。"
-    notes: "当前通过 ?view=main 进入主应用，并在同一外壳内切换“今天”和“记忆”；标题栏回调已接通 Rust 原生拖动、最小化、最大化/恢复和隐藏，组件本身仍不读取数据库。"
+    notes: "当前通过 ?view=main 进入主应用，并在同一外壳内切换“今天”“写作”和“记忆”；标题栏会同步写作草稿/检查/对比/完成状态，窗口回调已接通 Rust 原生拖动、最小化、最大化/恢复和隐藏，组件本身仍不读取数据库。"
     risk: "不要把快捷 overlay 状态机迁入主应用组件；主应用业务入口仍只保留回调，不伪造后端功能。"
 
   - path: "src/components/MainSidebar.tsx"
@@ -158,7 +158,7 @@ source_areas:
     read_when:
       - "调整今天页内容层级、学习入口或首页输入交互。"
     notes: "输入框支持 Enter 提交、Shift+Enter 换行，并按 scrollHeight 在随窗口变化的 120–240px 上限内自动增高和回缩；所有学习入口和提交行为只通过 props 回调预留接线。"
-    risk: "复习、写作和完整对话页仍未实现；不要在本组件接真实数据查询。"
+    risk: "复习和完整对话页仍未实现；不要在本组件接真实数据查询。"
 
   - path: "src/components/MemoryPage.tsx"
     purpose: "主应用“记忆”页的搜索、类型筛选、记录列表、详情和过去出现交互骨架。"
@@ -168,6 +168,31 @@ source_areas:
       - "将记忆页 fixture 接入现有 learning_records Rust commands。"
     notes: "复用 MainAppShell、MainSidebar 和标题栏；当前只消费有类型前端 fixture，搜索、筛选、动态结果计数、列表选择、键盘导航、过去出现展开和 980px 以下列表/详情切换均在前端完成。"
     risk: "不要复制第二套 App Shell，不要在页面组件直接读取 SQLite，也不要把当前 fixture 误当作真实学习记录。"
+
+  - path: "src/components/WritingPage.tsx"
+    purpose: "主应用“写作”页的文档工作流与状态装配边界。"
+    status: "active"
+    read_when:
+      - "调整写作草稿、检查、对比、完成稿或文章库状态流。"
+      - "将写作前端演示 repository 替换为 Tauri/SQLite commands。"
+    notes: "复用 MainAppShell、MainSidebar 和标题栏；WritingEditor、WritingCoach、WritingCompareView、WritingLibrary 分别负责正文编辑、写作辅助/问题教练、双栏差异和文章目录，支持空稿、自动保存演示、选区菜单、多轮检查、完成版本与继续修改。"
+    risk: "不要复制第二套 App Shell，不要在页面组件直接读取 localStorage/SQLite，也不要把当前前端分析 fixture 误当作真实模型结果。"
+
+  - path: "src/writingViewModel.ts"
+    purpose: "写作模块的类型、文档/问题 fixture、写作模式总结和前端问答演示映射。"
+    status: "active"
+    read_when:
+      - "调整写作页面协议、教练问题、示例文档或写作辅助演示回答。"
+    notes: "包含 WritingSnapshot、WritingDocumentRecord、WritingIssue 等类型及设计稿确认的演示数据；不调用 Rust、SQLite、DeepSeek 或 Quick AI。"
+    risk: "接入真实分析接口时保留页面模型边界，不把 LLM 原始响应直接耦合到组件。"
+
+  - path: "src/writingRepository.ts"
+    purpose: "可替换的写作文章前端 repository 边界。"
+    status: "demo"
+    read_when:
+      - "调整写作刷新恢复演示或接入正式本地存储。"
+    notes: "当前 BrowserWritingDemoRepository 仅为前端演示刷新恢复而封装 localStorage；页面组件只依赖 WritingRepository。"
+    risk: "这不是正式 SQLite 方案；接入 Tauri commands 后应在装配层替换，不让页面组件直接访问数据库或 localStorage。"
 
   - path: "src/mainAppViewModel.ts"
     purpose: "主应用首页和侧栏的有类型前端 fixture/view model。"
@@ -192,6 +217,14 @@ source_areas:
       - "调整 readray-today-2 主应用视觉、响应式布局或侧栏状态。"
     notes: "样式全部使用 rr-main-* / rr-memory-* 作用域；全局外壳、今天页和记忆页统一使用 1440×900 / scale 1 设计坐标。浏览器预览排版固定 1440×900 画布后整体等比缩放，响应式规则按应用容器尺寸触发；侧栏只允许手动折叠。"
     risk: "不要把主应用浅色 token 写回 overlay 的 tokens.css。"
+
+  - path: "src/styles/writing-page.css"
+    purpose: "主应用写作内容区的独立视觉与响应式样式。"
+    status: "active"
+    read_when:
+      - "调整写作纸张、教练栏、对比页、文章库或窄窗口覆盖层。"
+    notes: "全部使用 rr-writing-* 作用域；沿用 1440×900 / scale 1 基线，纸张宽 680px、编辑列上限 736px，900px 以下教练为 320px 右侧覆盖层；不包含全局 App Shell 和侧栏自动折叠规则。"
+    risk: "不要在这里重定义字体资源、全局标题栏、窗口控件或侧栏折叠行为。"
 
   - path: "src/assets/fonts/"
     purpose: "ReadRay 随应用分发的默认字体文件与许可证。"
