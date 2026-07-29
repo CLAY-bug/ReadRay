@@ -1,5 +1,6 @@
 use crate::conversations::{
     ConversationMessage, ConversationRole, ConversationSnapshot, ConversationStore,
+    RecentConversationSummary,
 };
 use crate::deepseek_client::{configured_model, post_chat_completion};
 use serde::{Deserialize, Serialize};
@@ -8,6 +9,8 @@ use tauri::AppHandle;
 
 const QUICK_AI_MAX_USER_MESSAGE_LEN: usize = 8_000;
 const QUICK_AI_MAX_CONTEXT_MESSAGES: usize = 40;
+const DEFAULT_RECENT_CONVERSATION_LIMIT: u32 = 6;
+const MAX_RECENT_CONVERSATION_LIMIT: u32 = 20;
 const QUICK_AI_MAX_TOKENS: u16 = 2_048;
 const QUICK_AI_TEMPERATURE: f32 = 0.5;
 const QUICK_AI_SYSTEM_PROMPT: &str = "You are Quick AI inside ReadRay. Answer the user's request directly and clearly. Match the user's language and use plain text without Markdown formatting. Do not claim to use tools, web search, local learning records, or long-term memory because none are available in this mode.";
@@ -45,6 +48,25 @@ pub fn get_quick_ai_conversation(
     conversation_id: i64,
 ) -> Result<Option<ConversationSnapshot>, String> {
     ConversationStore::open_for_app(&app)?.get(conversation_id)
+}
+
+#[tauri::command]
+pub fn list_recent_quick_ai_conversations(
+    app: AppHandle,
+    limit: Option<u32>,
+) -> Result<Vec<RecentConversationSummary>, String> {
+    let limit = resolve_recent_conversation_limit(limit)?;
+    ConversationStore::open_for_app(&app)?.list_recent(limit)
+}
+
+fn resolve_recent_conversation_limit(limit: Option<u32>) -> Result<u32, String> {
+    let limit = limit.unwrap_or(DEFAULT_RECENT_CONVERSATION_LIMIT);
+    if limit == 0 || limit > MAX_RECENT_CONVERSATION_LIMIT {
+        return Err(format!(
+            "最近 Quick AI 对话数量必须在 1 到 {MAX_RECENT_CONVERSATION_LIMIT} 之间。"
+        ));
+    }
+    Ok(limit)
 }
 
 #[tauri::command]
@@ -240,6 +262,17 @@ mod tests {
     fn empty_message_is_rejected_before_request() {
         let error = validate_user_message("  ").unwrap_err();
         assert!(error.contains("不能为空"));
+    }
+
+    #[test]
+    fn recent_conversation_limit_is_bounded() {
+        assert_eq!(
+            resolve_recent_conversation_limit(None).unwrap(),
+            DEFAULT_RECENT_CONVERSATION_LIMIT
+        );
+        assert_eq!(resolve_recent_conversation_limit(Some(1)).unwrap(), 1);
+        assert!(resolve_recent_conversation_limit(Some(0)).is_err());
+        assert!(resolve_recent_conversation_limit(Some(21)).is_err());
     }
 
     #[test]

@@ -1,12 +1,12 @@
 # ReadRay 交接记录
 
-最后更新：2026-07-18
+最后更新：2026-07-29
 
 ## TL;DR
 
-- 当前状态：阶段一 Tauri 基础能力、阶段二解释卡 MVP、阶段三 SQLite/Quick AI 数据底座已完成；正常主应用“今天”“记忆”和“写作”三个内容页已复用同一 App Shell，其中写作页已完成设计稿的全状态前端交互骨架，并与快捷 overlay 共存。
+- 当前状态：主应用“记忆”页与“今天”页均已接入真实 Tauri/SQLite 数据；完整对话页已按 OpenDesign HTML 在同一外壳内实现，前端 fixture 已具备正确的多轮 thread、停止/继续、重生成、失败/重试、完整导出和抽屉焦点状态。
 - 当前路线：Windows 原生，Tauri + React + TypeScript + Rust + SQLite。
-- 下一步：将首页摘要、最近对话和输入提交接到现有 Rust 数据边界；快捷 overlay/Quick AI 窗口继续保持独立。
+- 下一步：在单独任务中设计真实 Quick AI repository/service 接线；复习页仍需单独设计。
 - 当前约束：不使用通用 Agent 框架，不内置商业词典，不做 OCR、本地大模型或跨平台支持。
 - 交接原则：`HANDOFF.md` 只记录会影响下一次恢复上下文的信息，小型文档措辞和格式调整不记录。
 
@@ -25,8 +25,14 @@
 - `src/components/CenteredCommandInput.tsx`：MVP compact UI 的无选区居中输入组件骨架，当前由 App 传入真实查询状态。
 - `src/components/CenteredResultPanel.tsx`：MVP compact UI 的无选区输入后居中结果面板骨架，当前由 App 传入 ExplanationCard 映射后的真实查询结果。
 - `src/components/QuickAiPanel.tsx` / `src/types/quickAi.ts`：Quick AI 多轮对话视图及前端协议。
-- `src/components/MainAppShell.tsx` / `MainSidebar.tsx` / `TodayPage.tsx`：正常主应用壳、全局导航与“今天”首页。
-- `src/mainAppViewModel.ts` / `src/styles/main-app.css`：主应用有类型 fixture 和独立浅色视觉样式。
+- `src/components/MainAppShell.tsx` / `MainSidebar.tsx` / `TodayPage.tsx`：正常主应用壳、真实最近对话、今天事实摘要与状态装配。
+- `src/components/ConversationPage.tsx` / `src/conversationViewModel.ts` / `src/conversationFixtureService.ts`：完整对话页、类型协议和本轮可替换前端 fixture service。
+- `src/todayRepository.ts` / `src/todayService.ts`：今日学习记录与 Quick AI 最近标题的 Tauri repository、本机日期范围和展示映射。
+- `src/mainAppFixture.ts` / `src/todayPreviewService.ts`：仅浏览器预览或测试使用，不进入正式 Tauri 数据路径。
+- `src/components/MemoryPage.tsx` / `src/memoryRepository.ts` / `src/memoryService.ts` / `src/types/learningRecord.ts`：记忆页真实分页/搜索/筛选/详情 UI，Tauri repository、四类 ExplanationCard 映射和 Rust camelCase 返回协议。
+- `src/memoryPageFixture.ts` / `src/memoryPreviewService.ts`：仅浏览器预览或测试使用的记忆 fixture，不进入正式 Tauri 数据路径。
+- `src/mainAppViewModel.ts` / `src/styles/main-app.css`：主应用展示类型、静态导航和独立浅色视觉样式。
+- `src/styles/conversation-page.css`：完整对话内容区、消息流、输入框、抽屉和窄窗口的独立 `rr-conversation-*` 样式。
 - `src/components/WritingPage.tsx` / `WritingEditor.tsx` / `WritingCoach.tsx` / `WritingCompareView.tsx` / `WritingLibrary.tsx`：写作草稿、辅助问答、文章检查、对比、完成稿和文章库交互骨架。
 - `src/writingViewModel.ts` / `src/writingRepository.ts` / `src/styles/writing-page.css`：写作类型与 fixture、可替换前端演示 repository、独立 `rr-writing-*` 样式；当前 repository 使用 localStorage 只为演示刷新恢复，不是正式 SQLite 方案。
 - `src/assets/fonts/`：应用随包内嵌的 Geist、Geist Mono、Newsreader、思源黑体和思源宋体变量字体及对应 OFL 许可证。
@@ -122,7 +128,7 @@
 - 已完成阶段三第一轮 SQLite 本地记忆数据底座：Rust `learning_records` 使用 `rusqlite` bundled，在 Tauri 应用数据目录创建 `readray.sqlite3`；`schema_migrations` 记录已执行迁移，v1 追加保存每一次成功查询事件，不以重复文本覆盖旧记录。
 - 学习事件字段包含自增 ID、原始 queryText、标准化文本、queryType、sourceType、可选 sourceApp、可选 contextText、完整 ExplanationCard JSON、ExplanationCard schemaVersion、创建时间和可空 difficulty；当前不生成虚假难度，统一保存 `NULL`。
 - `create_explanation_card` 仍先完成 DeepSeek 解析与 validator，只有成功后才调用学习记录写入；manual 与 windows_uia 共用同一 command 链路。请求、解析、validator 或存储失败均不留下学习记录，并返回可诊断错误。
-- 已提供 Rust/Tauri commands：`list_learning_records`、`search_learning_records`、`get_learning_record`、`delete_learning_record`。前端不接触 SQL；主应用“记忆”页已有 fixture 交互骨架，但尚未接入这些 commands。
+- 学习记录 Rust/Tauri commands 已覆盖分页、搜索、单条、删除与只读今日摘要；主应用“记忆”和“今天”均通过各自 repository/service 调用，前端页面不接触 SQL。
 - 已完成 Ctrl+Alt+R 居中窗口 Quick AI 第一版：默认仍为解释输入，按 Tab 进入 Quick AI；有输入时自动作为首条消息，空输入创建空白对话；支持 Enter 发送、Shift+Enter 换行、Ctrl+N 新建对话和 Esc 隐藏。
 - Quick AI 使用独立普通 chat/completions 请求，不复用 ExplanationCard JSON；ExplanationCard 与 Quick AI 仅共用 `.env`、DeepSeek model/API key 和 HTTP 错误边界，默认模型为 `deepseek-v4-flash`。
 - 正常主应用与快捷 overlay 已建立独立 Tauri 窗口：正常启动只显示 `main` 主应用，隐藏的 `overlay` 继续监听全局快捷键和 UIA 事件；主窗口失焦不隐藏，只有 overlay 失焦自动隐藏。
@@ -130,28 +136,37 @@
 - 主应用左侧栏只允许用户手动折叠，不根据窗口宽度自动折叠；默认 1440×900 / scale 1 下展开与折叠宽度为 252/72px。展开态显示品牌和折叠按钮，折叠态隐藏品牌、只在侧栏顶部居中显示展开按钮。
 - SQLite migration v2 新增 `quick_ai_conversations` 和 `quick_ai_messages`，每条消息保存 role、content、sequence 和时间；与 `learning_records` 完全分表，结构可供未来主应用读取并继续对话。
 - Quick AI 已完成真实 DeepSeek Flash 两轮连续对话和真实窗口 smoke：第二轮能使用第一轮上下文；Ctrl+N 与 Esc 行为通过。当前响应按纯文本展示，不解析 Markdown。
-- 已按 `design-open-design/readray-today-2.html` 重建正常主应用“今天”首页：包含无边框外壳和标题栏、全局侧栏、最近对话、三个学习入口和底部输入框；数据来自有类型 fixture，所有入口通过回调预留接线，不伪造后端功能。
+- “今天”首页已通过独立 Today repository/service 接入真实数据：前端按本机日期传入当天起止时间，Rust 只读返回今日查询总数和最新 LearningRecord；摘要只陈述数量、最近查询、类型、来源与时间，不生成复习数量、高频词或趋势。
+- 首页原复习卡改为“查看今天的学习记录”，最近查询入口进入现有记忆页并选中对应记录，写作入口仍只进入文章库；无今日记录时显示诚实空状态并禁用无目标入口。overlay 保存成功事件会同时刷新已打开的记忆页与今天页。
+- 侧栏最近对话通过最小只读 list_recent_quick_ai_conversations command 获取真实 Quick AI 标题，排除无标题空对话；点击最近对话、新对话与首页输入已进入完整对话页，查看全部仍保留 callback。
 - 主应用全局外壳、“今天”页与“记忆”页统一以 1440×900 和 `--rr-main-design-scale: 1` 为默认基线，不再混用外壳 0.75、内容区 1.0 两套比例。浏览器预览始终排版完整 1440×900 画布，再按可用空间做单一整体缩放；主应用响应式断点改由应用容器尺寸触发，避免较小的预览视口错误压缩页面节奏。
 - 应用默认字体已更新为随包内嵌的 Geist + Source Han Sans SC（界面）、Newsreader + Source Han Serif SC（阅读正文）、Geist Mono + Source Han Sans SC（元信息），并提交四份对应 OFL。五个字体文件与本机 OpenDesign 源资源的 SHA-256 一致，完整字体约增加 34MB 应用资源，正式 UI 不依赖联网或本机安装。
 - 最近对话标题只在 `scrollWidth > clientWidth` 时应用右侧渐隐，未溢出的短标题完整显示；“查看全部对话”不再使用前置省略号。侧栏折叠后只显示居中的展开控件，不在内容标题区放置侧栏开关。
 - 首页输入框已移除底部快捷键和本地保存提示；输入内容变化或窗口缩放时按真实 `scrollHeight` 自动增高和回缩，高度上限为随窗口变化的 120–240px，达到上限后保留内部滚动但隐藏原生滚动条，不再出现上下箭头。
 - 主应用标题栏已接通原生拖动、最小化、最大化/恢复和隐藏；主窗口初始尺寸为 1440×900、最小尺寸为 840×600，无边框、可缩放并显示在任务栏，Windows/Tauri 原生阴影和页面外阴影均已关闭。
 - 本机 150% DPI 的真实 Tauri WebView 实测为 `innerWidth=1440`、`innerHeight=900`、`devicePixelRatio=1.5`；主应用 1440×900、标题栏 44px、展开侧栏 252px、导航行 38px、记忆内容壳 1048px、搜索框 44px、记录列 368px。品牌/导航/最近对话 computed font-size 分别为 14/14/13px，均实际命中随包字体。`pnpm build` 与 `pnpm tauri dev` 均通过，未改 overlay、Quick AI、UIA、DeepSeek、SQLite 或快捷键行为。
-- 已按 `design-open-design/readray-memory-font-comparison.html` 重新实现主应用“记忆”内容区：复用现有 MainAppShell、MainSidebar 和标题栏，包含动态记录数、搜索、四类查询筛选、分组列表、键盘导航、选中详情和“过去的出现”展开；980px 以下切换为列表/详情单栏并提供返回入口。当前数据与交互均为有类型前端 fixture，不调用 Rust、SQLite 或 DeepSeek。
+- 主应用“记忆”内容区已接入真实 Tauri/SQLite 学习记录：TypeScript 协议与 Rust camelCase 返回一致，独立 repository/service 负责 list/search/get commands 和四类 ExplanationCard 到 MemoryRecordItem 的映射；总数、分页、关键词、queryType、选择详情、真实来源应用和今天/昨天/更早时间分组均来自后端记录。
+- 正式 Tauri 路径不再读取 memory fixture；fixture 仅由非 Tauri 浏览器预览动态加载。overlay 成功保存 ExplanationCard 后广播记录更新，已打开的主窗口记忆页会重新读取当前后端查询。当前 schema 没有可靠的重复出现聚合，正式记录的“过去的出现”入口保持隐藏。
 - “记忆”与“今天”在同一主应用外壳内切换；侧栏仍只允许手动折叠，折叠态继续隐藏品牌并保留导航/设置图标，记忆选中态保持可见。记忆页样式只使用 `rr-memory-*` 作用域，没有改变 overlay、Quick AI、UIA、快捷键或原生窗口行为。
 - 已按 `design-open-design/readray-writing-2.html` 在现有 MainAppShell 中实现“写作”页：写作导航和“今天”页写作入口进入本地文章库，支持空白稿/已有稿、标题与正文编辑、自动保存演示、文档切换、选区菜单、“问 ReadRay”多轮追问、四类写作教练问题、定位/修改/进一步提示/参考/忽略、多轮检查、双栏文本差异、写作模式总结、完成版本和继续修改。
 - 写作编辑区沿用 1440×900 / scale 1：纸张宽 680px、正文 18px / 1.68 行高、编辑列上限 736px；草稿/完成稿未打开辅助栏时纸张视觉居中，检查或辅助打开后自然重排。900px 以下教练保持 320px 右侧覆盖层，正文列宽不变；全局侧栏仍只允许用户手动在 252/72px 间折叠。
 - 写作状态和分析内容来自 `writingViewModel.ts` 的有类型 fixture；`WritingRepository` 隔离了页面与刷新恢复实现，当前 `BrowserWritingDemoRepository` 使用 localStorage，仅作为前端演示，未接 Rust、SQLite、DeepSeek、Quick AI、UIA 或真实写作分析接口。
 - 写作页已通过本机 pnpm 构建，并在浏览器 1440×900 与模拟真实应用 840×600 容器完成交互验收：文章库搜索/筛选/排序、空稿、已有稿、选区辅助、追问、问题操作、本轮改动保留、第二轮重新筛选、删除/新增差异、完成稿版本回看、长标题、720 词长正文、侧栏展开/折叠和窄窗教练覆盖均通过；未修改 Tauri 窗口、overlay、快捷键或设计稿目录。
+- 已按 `design-open-design/readray-conversation-2.html` 在现有 MainAppShell 中实现完整对话页：保留 1440×900 外壳、736px 消息列和输入区，覆盖空对话、设计示例消息、长提示折叠、生成/停止/失败/重试、更多菜单、导出提示和记忆引用抽屉。
+- 今天页输入、新对话和最近对话均已进入完整对话页；最近对话继续由现有 TodayService 提供标题，对话正文当前由有类型 `FixtureConversationService` 映射，不调用 Tauri、SQLite、DeepSeek 或真实 Quick AI commands。
+- `ConversationService.generateReply` 现显式接收 conversationId、完整消息上下文、prompt 和 append/regenerate 模式；续问保留全历史，完成回答写回 thread，重生成只替换当前最后一轮 assistant。生成未结束时输入草稿保持可编辑但禁止提交和导出；停止/继续保留已生成分片，create/load/generate/export 异常均有保留内容的失败状态。
+- 完成态 fixture 导出会生成用户可下载的 Markdown 文件，并按顺序包含 thread 的全部 user/assistant 消息；空结果或异常不会触发下载或成功提示。
+- fixture 通过 `conversationFailure=create|load|generate|export` 显式注入一次性失败，正常重新生成不再强制失败；`[fixture:slow]` 只用于停止/继续演示。记忆抽屉关闭时会移除内部焦点并恢复到原引用按钮。
+- 完整对话页已通过人工验收；本机 pnpm 构建与 Headless Playwright 回归均通过，覆盖生成中重复发送、连续两轮、生成中导出、完整 Markdown 下载、导出失败重试、停止/继续、重新生成和抽屉焦点。1440×900、840×600 与两档侧栏无页面级横纵溢出或重叠；`preview=responsive` 只用于浏览器真实容器验收，不改变默认等比预览和 Tauri。
 
 ## 下一步
 
-继续推进：主应用与快捷 overlay 的多窗口基础已建立；记忆页视觉交互骨架完成后，下一项是按已有 Rust 边界接入主应用真实数据。
+继续推进：完整对话页视觉、前端状态和人工验收均已完成；下一项是在保持现有 `ConversationService` 边界的前提下，单独设计真实对话 repository/service 接线和复习页。
 
-- UI 只调用 Rust 的分页、关键词搜索、queryType 筛选、单条读取和删除 commands，不向前端暴露 SQL 或数据库路径。
+- 记忆 UI 已通过 repository/service 调用 Rust 的分页、关键词搜索、queryType 筛选和单条读取 commands，不向前端暴露 SQL 或数据库路径；删除 command 本轮未增加页面入口。
 - 继续保持每次成功查询为独立事件；重复查询聚合、高频词、趋势和复盘规划属于后续阶段。
-- Quick AI 的对话历史列表、删除、重命名和主应用入口留待主应用任务；当前只提供 create/get/send commands。
-- 正常主应用后续需要接线：今天摘要聚合、最近对话查询、首页输入转入持续对话；不要复用或改变现有 overlay 的窗口尺寸和快捷键行为。
+- Quick AI 现已提供最小最近标题列表；对话页已具备 UI，但完整历史读取、真实继续对话、导出、删除和重命名仍待 repository/service 与 commands。
+- 首页输入已经进入完整对话页，不再丢失可见响应；当前响应仍是 fixture，接真实发送时必须替换 ConversationService，不能从页面组件直接 invoke。
 - 新环境仍需复制 `.env.example` 为 `.env` 后自行填写 `DEEPSEEK_API_KEY`；真实 `.env` 不提交。
 
 阶段一完成标准：
@@ -175,8 +190,9 @@
 - C 盘空间已缓解但仍需留意；VS Build Tools 主体和 Windows Kits 仍在 C 盘，若空间再次吃紧，再评估卸载后重装 VS Build Tools 到 D 盘。
 - 本地查询分类是启发式规则，缩写、多句但很短的文本、缺少句末标点的长句仍可能被相邻类型吸收；优先通过真实样本调整规则，不增加第二次 LLM 分类请求。
 - 长段落输出受模型 JSON 稳定性和窗口最大高度约束；当前上限 4096 字符，不代表整页翻译能力。
-- 记忆页当前只使用有类型 fixture；接入真实学习记录时，应映射现有分页、关键词搜索、queryType 筛选和单条读取 commands，不让前端直接读取 SQLite。
+- 记忆页的重复出现聚合仍未实现；当前 learning_records 只保存独立查询事件，不能可靠生成“过去的出现”次数或时间线，因此正式 UI 隐藏该入口。
 - Quick AI 当前不渲染 Markdown，也不做流式输出；长回复需要等待完整响应后一次显示，这是后续体验优化点，不影响当前多轮对话闭环。
+- 主应用完整对话页当前使用前端 fixture service：页面状态和 Markdown 下载已验收，但刷新持久化、真实历史、真实模型发送、原生导出持久化和记忆引用聚合尚未接线。
 - 主窗口关闭后当前只隐藏并保持后台快捷键能力，但没有托盘、单实例或重新显示主窗口入口；发布前需要确定“关闭即隐藏”是否为正式产品策略，并补齐重新进入主应用的路径。
 
 ## 暂时不要做

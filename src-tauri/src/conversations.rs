@@ -40,6 +40,14 @@ pub struct ConversationSnapshot {
     pub messages: Vec<ConversationMessage>,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RecentConversationSummary {
+    pub id: i64,
+    pub title: String,
+    pub updated_at_unix_ms: i64,
+}
+
 struct StoredConversation {
     id: i64,
     title: Option<String>,
@@ -258,6 +266,35 @@ impl ConversationStore {
         self.get(id)?
             .ok_or_else(|| format!("Quick AI 对话不存在：id={id}"))
     }
+
+    pub(crate) fn list_recent(&self, limit: u32) -> Result<Vec<RecentConversationSummary>, String> {
+        let mut statement = self
+            .connection
+            .prepare(
+                "SELECT id, title, updated_at_unix_ms
+                 FROM quick_ai_conversations
+                 WHERE title IS NOT NULL AND length(trim(title)) > 0
+                 ORDER BY updated_at_unix_ms DESC, id DESC
+                 LIMIT ?1",
+            )
+            .map_err(|error| format!("最近 Quick AI 对话语句无法准备：{error}"))?;
+        let rows = statement
+            .query_map([i64::from(limit)], |row| {
+                Ok(RecentConversationSummary {
+                    id: row.get(0)?,
+                    title: row.get(1)?,
+                    updated_at_unix_ms: row.get(2)?,
+                })
+            })
+            .map_err(|error| format!("最近 Quick AI 对话读取失败：{error}"))?;
+        let mut conversations = Vec::new();
+        for row in rows {
+            conversations
+                .push(row.map_err(|error| format!("最近 Quick AI 对话行读取失败：{error}"))?);
+        }
+
+        Ok(conversations)
+    }
 }
 
 fn insert_message(
@@ -433,6 +470,30 @@ pub(crate) mod tests {
 
         assert!(loaded.messages.is_empty());
         assert!(loaded.title.is_none());
+        drop(store);
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn recent_conversations_have_real_titles_and_exclude_empty_conversations() {
+        let (root, path) = test_database_path();
+        let mut store = ConversationStore::open_path(&path).unwrap();
+        store.create("deepseek-v4-flash").unwrap();
+        let first = store
+            .create_with_exchange("deepseek-v4-flash", "First topic", "First answer")
+            .unwrap();
+        let second = store
+            .create_with_exchange("deepseek-v4-flash", "Second topic", "Second answer")
+            .unwrap();
+
+        let recent = store.list_recent(1).unwrap();
+        assert_eq!(recent.len(), 1);
+        assert_eq!(recent[0].id, second.id);
+        assert_eq!(recent[0].title, "Second topic");
+        let all = store.list_recent(10).unwrap();
+        assert_eq!(all.len(), 2);
+        assert_eq!(all[1].id, first.id);
+
         drop(store);
         let _ = fs::remove_dir_all(root);
     }

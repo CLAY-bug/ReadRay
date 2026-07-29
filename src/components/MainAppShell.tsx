@@ -1,10 +1,21 @@
-import { useEffect, useState, type MouseEvent } from "react";
+import { useEffect, useRef, useState, type MouseEvent } from "react";
+import type {
+  ConversationRequest,
+  ConversationService,
+} from "../conversationViewModel";
 import type {
   MainAppNavigationId,
   MainAppViewModel,
+  RecentConversationItem,
   TodayActionId,
 } from "../mainAppViewModel";
 import type { MemoryPageViewModel } from "../memoryViewModel";
+import type { MemoryService } from "../memoryService";
+import {
+  createTodayLoadingViewModel,
+  type TodayService,
+} from "../todayService";
+import ConversationPage from "./ConversationPage";
 import MainAppIcon from "./MainAppIcon";
 import MainSidebar from "./MainSidebar";
 import MemoryPage from "./MemoryPage";
@@ -14,6 +25,12 @@ import WritingPage from "./WritingPage";
 type MainAppShellProps = {
   viewModel: MainAppViewModel;
   memoryViewModel: MemoryPageViewModel;
+  memoryService: MemoryService | null;
+  memoryRefreshToken: number;
+  todayService: TodayService | null;
+  learningRecordsRefreshToken: number;
+  conversationRefreshToken: number;
+  conversationService: ConversationService;
   onNewConversation?: () => void;
   onNavigate?: (id: MainAppNavigationId) => void;
   onRecentConversationSelect?: (id: string) => void;
@@ -32,6 +49,12 @@ const noop = () => undefined;
 function MainAppShell({
   viewModel,
   memoryViewModel,
+  memoryService,
+  memoryRefreshToken,
+  todayService,
+  learningRecordsRefreshToken,
+  conversationRefreshToken,
+  conversationService,
   onNewConversation = noop,
   onNavigate = noop,
   onRecentConversationSelect = noop,
@@ -45,10 +68,90 @@ function MainAppShell({
   onClose = noop,
 }: MainAppShellProps) {
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
-  const [activeNavigationId, setActiveNavigationId] =
-    useState<MainAppNavigationId>("today");
+  const [activePageId, setActivePageId] =
+    useState<MainAppNavigationId | "conversation">("today");
+  const [activeConversationId, setActiveConversationId] = useState<string>();
+  const conversationRequestKeyRef = useRef(0);
+  const [conversationRequest, setConversationRequest] =
+    useState<ConversationRequest>({
+      key: 0,
+      kind: "new",
+    });
   const [writingLibraryRequest, setWritingLibraryRequest] = useState(0);
   const [writingWindowTitle, setWritingWindowTitle] = useState("写作");
+  const [requestedMemoryRecordId, setRequestedMemoryRecordId] = useState<string>();
+  const [todayViewModel, setTodayViewModel] = useState(() =>
+    createTodayLoadingViewModel(),
+  );
+  const [todayStatus, setTodayStatus] = useState<
+    "loading" | "ready" | "error"
+  >("loading");
+  const [todayError, setTodayError] = useState<string>();
+  const [todayRetryToken, setTodayRetryToken] = useState(0);
+  const [recentConversations, setRecentConversations] =
+    useState<RecentConversationItem[]>([]);
+  const [recentStatus, setRecentStatus] = useState<
+    "loading" | "ready" | "error"
+  >("loading");
+  const [recentError, setRecentError] = useState<string>();
+  const [recentRetryToken, setRecentRetryToken] = useState(0);
+
+  useEffect(() => {
+    let ignore = false;
+    if (!todayService) {
+      setTodayStatus("loading");
+      return;
+    }
+
+    setTodayStatus("loading");
+    setTodayError(undefined);
+    setTodayViewModel(createTodayLoadingViewModel());
+    todayService.loadToday().then(
+      (nextViewModel) => {
+        if (!ignore) {
+          setTodayViewModel(nextViewModel);
+          setTodayStatus("ready");
+        }
+      },
+      (error) => {
+        if (!ignore) {
+          setTodayError(error instanceof Error ? error.message : String(error));
+          setTodayStatus("error");
+        }
+      },
+    );
+    return () => {
+      ignore = true;
+    };
+  }, [learningRecordsRefreshToken, todayRetryToken, todayService]);
+
+  useEffect(() => {
+    let ignore = false;
+    if (!todayService) {
+      setRecentStatus("loading");
+      return;
+    }
+
+    setRecentStatus("loading");
+    setRecentError(undefined);
+    todayService.listRecentConversations().then(
+      (conversations) => {
+        if (!ignore) {
+          setRecentConversations(conversations);
+          setRecentStatus("ready");
+        }
+      },
+      (error) => {
+        if (!ignore) {
+          setRecentError(error instanceof Error ? error.message : String(error));
+          setRecentStatus("error");
+        }
+      },
+    );
+    return () => {
+      ignore = true;
+    };
+  }, [conversationRefreshToken, recentRetryToken, todayService]);
 
   useEffect(() => {
     function handleShortcut(event: KeyboardEvent) {
@@ -77,7 +180,10 @@ function MainAppShell({
 
   function handleNavigate(id: MainAppNavigationId) {
     if (id === "today" || id === "memory" || id === "writing") {
-      setActiveNavigationId(id);
+      setActivePageId(id);
+    }
+    if (id === "memory") {
+      setRequestedMemoryRecordId(undefined);
     }
     if (id === "writing") {
       setWritingLibraryRequest((request) => request + 1);
@@ -88,8 +194,57 @@ function MainAppShell({
   function handleTodayActionSelect(id: TodayActionId) {
     if (id === "writing") {
       handleNavigate("writing");
+    } else {
+      const action = todayViewModel.actions.find((item) => item.id === id);
+      if (action && !action.disabled) {
+        setRequestedMemoryRecordId(action.recordId);
+        setActivePageId("memory");
+        onNavigate("memory");
+      }
     }
     onTodayActionSelect(id);
+  }
+
+  function nextConversationRequestKey() {
+    conversationRequestKeyRef.current += 1;
+    return conversationRequestKeyRef.current;
+  }
+
+  function handleNewConversation() {
+    setActiveConversationId(undefined);
+    setConversationRequest({
+      key: nextConversationRequestKey(),
+      kind: "new",
+    });
+    setActivePageId("conversation");
+    onNewConversation();
+  }
+
+  function handleRecentConversationSelect(id: string) {
+    const conversation = recentConversations.find((item) => item.id === id);
+    if (!conversation) {
+      return;
+    }
+    setActiveConversationId(id);
+    setConversationRequest({
+      key: nextConversationRequestKey(),
+      kind: "existing",
+      conversationId: id,
+      title: conversation.title,
+    });
+    setActivePageId("conversation");
+    onRecentConversationSelect(id);
+  }
+
+  function handleSubmitPrompt(value: string) {
+    setActiveConversationId(undefined);
+    setConversationRequest({
+      key: nextConversationRequestKey(),
+      kind: "prompt",
+      prompt: value,
+    });
+    setActivePageId("conversation");
+    onSubmitPrompt(value);
   }
 
   const collapseButton = (
@@ -106,7 +261,11 @@ function MainAppShell({
   );
 
   return (
-    <div className={`rr-main-app${sidebarCollapsed ? " is-sidebar-collapsed" : ""}`}>
+    <div
+      className={`rr-main-app${sidebarCollapsed ? " is-sidebar-collapsed" : ""}${
+        activePageId === "conversation" ? " is-conversation-page" : ""
+      }`}
+    >
       <header
         className="rr-main-titlebar"
         aria-label="ReadRay 窗口标题栏"
@@ -118,9 +277,11 @@ function MainAppShell({
           {collapseButton}
         </div>
         <div className="rr-main-drag-zone">
-          {activeNavigationId === "memory"
+          {activePageId === "conversation"
+            ? "对话"
+            : activePageId === "memory"
             ? "记忆"
-            : activeNavigationId === "writing" ? writingWindowTitle : "今天"}
+            : activePageId === "writing" ? writingWindowTitle : "今天"}
         </div>
         <div className="rr-main-window-controls" aria-label="窗口控制">
           <button className="rr-main-window-control" type="button" aria-label="最小化" onClick={onMinimize}>
@@ -144,25 +305,46 @@ function MainAppShell({
         <MainSidebar
           collapsed={sidebarCollapsed}
           navigation={viewModel.navigation}
-          recentConversations={viewModel.recentConversations}
-          activeNavigationId={activeNavigationId}
-          onNewConversation={onNewConversation}
+          recentConversations={recentConversations}
+          recentStatus={recentStatus}
+          recentError={recentError}
+          activeNavigationId={
+            activePageId === "conversation" ? undefined : activePageId
+          }
+          activeConversationId={
+            activePageId === "conversation" ? activeConversationId : undefined
+          }
+          onNewConversation={handleNewConversation}
           onNavigate={handleNavigate}
-          onRecentConversationSelect={onRecentConversationSelect}
+          onRecentConversationSelect={handleRecentConversationSelect}
           onViewAllConversations={onViewAllConversations}
+          onRecentRetry={() => setRecentRetryToken((token) => token + 1)}
         />
-        {activeNavigationId === "memory" ? (
-          <MemoryPage viewModel={memoryViewModel} />
-        ) : activeNavigationId === "writing" ? (
+        {activePageId === "conversation" ? (
+          <ConversationPage
+            request={conversationRequest}
+            service={conversationService}
+          />
+        ) : activePageId === "memory" ? (
+          <MemoryPage
+            viewModel={memoryViewModel}
+            service={memoryService}
+            refreshToken={memoryRefreshToken}
+            requestedRecordId={requestedMemoryRecordId}
+          />
+        ) : activePageId === "writing" ? (
           <WritingPage
             libraryRequest={writingLibraryRequest}
             onWindowTitleChange={setWritingWindowTitle}
           />
         ) : (
           <TodayPage
-            viewModel={viewModel.today}
+            viewModel={todayViewModel}
+            status={todayStatus}
+            error={todayError}
+            onRetry={() => setTodayRetryToken((token) => token + 1)}
             onActionSelect={handleTodayActionSelect}
-            onSubmitPrompt={onSubmitPrompt}
+            onSubmitPrompt={handleSubmitPrompt}
           />
         )}
       </div>

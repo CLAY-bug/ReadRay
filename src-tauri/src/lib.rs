@@ -896,8 +896,10 @@ pub fn run() {
             learning_records::search_learning_records,
             learning_records::get_learning_record,
             learning_records::delete_learning_record,
+            learning_records::get_today_learning_summary,
             quick_ai::create_quick_ai_conversation,
             quick_ai::get_quick_ai_conversation,
+            quick_ai::list_recent_quick_ai_conversations,
             quick_ai::send_quick_ai_message
         ])
         .run(tauri::generate_context!())

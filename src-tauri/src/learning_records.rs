@@ -87,6 +87,13 @@ pub struct LearningRecordPage {
     pub total: u64,
 }
 
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TodayLearningSummary {
+    pub record_count: u64,
+    pub latest_record: Option<LearningRecord>,
+}
+
 struct StoredLearningRecord {
     id: i64,
     query_text: String,
@@ -217,6 +224,47 @@ impl LearningRecordStore {
                 .map_err(|_| "学习记录总数无效，数据库返回了负数。".to_string())?,
         })
     }
+
+    fn summarize_range(
+        &self,
+        start_unix_ms: i64,
+        end_unix_ms: i64,
+    ) -> Result<TodayLearningSummary, String> {
+        if end_unix_ms <= start_unix_ms {
+            return Err("今日学习记录时间范围无效。".to_string());
+        }
+
+        let record_count: i64 = self
+            .connection
+            .query_row(
+                "SELECT COUNT(*) FROM learning_records
+                 WHERE created_at_unix_ms >= ?1 AND created_at_unix_ms < ?2",
+                params![start_unix_ms, end_unix_ms],
+                |row| row.get(0),
+            )
+            .map_err(|error| format!("今日学习记录数量读取失败：{error}"))?;
+        let mut statement = self
+            .connection
+            .prepare(&format!(
+                "{} WHERE created_at_unix_ms >= ?1 AND created_at_unix_ms < ?2
+                 ORDER BY created_at_unix_ms DESC, id DESC LIMIT 1",
+                select_learning_record_sql("")
+            ))
+            .map_err(|error| format!("今日最近学习记录语句无法准备：{error}"))?;
+        let latest_stored = statement
+            .query_row(
+                params![start_unix_ms, end_unix_ms],
+                read_stored_learning_record,
+            )
+            .optional()
+            .map_err(|error| format!("今日最近学习记录读取失败：{error}"))?;
+
+        Ok(TodayLearningSummary {
+            record_count: u64::try_from(record_count)
+                .map_err(|_| "今日学习记录数量无效，数据库返回了负数。".to_string())?,
+            latest_record: latest_stored.map(decode_learning_record).transpose()?,
+        })
+    }
 }
 
 pub fn initialize_for_app(app: &AppHandle) -> Result<(), String> {
@@ -286,6 +334,16 @@ pub fn get_learning_record(app: AppHandle, id: i64) -> Result<Option<LearningRec
 #[tauri::command]
 pub fn delete_learning_record(app: AppHandle, id: i64) -> Result<bool, String> {
     LearningRecordStore::open(&database_path_for_app(&app)?)?.delete(id)
+}
+
+#[tauri::command]
+pub fn get_today_learning_summary(
+    app: AppHandle,
+    start_unix_ms: i64,
+    end_unix_ms: i64,
+) -> Result<TodayLearningSummary, String> {
+    LearningRecordStore::open(&database_path_for_app(&app)?)?
+        .summarize_range(start_unix_ms, end_unix_ms)
 }
 
 fn database_path_for_app(app: &AppHandle) -> Result<PathBuf, String> {
@@ -695,6 +753,39 @@ mod tests {
                 .total,
             2
         );
+        drop(store);
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn today_summary_counts_range_and_returns_latest_record() {
+        let (root, path) = test_database_path();
+        let store = LearningRecordStore::open(&path).unwrap();
+        let first = save(&store, "market", SourceType::Manual);
+        let second = save(&store, "market share", SourceType::WindowsUia);
+        store
+            .connection
+            .execute(
+                "UPDATE learning_records SET created_at_unix_ms = ?1 WHERE id = ?2",
+                params![100_i64, first.id],
+            )
+            .unwrap();
+        store
+            .connection
+            .execute(
+                "UPDATE learning_records SET created_at_unix_ms = ?1 WHERE id = ?2",
+                params![200_i64, second.id],
+            )
+            .unwrap();
+
+        let summary = store.summarize_range(50, 250).unwrap();
+        assert_eq!(summary.record_count, 2);
+        assert_eq!(summary.latest_record.unwrap().id, second.id);
+        let narrower = store.summarize_range(50, 150).unwrap();
+        assert_eq!(narrower.record_count, 1);
+        assert_eq!(narrower.latest_record.unwrap().id, first.id);
+        assert!(store.summarize_range(100, 100).is_err());
+
         drop(store);
         let _ = fs::remove_dir_all(root);
     }

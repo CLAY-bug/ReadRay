@@ -10,11 +10,15 @@ type MainSidebarProps = {
   collapsed: boolean;
   navigation: MainAppNavigationItem[];
   recentConversations: RecentConversationItem[];
-  activeNavigationId: MainAppNavigationId;
+  recentStatus: "loading" | "ready" | "error";
+  recentError?: string;
+  activeNavigationId?: MainAppNavigationId;
+  activeConversationId?: string;
   onNewConversation: () => void;
   onNavigate: (id: MainAppNavigationId) => void;
   onRecentConversationSelect: (id: string) => void;
   onViewAllConversations: () => void;
+  onRecentRetry: () => void;
 };
 
 type RecentConversationTitleProps = {
@@ -56,11 +60,15 @@ function MainSidebar({
   collapsed,
   navigation,
   recentConversations,
+  recentStatus,
+  recentError,
   activeNavigationId,
+  activeConversationId,
   onNewConversation,
   onNavigate,
   onRecentConversationSelect,
   onViewAllConversations,
+  onRecentRetry,
 }: MainSidebarProps) {
   return (
     <aside className="rr-main-sidebar" aria-label="全局导航">
@@ -100,17 +108,31 @@ function MainSidebar({
       <section className="rr-main-recent" aria-labelledby="rr-main-recent-label">
         <div className="rr-main-section-label" id="rr-main-recent-label">最近对话</div>
         <div className="rr-main-recent-list">
-          {recentConversations.map((conversation) => (
+          {recentStatus === "loading" ? (
+            <div className="rr-main-recent-state">正在读取…</div>
+          ) : recentStatus === "error" ? (
+            <div className="rr-main-recent-state" title={recentError}>
+              <span>暂时无法读取</span>
+              <button type="button" onClick={onRecentRetry}>重试</button>
+            </div>
+          ) : recentConversations.length ? recentConversations.map((conversation) => (
             <button
-              className="rr-main-recent-item"
+              className={`rr-main-recent-item${
+                conversation.id === activeConversationId ? " is-active" : ""
+              }`}
               type="button"
               key={conversation.id}
               title={conversation.title}
+              aria-current={
+                conversation.id === activeConversationId ? "page" : undefined
+              }
               onClick={() => onRecentConversationSelect(conversation.id)}
             >
               <RecentConversationTitle title={conversation.title} />
             </button>
-          ))}
+          )) : (
+            <div className="rr-main-recent-state">暂无 Quick AI 对话</div>
+          )}
         </div>
         <button
           className="rr-main-view-all"

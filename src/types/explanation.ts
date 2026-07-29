@@ -1,9 +1,16 @@
 export type QueryType = "word" | "phrase" | "sentence" | "paragraph";
 
+export type SourceType =
+  | "manual"
+  | "clipboard"
+  | "windows_uia"
+  | "app_adapter"
+  | "ocr";
+
 export type CaptureInput = {
   queryText: string;
   contextText?: string | null;
-  sourceType: "manual" | "clipboard" | "windows_uia" | "app_adapter" | "ocr";
+  sourceType: SourceType;
   sourceApp?: string | null;
 };
 

@@ -6,7 +6,7 @@ import {
   type CSSProperties,
 } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { listen } from "@tauri-apps/api/event";
+import { emit, listen } from "@tauri-apps/api/event";
 import { readText, writeText } from "@tauri-apps/plugin-clipboard-manager";
 import AnchoredResultPopover, {
   type AnchorRect,
@@ -18,6 +18,10 @@ import CenteredResultPanel, {
 import MainAppShell from "./components/MainAppShell";
 import QuickAiPanel from "./components/QuickAiPanel";
 import {
+  FixtureConversationService,
+  type FixtureConversationFailureOperation,
+} from "./conversationFixtureService";
+import {
   mapExplanationCard,
   type ExplanationResult,
 } from "./explanationViewModel";
@@ -26,10 +30,21 @@ import type {
   ExplanationCard,
 } from "./types/explanation";
 import type { QuickAiConversation } from "./types/quickAi";
-import { mainAppFixture } from "./mainAppViewModel";
-import { memoryPageFixture } from "./memoryViewModel";
+import { mainAppViewModel } from "./mainAppViewModel";
+import { memoryPageViewModel } from "./memoryViewModel";
+import { TauriMemoryRepository } from "./memoryRepository";
+import {
+  RepositoryMemoryService,
+  type MemoryService,
+} from "./memoryService";
+import { TauriTodayRepository } from "./todayRepository";
+import {
+  RepositoryTodayService,
+  type TodayService,
+} from "./todayService";
 import "./App.css";
 import "./styles/main-app.css";
+import "./styles/conversation-page.css";
 import "./styles/writing-page.css";
 
 type CheckState = "idle" | "running" | "ok" | "warn" | "error";
@@ -141,6 +156,18 @@ function sourceAppForCapture(capture: WindowsUiaCapture) {
   }
 
   return null;
+}
+
+function notifyLearningRecordCreated() {
+  void emit("readray://learning-record-created").catch((error) => {
+    console.error("ReadRay 学习记录更新通知失败：", error);
+  });
+}
+
+function notifyQuickAiConversationUpdated() {
+  void emit("readray://quick-ai-conversation-updated").catch((error) => {
+    console.error("ReadRay Quick AI 对话更新通知失败：", error);
+  });
 }
 
 function formatError(error: unknown) {
@@ -327,6 +354,7 @@ function OverlayApp() {
       const card = await invoke<ExplanationCard>("create_explanation_card", {
         input,
       });
+      notifyLearningRecordCreated();
       if (anchoredRequestId.current !== requestId) {
         return;
       }
@@ -521,6 +549,7 @@ function OverlayApp() {
       const card = await invoke<ExplanationCard>("create_explanation_card", {
         input,
       });
+      notifyLearningRecordCreated();
       setCenteredResult(mapExplanationCard(card));
       setCommandStage("result");
     } catch (error) {
@@ -553,6 +582,7 @@ function OverlayApp() {
           content,
         },
       );
+      notifyQuickAiConversationUpdated();
       if (quickAiRequestId.current !== requestId) {
         return;
       }
@@ -931,9 +961,120 @@ function MainAppWindow() {
   const [isMaximized, setIsMaximized] = useState(false);
   const [previewScale, setPreviewScale] = useState(1);
   const isTauriRuntime = "__TAURI_INTERNALS__" in window;
+  const isResponsivePreview =
+    !isTauriRuntime &&
+    new URLSearchParams(window.location.search).get("preview") === "responsive";
+  const [memoryService, setMemoryService] = useState<MemoryService | null>(() =>
+    isTauriRuntime
+      ? new RepositoryMemoryService(new TauriMemoryRepository())
+      : null,
+  );
+  const [todayService, setTodayService] = useState<TodayService | null>(() =>
+    isTauriRuntime
+      ? new RepositoryTodayService(new TauriTodayRepository())
+      : null,
+  );
+  const [memoryRefreshToken, setMemoryRefreshToken] = useState(0);
+  const [learningRecordsRefreshToken, setLearningRecordsRefreshToken] =
+    useState(0);
+  const [conversationRefreshToken, setConversationRefreshToken] = useState(0);
+  const [conversationService] = useState(
+    () => {
+      const requestedFailure = new URLSearchParams(
+        window.location.search,
+      ).get("conversationFailure");
+      const failOnce = ["create", "load", "generate", "export"].includes(
+        requestedFailure ?? "",
+      )
+        ? (requestedFailure as FixtureConversationFailureOperation)
+        : undefined;
+      const failureCount =
+        import.meta.env.DEV &&
+        (failOnce === "create" || failOnce === "load")
+          ? 2
+          : 1;
+      return new FixtureConversationService({ failOnce, failureCount });
+    },
+  );
+
+  useEffect(() => {
+    if (!isTauriRuntime) {
+      return;
+    }
+
+    let disposed = false;
+    let unlisten: (() => void) | undefined;
+    void listen("readray://learning-record-created", () => {
+      setMemoryRefreshToken((token) => token + 1);
+      setLearningRecordsRefreshToken((token) => token + 1);
+    }).then((cleanup) => {
+      if (disposed) {
+        cleanup();
+      } else {
+        unlisten = cleanup;
+      }
+    }).catch((error) => {
+      console.error("ReadRay 学习记录更新监听失败：", error);
+    });
+
+    return () => {
+      disposed = true;
+      unlisten?.();
+    };
+  }, [isTauriRuntime]);
+
+  useEffect(() => {
+    if (!isTauriRuntime) {
+      return;
+    }
+
+    let disposed = false;
+    let unlisten: (() => void) | undefined;
+    void listen("readray://quick-ai-conversation-updated", () => {
+      setConversationRefreshToken((token) => token + 1);
+    }).then((cleanup) => {
+      if (disposed) {
+        cleanup();
+      } else {
+        unlisten = cleanup;
+      }
+    }).catch((error) => {
+      console.error("ReadRay Quick AI 对话更新监听失败：", error);
+    });
+
+    return () => {
+      disposed = true;
+      unlisten?.();
+    };
+  }, [isTauriRuntime]);
 
   useEffect(() => {
     if (isTauriRuntime) {
+      return;
+    }
+
+    let ignore = false;
+    void import("./memoryPreviewService").then(
+      ({ createBrowserPreviewMemoryService }) => {
+        if (!ignore) {
+          setMemoryService(createBrowserPreviewMemoryService());
+        }
+      },
+    );
+    void import("./todayPreviewService").then(
+      ({ createBrowserPreviewTodayService }) => {
+        if (!ignore) {
+          setTodayService(createBrowserPreviewTodayService());
+        }
+      },
+    );
+    return () => {
+      ignore = true;
+    };
+  }, [isTauriRuntime]);
+
+  useEffect(() => {
+    if (isTauriRuntime || isResponsivePreview) {
       return;
     }
 
@@ -958,7 +1099,7 @@ function MainAppWindow() {
     syncPreviewScale();
     window.addEventListener("resize", syncPreviewScale);
     return () => window.removeEventListener("resize", syncPreviewScale);
-  }, [isTauriRuntime]);
+  }, [isResponsivePreview, isTauriRuntime]);
 
   useEffect(() => {
     if (!isTauriRuntime) {
@@ -1003,8 +1144,14 @@ function MainAppWindow() {
 
   const mainApp = (
     <MainAppShell
-      viewModel={mainAppFixture}
-      memoryViewModel={memoryPageFixture}
+      viewModel={mainAppViewModel}
+      memoryViewModel={memoryPageViewModel}
+      memoryService={memoryService}
+      memoryRefreshToken={memoryRefreshToken}
+      todayService={todayService}
+      learningRecordsRefreshToken={learningRecordsRefreshToken}
+      conversationRefreshToken={conversationRefreshToken}
+      conversationService={conversationService}
       isMaximized={isMaximized}
       onStartDragging={() => {
         void runMainWindowCommand("start_main_window_drag");
@@ -1020,6 +1167,10 @@ function MainAppWindow() {
   );
 
   if (isTauriRuntime) {
+    return mainApp;
+  }
+
+  if (isResponsivePreview) {
     return mainApp;
   }
 

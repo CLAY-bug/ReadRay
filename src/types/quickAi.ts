@@ -17,3 +17,9 @@ export type QuickAiConversation = {
   updatedAtUnixMs: number;
   messages: QuickAiMessage[];
 };
+
+export type RecentQuickAiConversation = {
+  id: number;
+  title: string;
+  updatedAtUnixMs: number;
+};

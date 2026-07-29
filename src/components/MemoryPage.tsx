@@ -1,64 +1,176 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type {
   MemoryFilterId,
   MemoryPageViewModel,
   MemoryRecordItem,
 } from "../memoryViewModel";
+import type { MemoryService } from "../memoryService";
 import MainAppIcon from "./MainAppIcon";
 
 type MemoryPageProps = {
   viewModel: MemoryPageViewModel;
+  service: MemoryService | null;
+  refreshToken: number;
+  requestedRecordId?: string;
 };
 
-function searchableText(record: MemoryRecordItem) {
-  return [
-    record.query,
-    record.summary,
-    record.meaning,
-    record.sentence,
-    record.translation,
-    record.app,
-  ]
-    .join(" ")
-    .toLocaleLowerCase("zh-CN");
+const PAGE_SIZE = 20;
+
+function errorMessage(error: unknown) {
+  if (error instanceof Error) {
+    return error.message;
+  }
+  return String(error);
 }
 
-function MemoryPage({ viewModel }: MemoryPageProps) {
+function MemoryPage({
+  viewModel,
+  service,
+  refreshToken,
+  requestedRecordId,
+}: MemoryPageProps) {
   const [searchQuery, setSearchQuery] = useState("");
+  const [debouncedQuery, setDebouncedQuery] = useState("");
   const [activeFilter, setActiveFilter] = useState<MemoryFilterId>("all");
-  const [selectedId, setSelectedId] = useState(viewModel.records[0]?.id ?? "");
+  const [records, setRecords] = useState<MemoryRecordItem[]>([]);
+  const [totalCount, setTotalCount] = useState(0);
+  const [page, setPage] = useState(1);
+  const [selectedId, setSelectedId] = useState("");
+  const [selectedRecord, setSelectedRecord] =
+    useState<MemoryRecordItem | null>(null);
+  const [listStatus, setListStatus] = useState<
+    "loading" | "ready" | "error"
+  >("loading");
+  const [listError, setListError] = useState<string>();
+  const [detailStatus, setDetailStatus] = useState<
+    "idle" | "loading" | "ready" | "error"
+  >("idle");
+  const [detailError, setDetailError] = useState<string>();
+  const [reloadToken, setReloadToken] = useState(0);
+  const [detailReloadToken, setDetailReloadToken] = useState(0);
   const [historyExpanded, setHistoryExpanded] = useState(false);
   const [detailOpen, setDetailOpen] = useState(false);
   const searchInputRef = useRef<HTMLInputElement>(null);
   const recordsScrollRef = useRef<HTMLDivElement>(null);
   const detailScrollRef = useRef<HTMLDivElement>(null);
   const detailTitleRef = useRef<HTMLHeadingElement>(null);
-
-  const visibleRecords = useMemo(() => {
-    const normalizedQuery = searchQuery.trim().toLocaleLowerCase("zh-CN");
-
-    return viewModel.records.filter((record) => {
-      const matchesType = activeFilter === "all" || record.type === activeFilter;
-      const matchesQuery =
-        !normalizedQuery || searchableText(record).includes(normalizedQuery);
-      return matchesType && matchesQuery;
-    });
-  }, [activeFilter, searchQuery, viewModel.records]);
-
-  const effectiveSelectedId = visibleRecords.some(
-    (record) => record.id === selectedId,
-  )
-    ? selectedId
-    : (visibleRecords[0]?.id ?? "");
-  const selectedRecord = viewModel.records.find(
-    (record) => record.id === effectiveSelectedId,
-  );
+  const handledRequestedRecordIdRef = useRef<string | undefined>(undefined);
 
   useEffect(() => {
-    if (effectiveSelectedId !== selectedId) {
-      setSelectedId(effectiveSelectedId);
+    const timeout = window.setTimeout(() => {
+      setDebouncedQuery(searchQuery.trim());
+    }, 250);
+    return () => window.clearTimeout(timeout);
+  }, [searchQuery]);
+
+  useEffect(() => {
+    let ignore = false;
+
+    if (!service) {
+      setListStatus("loading");
+      return;
     }
-  }, [effectiveSelectedId, selectedId]);
+
+    setListStatus("loading");
+    setListError(undefined);
+    setRecords([]);
+    setTotalCount(0);
+    setSelectedId("");
+    setSelectedRecord(null);
+    setDetailStatus("idle");
+
+    service
+      .listRecords({
+        page,
+        pageSize: PAGE_SIZE,
+        keyword: debouncedQuery || undefined,
+        queryType: activeFilter === "all" ? undefined : activeFilter,
+      })
+      .then((result) => {
+        if (ignore) {
+          return;
+        }
+
+        const lastPage = Math.max(1, Math.ceil(result.total / result.pageSize));
+        if (!result.records.length && result.total > 0 && page > lastPage) {
+          setPage(lastPage);
+          return;
+        }
+
+        setRecords(result.records);
+        setTotalCount(result.total);
+        setListStatus("ready");
+        const requestedRecord =
+          requestedRecordId &&
+          handledRequestedRecordIdRef.current !== requestedRecordId
+            ? result.records.find((record) => record.id === requestedRecordId)
+            : undefined;
+        if (requestedRecordId) {
+          handledRequestedRecordIdRef.current = requestedRecordId;
+        }
+        const nextRecord = requestedRecord ?? result.records[0] ?? null;
+        setSelectedId(nextRecord?.id ?? "");
+        setSelectedRecord(null);
+      })
+      .catch((error) => {
+        if (ignore) {
+          return;
+        }
+        setTotalCount(0);
+        setListError(errorMessage(error));
+        setListStatus("error");
+      });
+
+    return () => {
+      ignore = true;
+    };
+  }, [
+    activeFilter,
+    debouncedQuery,
+    page,
+    refreshToken,
+    reloadToken,
+    requestedRecordId,
+    service,
+  ]);
+
+  useEffect(() => {
+    let ignore = false;
+
+    if (!service || !selectedId) {
+      setDetailStatus("idle");
+      return;
+    }
+
+    setDetailStatus("loading");
+    setDetailError(undefined);
+    service
+      .getRecord(selectedId)
+      .then((record) => {
+        if (ignore) {
+          return;
+        }
+        if (!record) {
+          setSelectedRecord(null);
+          setDetailError("这条学习记录已不存在。");
+          setDetailStatus("error");
+          return;
+        }
+        setSelectedRecord(record);
+        setDetailStatus("ready");
+      })
+      .catch((error) => {
+        if (ignore) {
+          return;
+        }
+        setDetailError(errorMessage(error));
+        setDetailStatus("error");
+      });
+
+    return () => {
+      ignore = true;
+    };
+  }, [detailReloadToken, selectedId, service]);
 
   useEffect(() => {
     setHistoryExpanded(false);
@@ -71,7 +183,7 @@ function MemoryPage({ viewModel }: MemoryPageProps) {
     if (recordsScrollRef.current) {
       recordsScrollRef.current.scrollTop = 0;
     }
-  }, [activeFilter, searchQuery]);
+  }, [activeFilter, debouncedQuery, page]);
 
   useEffect(() => {
     function focusSearch(event: KeyboardEvent) {
@@ -85,7 +197,7 @@ function MemoryPage({ viewModel }: MemoryPageProps) {
         setDetailOpen(false);
         window.requestAnimationFrame(() => {
           recordsScrollRef.current
-            ?.querySelector<HTMLElement>(`[data-record-id="${effectiveSelectedId}"]`)
+            ?.querySelector<HTMLElement>(`[data-record-id="${selectedId}"]`)
             ?.focus({ preventScroll: true });
         });
       } else if (
@@ -101,7 +213,7 @@ function MemoryPage({ viewModel }: MemoryPageProps) {
 
     window.addEventListener("keydown", focusSearch);
     return () => window.removeEventListener("keydown", focusSearch);
-  }, [detailOpen, effectiveSelectedId, searchQuery]);
+  }, [detailOpen, searchQuery, selectedId]);
 
   useEffect(() => {
     const compactLayout = window.matchMedia("(max-width: 980px)");
@@ -117,13 +229,16 @@ function MemoryPage({ viewModel }: MemoryPageProps) {
 
   function resetSearch() {
     setSearchQuery("");
+    setDebouncedQuery("");
     setActiveFilter("all");
+    setPage(1);
     searchInputRef.current?.focus();
   }
 
   function selectRecord(recordId: string) {
     const compactLayout = window.matchMedia("(max-width: 980px)").matches;
     setSelectedId(recordId);
+    setSelectedRecord(null);
     setDetailOpen(compactLayout);
 
     if (compactLayout) {
@@ -160,10 +275,16 @@ function MemoryPage({ viewModel }: MemoryPageProps) {
     items[targetIndex]?.focus();
   }
 
-  const isFiltering = activeFilter !== "all" || Boolean(searchQuery.trim());
-  const recordCountLabel = isFiltering
-    ? `${visibleRecords.length} 条结果`
-    : `${viewModel.totalCount} 条记录`;
+  const isFiltering = activeFilter !== "all" || Boolean(debouncedQuery);
+  const pageCount = Math.max(1, Math.ceil(totalCount / PAGE_SIZE));
+  const recordCountLabel =
+    listStatus === "loading"
+      ? "正在读取"
+      : listStatus === "error"
+        ? "读取失败"
+        : isFiltering
+          ? `${totalCount} 条结果`
+          : `${totalCount} 条记录`;
 
   return (
     <main className="rr-main-panel rr-memory-page" data-testid="memory-page">
@@ -190,7 +311,10 @@ function MemoryPage({ viewModel }: MemoryPageProps) {
               value={searchQuery}
               placeholder={viewModel.searchPlaceholder}
               aria-label="搜索记忆记录"
-              onChange={(event) => setSearchQuery(event.target.value)}
+              onChange={(event) => {
+                setSearchQuery(event.target.value);
+                setPage(1);
+              }}
             />
             {searchQuery ? (
               <button
@@ -220,7 +344,10 @@ function MemoryPage({ viewModel }: MemoryPageProps) {
                   type="button"
                   aria-pressed={active}
                   key={filter.id}
-                  onClick={() => setActiveFilter(filter.id)}
+                  onClick={() => {
+                    setActiveFilter(filter.id);
+                    setPage(1);
+                  }}
                 >
                   {filter.label}
                 </button>
@@ -235,77 +362,146 @@ function MemoryPage({ viewModel }: MemoryPageProps) {
               className="rr-memory-records-scroll"
               ref={recordsScrollRef}
               onKeyDown={handleRecordListKeyDown}
+              aria-busy={listStatus === "loading"}
             >
-              {viewModel.groups.map((group) => {
-                const groupRecords = visibleRecords.filter(
-                  (record) => record.group === group,
-                );
-                if (!groupRecords.length) {
-                  return null;
-                }
+              {listStatus === "ready"
+                ? viewModel.groups.map((group) => {
+                    const groupRecords = records.filter(
+                      (record) => record.group === group,
+                    );
+                    if (!groupRecords.length) {
+                      return null;
+                    }
 
-                const groupId = `rr-memory-group-${group}`;
-                return (
-                  <section
-                    className="rr-memory-record-group"
-                    aria-labelledby={groupId}
-                    key={group}
-                  >
-                    <h2 className="rr-memory-group-label" id={groupId}>
-                      {group}
-                    </h2>
-                    {groupRecords.map((record) => {
-                      const active = record.id === effectiveSelectedId;
-                      return (
-                        <button
-                          className={`rr-memory-record${active ? " is-active" : ""}`}
-                          data-testid={`memory-record-${record.id}`}
-                          data-record-id={record.id}
-                          type="button"
-                          aria-current={active ? "true" : undefined}
-                          aria-controls="rr-memory-detail-content"
-                          key={record.id}
-                          onClick={() => selectRecord(record.id)}
-                        >
-                          <span className="rr-memory-record-query">
-                            {record.query}
-                          </span>
-                          <span className="rr-memory-record-summary">
-                            {record.summary}
-                          </span>
-                          <span className="rr-memory-record-meta">
-                            <span>{record.app}</span>
-                            <span aria-hidden="true">·</span>
-                            <span>{record.time}</span>
-                            <span aria-hidden="true">·</span>
-                            <span>{record.typeLabel}</span>
-                          </span>
-                        </button>
-                      );
-                    })}
-                  </section>
-                );
-              })}
+                    const groupId = `rr-memory-group-${group}`;
+                    return (
+                      <section
+                        className="rr-memory-record-group"
+                        aria-labelledby={groupId}
+                        key={group}
+                      >
+                        <h2 className="rr-memory-group-label" id={groupId}>
+                          {group}
+                        </h2>
+                        {groupRecords.map((record) => {
+                          const active = record.id === selectedId;
+                          return (
+                            <button
+                              className={`rr-memory-record${active ? " is-active" : ""}`}
+                              data-testid={`memory-record-${record.id}`}
+                              data-record-id={record.id}
+                              type="button"
+                              aria-current={active ? "true" : undefined}
+                              aria-controls="rr-memory-detail-content"
+                              key={record.id}
+                              onClick={() => selectRecord(record.id)}
+                            >
+                              <span className="rr-memory-record-query">
+                                {record.query}
+                              </span>
+                              <span className="rr-memory-record-summary">
+                                {record.summary}
+                              </span>
+                              <span className="rr-memory-record-meta">
+                                <span>{record.app}</span>
+                                <span aria-hidden="true">·</span>
+                                <span>{record.time}</span>
+                                <span aria-hidden="true">·</span>
+                                <span>{record.typeLabel}</span>
+                              </span>
+                            </button>
+                          );
+                        })}
+                      </section>
+                    );
+                  })
+                : null}
 
-              {!visibleRecords.length ? (
+              {listStatus === "loading" ? (
                 <div className="rr-memory-pane-state" role="status">
-                  <strong>没有找到相关语境</strong>
-                  <p>试试更短的关键词，或切换查询类型。</p>
+                  <strong>正在读取记忆</strong>
+                  <p>正在从本地学习记录中加载。</p>
+                </div>
+              ) : listStatus === "error" ? (
+                <div className="rr-memory-pane-state" role="alert">
+                  <strong>暂时无法读取记忆</strong>
+                  <p>{listError}</p>
                   <button
                     className="rr-memory-state-action"
                     type="button"
-                    onClick={resetSearch}
+                    onClick={() => setReloadToken((token) => token + 1)}
                   >
-                    清除搜索条件
+                    重新读取
                   </button>
+                </div>
+              ) : !records.length ? (
+                <div className="rr-memory-pane-state" role="status">
+                  <strong>没有找到相关语境</strong>
+                  <p>
+                    {isFiltering
+                      ? "试试更短的关键词，或切换查询类型。"
+                      : "完成一次查询后，学习记录会出现在这里。"}
+                  </p>
+                  {isFiltering ? (
+                    <button
+                      className="rr-memory-state-action"
+                      type="button"
+                      onClick={resetSearch}
+                    >
+                      清除搜索条件
+                    </button>
+                  ) : null}
                 </div>
               ) : null}
             </div>
+
+            {totalCount > 0 ? (
+              <nav className="rr-memory-pagination" aria-label="记忆记录分页">
+                <button
+                  type="button"
+                  disabled={page <= 1 || listStatus === "loading"}
+                  onClick={() => setPage((current) => Math.max(1, current - 1))}
+                >
+                  上一页
+                </button>
+                <span>
+                  {page} / {pageCount}
+                </span>
+                <button
+                  type="button"
+                  disabled={page >= pageCount || listStatus === "loading"}
+                  onClick={() =>
+                    setPage((current) => Math.min(pageCount, current + 1))
+                  }
+                >
+                  下一页
+                </button>
+              </nav>
+            ) : null}
           </section>
 
           <section className="rr-memory-detail-pane" aria-label="选中记录详情">
             <div className="rr-memory-detail-scroll" ref={detailScrollRef}>
-              {selectedRecord ? (
+              {detailStatus === "loading" && !selectedRecord ? (
+                <div className="rr-memory-pane-state" role="status">
+                  <strong>正在读取详情</strong>
+                  <p>正在打开这条学习记录。</p>
+                </div>
+              ) : detailStatus === "error" ? (
+                <div className="rr-memory-pane-state" role="alert">
+                  <strong>暂时无法读取详情</strong>
+                  <p>{detailError}</p>
+                  {selectedId ? (
+                    <button
+                      className="rr-memory-state-action"
+                      type="button"
+                      onClick={() => setDetailReloadToken((token) => token + 1)}
+                    >
+                      重新读取
+                    </button>
+                  ) : null}
+                </div>
+              ) : selectedRecord ? (
                 <article
                   className="rr-memory-detail-content"
                   id="rr-memory-detail-content"
@@ -322,7 +518,7 @@ function MemoryPage({ viewModel }: MemoryPageProps) {
                         window.requestAnimationFrame(() => {
                           recordsScrollRef.current
                             ?.querySelector<HTMLElement>(
-                              `[data-record-id="${effectiveSelectedId}"]`,
+                              `[data-record-id="${selectedId}"]`,
                             )
                             ?.focus({ preventScroll: true });
                         });
@@ -361,21 +557,25 @@ function MemoryPage({ viewModel }: MemoryPageProps) {
                     </p>
                   </section>
 
-                  <section className="rr-memory-detail-section">
-                    <h3>在当时语境中的意思</h3>
-                    <p className="rr-memory-context-meaning">
-                      {selectedRecord.meaning}
-                    </p>
-                  </section>
+                  {selectedRecord.meaning ? (
+                    <section className="rr-memory-detail-section">
+                      <h3>在当时语境中的意思</h3>
+                      <p className="rr-memory-context-meaning">
+                        {selectedRecord.meaning}
+                      </p>
+                    </section>
+                  ) : null}
 
                   <section className="rr-memory-detail-section">
                     <h3>当时看到的内容</h3>
                     <blockquote className="rr-memory-source-sentence" lang="en">
                       {selectedRecord.sentence}
                     </blockquote>
-                    <p className="rr-memory-translation">
-                      {selectedRecord.translation}
-                    </p>
+                    {selectedRecord.translation ? (
+                      <p className="rr-memory-translation">
+                        {selectedRecord.translation}
+                      </p>
+                    ) : null}
                   </section>
 
                   <div className="rr-memory-source-row">

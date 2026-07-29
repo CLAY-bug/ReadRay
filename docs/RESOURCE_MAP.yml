@@ -4,8 +4,8 @@ project:
   repo_root: "."
 
 meta:
-  version: "1.2"
-  last_updated: "2026-07-18"
+  version: "1.5"
+  last_updated: "2026-07-29"
   updated_by: "Codex"
   source_of_truth: "docs/RESOURCE_MAP.yml"
   language: "zh-CN"
@@ -141,24 +141,49 @@ source_areas:
     read_when:
       - "调整正常主应用壳、标题栏、侧栏折叠或首页装配。"
       - "将主应用接入独立 Tauri 窗口。"
-    notes: "当前通过 ?view=main 进入主应用，并在同一外壳内切换“今天”“写作”和“记忆”；标题栏会同步写作草稿/检查/对比/完成状态，窗口回调已接通 Rust 原生拖动、最小化、最大化/恢复和隐藏，组件本身仍不读取数据库。"
-    risk: "不要把快捷 overlay 状态机迁入主应用组件；主应用业务入口仍只保留回调，不伪造后端功能。"
+    notes: "当前通过 ?view=main 进入主应用，并在同一外壳内切换“今天”“写作”“记忆”和“对话”；由装配层加载 TodayService、MemoryService、ConversationService 与最近 Quick AI 对话，页面组件不直接读取数据库。"
+    risk: "不要把快捷 overlay 状态机或 invoke 迁入页面组件；对话页当前只接前端 fixture service，不能误当作真实 Quick AI 历史或发送链路。"
 
   - path: "src/components/MainSidebar.tsx"
     purpose: "主应用全局左侧栏，包含新对话、学习导航、最近对话、查看全部和设置入口。"
     status: "active"
     read_when:
       - "调整主应用导航结构、最近对话展示或手动折叠态。"
-    notes: "默认宽 252px，用户手动折叠为 72px 纯图标栏；不根据窗口宽度自动折叠，最近对话不显示圆点。"
-    risk: "入口当前只触发回调，不应在组件内伪造页面跳转或读取后端数据。"
+    notes: "默认宽 252px，用户手动折叠为 72px 纯图标栏；展开态最近对话来自真实 Quick AI 标题，并支持 loading/empty/error/retry。"
+    risk: "组件只消费装配层数据；最近对话点击已进入前端对话页，但完整历史读取、查看全部、删除和重命名仍没有真实 service。"
 
   - path: "src/components/TodayPage.tsx"
     purpose: "主应用首页“今天”的摘要、学习入口和底部输入框。"
     status: "active"
     read_when:
       - "调整今天页内容层级、学习入口或首页输入交互。"
-    notes: "输入框支持 Enter 提交、Shift+Enter 换行，并按 scrollHeight 在随窗口变化的 120–240px 上限内自动增高和回缩；所有学习入口和提交行为只通过 props 回调预留接线。"
-    risk: "复习和完整对话页仍未实现；不要在本组件接真实数据查询。"
+    notes: "消费 TodayService 映射后的本机日期、今日学习记录事实与状态；最近记录可进入记忆详情，写作入口继续进入文章库，输入框通过 callback 进入完整对话页。"
+    risk: "不要在本组件调用 invoke/SQLite，不得显示待复习、高频词或趋势推断；输入只负责把 prompt 交给对话页，真实发送链路仍应在 ConversationService 装配层替换。"
+
+  - path: "src/components/ConversationPage.tsx"
+    purpose: "主应用完整对话页的消息流、输入、长提示折叠、生成状态、操作菜单和记忆引用抽屉。"
+    status: "demo"
+    read_when:
+      - "调整完整对话页布局、消息展示或设计稿交互。"
+      - "接入真实 Quick AI 历史、发送、导出或记忆引用。"
+    notes: "复用 MainAppShell、MainSidebar 和全局标题栏；严格按 readray-conversation-2.html 的 736px 消息列和完整状态实现。续问先追加当前 thread，完成回答再写入 assistant；生成未结束时保留草稿并阻止再次发送和导出；停止/继续保留分片位置，重生成只替换当前最后一轮回答。"
+    risk: "不得在页面组件直接调用 Tauri、SQLite 或 DeepSeek；不要重新加入设计稿之外的“带我学”“测试”等功能。"
+
+  - path: "src/conversationViewModel.ts"
+    purpose: "完整对话页的有类型消息、富文本块、记忆引用、入口请求和可替换 service 协议。"
+    status: "active"
+    read_when:
+      - "调整对话页展示协议或替换真实对话 service。"
+    notes: "页面只消费 ConversationThread 与 ConversationService，不复制 Rust Quick AI 数据库 schema；生成协议显式携带 conversationId、完整消息上下文、prompt 和 append/regenerate 模式，导出必须返回实际结果。"
+    risk: "接真实 commands 时应在 service/repository 层映射，不能让 Rust 原始响应直接耦合组件。"
+
+  - path: "src/conversationFixtureService.ts"
+    purpose: "对话页浏览器预览与本轮桌面视觉骨架使用的有类型 fixture service。"
+    status: "demo"
+    read_when:
+      - "维护设计稿示例对话、生成/失败/重试状态或前端预览。"
+    notes: "支持新对话、六类设计示例、未知最近标题降级、前端流式回答和包含完整 thread 的 Markdown 导出文件；conversationFailure=create|load|generate|export 提供一次性显式故障注入，[fixture:slow] 只用于停止/继续验证。"
+    risk: "该 service 不持久化 thread、不读取真实历史，也不请求 DeepSeek；接线后应在装配层替换而不是扩展成第二套业务层。"
 
   - path: "src/components/MemoryPage.tsx"
     purpose: "主应用“记忆”页的搜索、类型筛选、记录列表、详情和过去出现交互骨架。"
@@ -166,8 +191,8 @@ source_areas:
     read_when:
       - "调整记忆页内容布局、筛选、选择或历史展开交互。"
       - "将记忆页 fixture 接入现有 learning_records Rust commands。"
-    notes: "复用 MainAppShell、MainSidebar 和标题栏；当前只消费有类型前端 fixture，搜索、筛选、动态结果计数、列表选择、键盘导航、过去出现展开和 980px 以下列表/详情切换均在前端完成。"
-    risk: "不要复制第二套 App Shell，不要在页面组件直接读取 SQLite，也不要把当前 fixture 误当作真实学习记录。"
+    notes: "复用 MainAppShell、MainSidebar 和标题栏；通过装配层注入的 MemoryService 读取真实分页列表与单条详情，搜索和四类筛选均下推 Rust commands；保留键盘导航和 980px 以下列表/详情切换。"
+    risk: "不要复制第二套 App Shell，不要在页面组件直接调用 Tauri、读取 SQLite 或退回全量前端过滤。"
 
   - path: "src/components/WritingPage.tsx"
     purpose: "主应用“写作”页的文档工作流与状态装配边界。"
@@ -195,20 +220,96 @@ source_areas:
     risk: "这不是正式 SQLite 方案；接入 Tauri commands 后应在装配层替换，不让页面组件直接访问数据库或 localStorage。"
 
   - path: "src/mainAppViewModel.ts"
-    purpose: "主应用首页和侧栏的有类型前端 fixture/view model。"
+    purpose: "主应用导航、Today 页面和最近对话的前端展示类型。"
     status: "active"
     read_when:
       - "替换今天页 mock 数据或接入真实主应用数据查询。"
-    notes: "只包含设计稿确认的导航、最近对话、摘要和三个学习入口；不模拟后端状态。"
-    risk: "接真实数据时保持 view model 边界，不让页面组件直接读取 SQLite。"
+    notes: "正式导出只保留静态导航与展示类型；Today 和最近对话数据由 service 提供。"
+    risk: "不要把正式学习统计或 Quick AI 标题重新写成静态 fixture。"
+
+  - path: "src/todayRepository.ts"
+    purpose: "今天页与侧栏最近对话的 Tauri command repository。"
+    status: "active"
+    read_when:
+      - "调整今日学习记录摘要、最近记录入口或 Quick AI 最近标题。"
+    notes: "只调用 get_today_learning_summary 与 list_recent_quick_ai_conversations，不包含页面展示逻辑。"
+    risk: "不得在 repository 前端读取 SQLite 或回退到 fixture。"
+
+  - path: "src/todayService.ts"
+    purpose: "今天页事实映射、本机日期边界和最近对话展示服务。"
+    status: "active"
+    read_when:
+      - "排查今日自动刷新、日期范围或 Today 状态。"
+      - "调整首页真实摘要和三个学习入口。"
+    notes: "用本机当天起止时间生成仅由真实数据支持的文案和入口，并复用 LearningRecord 展示映射。"
+    risk: "不得读取写作 fixture/localStorage 作为正式统计，也不得生成复习数量、高频或趋势推断。"
+
+  - path: "src/mainAppFixture.ts"
+    purpose: "今天页与侧栏的浏览器预览/测试专用 fixture。"
+    status: "preview-only"
+    read_when:
+      - "维护非 Tauri 浏览器预览。"
+    notes: "只保存预览样本，不由正式 Tauri 装配。"
+    risk: "不得将预览摘要或对话标题装配到正式桌面路径。"
+
+  - path: "src/todayPreviewService.ts"
+    purpose: "今天页与侧栏的浏览器预览/测试专用 service。"
+    status: "preview-only"
+    read_when:
+      - "维护非 Tauri 浏览器预览的数据装配。"
+    notes: "由 App 仅在非 Tauri 运行时动态加载；正式 Tauri 路径不依赖本文件。"
+    risk: "不得把前端预览数据误当成本机 SQLite 事实。"
 
   - path: "src/memoryViewModel.ts"
-    purpose: "记忆页的前端类型与视觉交互 fixture。"
+    purpose: "记忆页展示模型、静态文案和筛选定义。"
     status: "active"
     read_when:
       - "替换记忆页 mock 数据或建立 Rust 学习记录到页面模型的映射。"
-    notes: "包含 word、phrase、sentence、paragraph 四类示例记录、分组和过去出现数据；不调用 Rust、SQLite 或 DeepSeek。"
-    risk: "接真实数据时保留页面模型边界，不在这里复制 learning_records 数据库 schema。"
+    notes: "保留 MemoryRecordItem 展示模型，以及标题、今天/昨天/更早分组和四类筛选定义；不复制 learning_records 数据库协议。"
+    risk: "展示模型只服务页面，不要把 Rust 返回协议或 Tauri invoke 塞入本文件。"
+
+  - path: "src/types/learningRecord.ts"
+    purpose: "Rust LearningRecord 与 LearningRecordPage camelCase 返回协议的 TypeScript 类型。"
+    status: "active"
+    read_when:
+      - "Rust learning_records command 返回字段发生变化。"
+      - "排查记忆页分页、单条详情或 ExplanationCard 协议映射。"
+    notes: "直接复用 QueryType、SourceType 和 ExplanationCard 判别联合；字段名与 Rust serde camelCase 协议一致。"
+    risk: "协议变化时必须同步 Rust 类型、前端类型、repository 和映射。"
+
+  - path: "src/memoryRepository.ts"
+    purpose: "记忆页 Tauri commands repository 边界。"
+    status: "active"
+    read_when:
+      - "调整记忆页 list/search/get command 调用。"
+      - "排查关键词、queryType 或分页参数是否下推后端。"
+    notes: "TauriMemoryRepository 根据关键词选择 list_learning_records 或 search_learning_records，并通过 get_learning_record 读取详情；不暴露 SQL。"
+    risk: "不要在 repository 中加入页面展示逻辑，也不要把搜索改为前端全量过滤。"
+
+  - path: "src/memoryService.ts"
+    purpose: "LearningRecord/ExplanationCard 到 MemoryRecordItem 的真实数据映射与记忆业务服务。"
+    status: "active"
+    read_when:
+      - "调整四类解释卡在记忆页的字段映射。"
+      - "调整真实来源应用、时间分组或详情读取。"
+    notes: "按本地日期分为今天/昨天/更早；来源优先使用 sourceApp，缺失时只按真实 sourceType 标记；正式映射不生成过去出现次数。"
+    risk: "不得补造后端缺失的语境义、翻译、难度或重复出现聚合。"
+
+  - path: "src/memoryPageFixture.ts"
+    purpose: "记忆页浏览器预览与测试专用 fixture。"
+    status: "preview-only"
+    read_when:
+      - "维护浏览器预览或前端测试样本。"
+    notes: "只保存四类页面样本和预览用过去出现数据；由非 Tauri 预览数据源读取。"
+    risk: "不得把该数据源装配到正式 Tauri 路径，也不得用它冒充真实 SQLite 记录。"
+
+  - path: "src/memoryPreviewService.ts"
+    purpose: "浏览器预览与测试专用 MemoryService 实现。"
+    status: "preview-only"
+    read_when:
+      - "维护浏览器预览中的记忆页搜索、筛选或分页。"
+    notes: "由 App 仅在非 Tauri 运行时动态加载；正式 Tauri MemoryService 不导入或调用本文件。"
+    risk: "前端过滤只允许用于 fixture 预览或测试，不能替代 Rust 搜索 command。"
 
   - path: "src/styles/main-app.css"
     purpose: "正常主应用全局外壳、侧栏、“今天”和“记忆”内容区的局部视觉样式。"
@@ -217,6 +318,14 @@ source_areas:
       - "调整 readray-today-2 主应用视觉、响应式布局或侧栏状态。"
     notes: "样式全部使用 rr-main-* / rr-memory-* 作用域；全局外壳、今天页和记忆页统一使用 1440×900 / scale 1 设计坐标。浏览器预览排版固定 1440×900 画布后整体等比缩放，响应式规则按应用容器尺寸触发；侧栏只允许手动折叠。"
     risk: "不要把主应用浅色 token 写回 overlay 的 tokens.css。"
+
+  - path: "src/styles/conversation-page.css"
+    purpose: "完整对话内容区的独立视觉、抽屉、流式状态和窄窗口样式。"
+    status: "active"
+    read_when:
+      - "调整 readray-conversation-2 对话内容区或 920px/650px 响应式规则。"
+    notes: "全部使用 rr-conversation-* 作用域并复用 main-app.css 的字体与颜色变量；1440×900 下消息列和输入区均为 736px。"
+    risk: "不要在这里重定义 App Shell、全局字体、窗口控件或侧栏自动折叠行为。"
 
   - path: "src/styles/writing-page.css"
     purpose: "主应用写作内容区的独立视觉与响应式样式。"
@@ -377,16 +486,16 @@ source_areas:
     read_when:
       - "调整 Quick AI 对话持久化或继续历史对话。"
       - "实现未来主应用对话历史读取。"
-    notes: "保存 ConversationSnapshot、user/assistant message 和严格递增 sequence；与 learning_records 使用同一应用数据数据库，但写入独立 quick_ai_conversations/quick_ai_messages 表。"
-    risk: "不要把 Quick AI 消息写入 learning_records；当前不实现历史列表、删除、长期记忆或检索增强。"
+    notes: "保存 ConversationSnapshot、user/assistant message 和严格递增 sequence；提供最小只读最近标题列表，空对话不进入侧栏。"
+    risk: "不要把 Quick AI 消息写入 learning_records；当前不实现完整历史页、删除、重命名、长期记忆或检索增强。"
 
   - path: "src-tauri/src/quick_ai.rs"
     purpose: "Quick AI 多轮 DeepSeek 请求、上下文装配和 Tauri commands。"
     status: "active"
     read_when:
       - "调整 Quick AI system prompt、上下文窗口或发送流程。"
-      - "排查 create/get/send Quick AI commands。"
-    notes: "独立于 ExplanationCard JSON 协议；使用最近最多 40 条已保存消息和当前用户消息请求 DeepSeek，成功后将 user/assistant exchange 事务写入 SQLite。"
+      - "排查 create/get/send/list_recent Quick AI commands。"
+    notes: "独立于 ExplanationCard JSON 协议；成功 exchange 写入 SQLite，list_recent_quick_ai_conversations 只读返回最近真实标题。"
     risk: "不接学习记录检索、工具调用、联网搜索、长期记忆或通用 Agent 框架。"
 
   - path: "src-tauri/src/learning_records.rs"
@@ -396,7 +505,7 @@ source_areas:
       - "调整学习记录 schema、迁移或存储字段。"
       - "实现学习记录窗口、搜索、筛选、单条读取或删除。"
       - "排查自动保存或应用数据目录中的 SQLite 问题。"
-    notes: "使用 rusqlite bundled，在 Tauri 应用数据目录创建 readray.sqlite3。schema_migrations 按版本执行：v1 创建 learning_records，v2 创建独立 Quick AI conversation/message 表；learning_records 仍按解释查询事件追加保存。前端不接触 SQL。"
+    notes: "使用 rusqlite bundled，在 Tauri 应用数据目录创建 readray.sqlite3；除分页/search/get/delete 外，提供按前端本机日期范围统计数量与最新记录的只读今日摘要 command。"
     risk: "当前只做事件存储，不做去重、聚合、remembered/forgotten、趋势或历史 UI；新增 schema 必须追加 migration，不能改写已发布迁移。"
 
   - path: "scripts/"

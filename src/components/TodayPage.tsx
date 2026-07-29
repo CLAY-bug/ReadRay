@@ -4,6 +4,9 @@ import MainAppIcon from "./MainAppIcon";
 
 type TodayPageProps = {
   viewModel: TodayPageViewModel;
+  status: "loading" | "ready" | "error";
+  error?: string;
+  onRetry: () => void;
   onActionSelect: (id: TodayActionId) => void;
   onSubmitPrompt: (value: string) => void;
 };
@@ -19,6 +22,9 @@ function resizePromptInput(input: HTMLTextAreaElement) {
 
 function TodayPage({
   viewModel,
+  status,
+  error,
+  onRetry,
   onActionSelect,
   onSubmitPrompt,
 }: TodayPageProps) {
@@ -66,17 +72,38 @@ function TodayPage({
             </time>
           </header>
 
-          <section className="rr-main-agent-summary" aria-label="今天的学习摘要">
-            <p>{viewModel.summary}</p>
-            <p className="rr-main-local-context">{viewModel.localContext}</p>
+          <section
+            className="rr-main-agent-summary"
+            aria-label="今天的学习摘要"
+            aria-busy={status === "loading"}
+          >
+            {status === "error" ? (
+              <>
+                <p>暂时无法读取今天的本地学习记录。</p>
+                <p className="rr-main-local-context">{error}</p>
+                <button
+                  className="rr-main-today-retry"
+                  type="button"
+                  onClick={onRetry}
+                >
+                  重新读取
+                </button>
+              </>
+            ) : (
+              <>
+                <p>{viewModel.summary}</p>
+                <p className="rr-main-local-context">{viewModel.localContext}</p>
+              </>
+            )}
           </section>
 
           <section className="rr-main-action-list" aria-label="今天可以开始的学习任务">
-            {viewModel.actions.map((action) => (
+            {status === "ready" ? viewModel.actions.map((action) => (
               <button
-                className="rr-main-action-row"
+                className={`rr-main-action-row${action.disabled ? " is-disabled" : ""}`}
                 type="button"
                 key={action.id}
+                disabled={action.disabled}
                 onClick={() => onActionSelect(action.id)}
               >
                 <span className="rr-main-action-icon"><MainAppIcon name={action.icon} /></span>
@@ -86,7 +113,7 @@ function TodayPage({
                 </span>
                 <span className="rr-main-action-arrow"><MainAppIcon name="arrow" /></span>
               </button>
-            ))}
+            )) : null}
           </section>
         </div>
       </section>
