@@ -1,12 +1,13 @@
 # ReadRay 交接记录
 
-最后更新：2026-07-29
+最后更新：2026-07-30
 
 ## TL;DR
 
 - 当前状态：主应用“记忆”页与“今天”页均已接入真实 Tauri/SQLite 数据；完整对话页已按 OpenDesign HTML 在同一外壳内实现，前端 fixture 已具备正确的多轮 thread、停止/继续、重生成、失败/重试、完整导出和抽屉焦点状态。
 - 当前路线：Windows 原生，Tauri + React + TypeScript + Rust + SQLite。
-- 下一步：在单独任务中设计真实 Quick AI repository/service 接线；复习页仍需单独设计。
+- 下一步：进入阶段四，在单独的端到端实施任务中完成完整对话页的真实 Quick AI repository/service 接线。
+- 后续顺序：阶段四验收后进入写作功能正式接线，其后的阶段顺序以 `docs/DEVELOPMENT_PLAN.md` 为准。
 - 当前约束：不使用通用 Agent 框架，不内置商业词典，不做 OCR、本地大模型或跨平台支持。
 - 交接原则：`HANDOFF.md` 只记录会影响下一次恢复上下文的信息，小型文档措辞和格式调整不记录。
 
@@ -161,12 +162,13 @@
 
 ## 下一步
 
-继续推进：完整对话页视觉、前端状态和人工验收均已完成；下一项是在保持现有 `ConversationService` 边界的前提下，单独设计真实对话 repository/service 接线和复习页。
+进入阶段四：完整对话页视觉、前端状态和人工验收均已完成；下一项是在保持现有 `ConversationService` 边界的前提下，完成真实 Quick AI repository/service 接线，使 Tauri 主窗口可以创建、加载并继续真实会话。
 
 - 记忆 UI 已通过 repository/service 调用 Rust 的分页、关键词搜索、queryType 筛选和单条读取 commands，不向前端暴露 SQL 或数据库路径；删除 command 本轮未增加页面入口。
 - 继续保持每次成功查询为独立事件；重复查询聚合、高频词、趋势和复盘规划属于后续阶段。
 - Quick AI 现已提供最小最近标题列表；对话页已具备 UI，但完整历史读取、真实继续对话、导出、删除和重命名仍待 repository/service 与 commands。
 - 首页输入已经进入完整对话页，不再丢失可见响应；当前响应仍是 fixture，接真实发送时必须替换 ConversationService，不能从页面组件直接 invoke。
+- 阶段四完成并验收后进入写作功能正式接线；再之后的阶段顺序统一以 `docs/DEVELOPMENT_PLAN.md` 为准。
 - 新环境仍需复制 `.env.example` 为 `.env` 后自行填写 `DEEPSEEK_API_KEY`；真实 `.env` 不提交。
 
 阶段一完成标准：
