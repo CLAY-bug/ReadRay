@@ -17,10 +17,9 @@ import CenteredResultPanel, {
 } from "./components/CenteredResultPanel";
 import MainAppShell from "./components/MainAppShell";
 import QuickAiPanel from "./components/QuickAiPanel";
-import {
-  FixtureConversationService,
-  type FixtureConversationFailureOperation,
-} from "./conversationFixtureService";
+import { TauriConversationRepository } from "./conversationRepository";
+import { RepositoryConversationService } from "./conversationService";
+import type { ConversationService } from "./conversationViewModel";
 import {
   mapExplanationCard,
   type ExplanationResult,
@@ -560,7 +559,7 @@ function OverlayApp() {
 
   async function sendQuickAiMessage(
     value: string,
-    conversationId: number | null,
+    conversation: QuickAiConversation,
   ) {
     const content = value.trim();
     if (!content || quickAiLoading) {
@@ -575,10 +574,17 @@ function OverlayApp() {
     setQuickAiError(undefined);
 
     try {
-      const conversation = await invoke<QuickAiConversation>(
+      const lastMessage = conversation.messages[conversation.messages.length - 1];
+      const expectedUserSequence =
+        lastMessage?.role === "user" &&
+        lastMessage.content.trim() === content
+          ? lastMessage.sequence
+          : (lastMessage?.sequence ?? 0) + 1;
+      const updatedConversation = await invoke<QuickAiConversation>(
         "send_quick_ai_message",
         {
-          conversationId,
+          conversationId: conversation.id,
+          expectedUserSequence,
           content,
         },
       );
@@ -586,10 +592,11 @@ function OverlayApp() {
       if (quickAiRequestId.current !== requestId) {
         return;
       }
-      setQuickAiConversation(conversation);
+      setQuickAiConversation(updatedConversation);
       setQuickAiPendingMessage(undefined);
       setQuickAiLoading(false);
     } catch (error) {
+      notifyQuickAiConversationUpdated();
       if (quickAiRequestId.current !== requestId) {
         return;
       }
@@ -607,11 +614,6 @@ function OverlayApp() {
     setCommandValue("");
     setCommandError(undefined);
 
-    if (initialMessage) {
-      await sendQuickAiMessage(initialMessage, null);
-      return;
-    }
-
     const requestId = quickAiRequestId.current + 1;
     quickAiRequestId.current = requestId;
     setQuickAiLoading(true);
@@ -624,6 +626,9 @@ function OverlayApp() {
       }
       setQuickAiConversation(conversation);
       setQuickAiLoading(false);
+      if (initialMessage) {
+        await sendQuickAiMessage(initialMessage, conversation);
+      }
     } catch (error) {
       if (quickAiRequestId.current !== requestId) {
         return;
@@ -821,9 +826,11 @@ function OverlayApp() {
               loading={quickAiLoading}
               error={quickAiError}
               onDraftChange={setQuickAiDraft}
-              onSend={(value) =>
-                void sendQuickAiMessage(value, quickAiConversation?.id ?? null)
-              }
+              onSend={(value) => {
+                if (quickAiConversation) {
+                  void sendQuickAiMessage(value, quickAiConversation);
+                }
+              }}
               onNewConversation={() => void createNewQuickAiConversation()}
               onOpenChange={handleCommandOpenChange}
             />
@@ -978,23 +985,17 @@ function MainAppWindow() {
   const [learningRecordsRefreshToken, setLearningRecordsRefreshToken] =
     useState(0);
   const [conversationRefreshToken, setConversationRefreshToken] = useState(0);
-  const [conversationService] = useState(
-    () => {
-      const requestedFailure = new URLSearchParams(
-        window.location.search,
-      ).get("conversationFailure");
-      const failOnce = ["create", "load", "generate", "export"].includes(
-        requestedFailure ?? "",
-      )
-        ? (requestedFailure as FixtureConversationFailureOperation)
-        : undefined;
-      const failureCount =
-        import.meta.env.DEV &&
-        (failOnce === "create" || failOnce === "load")
-          ? 2
-          : 1;
-      return new FixtureConversationService({ failOnce, failureCount });
-    },
+  const [conversationService, setConversationService] =
+    useState<ConversationService | null>(() =>
+      isTauriRuntime
+        ? new RepositoryConversationService(
+            new TauriConversationRepository(),
+            {
+              onConversationUpdated: () =>
+                setConversationRefreshToken((token) => token + 1),
+            },
+          )
+        : null,
   );
 
   useEffect(() => {
@@ -1066,6 +1067,29 @@ function MainAppWindow() {
         if (!ignore) {
           setTodayService(createBrowserPreviewTodayService());
         }
+      },
+    );
+    void import("./conversationFixtureService").then(
+      ({ FixtureConversationService }) => {
+        if (ignore) {
+          return;
+        }
+        const requestedFailure = new URLSearchParams(
+          window.location.search,
+        ).get("conversationFailure");
+        const failOnce = ["create", "load", "generate", "export"].includes(
+          requestedFailure ?? "",
+        )
+          ? (requestedFailure as "create" | "load" | "generate" | "export")
+          : undefined;
+        const failureCount =
+          import.meta.env.DEV &&
+          (failOnce === "create" || failOnce === "load")
+            ? 2
+            : 1;
+        setConversationService(
+          new FixtureConversationService({ failOnce, failureCount }),
+        );
       },
     );
     return () => {

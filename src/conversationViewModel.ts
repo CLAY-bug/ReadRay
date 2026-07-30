@@ -32,6 +32,7 @@ export type ConversationUserMessage = {
   role: "user";
   content: string;
   meta?: string;
+  sequence?: number;
 };
 
 export type ConversationAssistantMessage = {
@@ -39,6 +40,7 @@ export type ConversationAssistantMessage = {
   role: "assistant";
   blocks: ConversationAnswerBlock[];
   citation?: ConversationMemoryCitation;
+  sequence?: number;
 };
 
 export type ConversationMessage =
@@ -49,6 +51,11 @@ export type ConversationThread = {
   id: string;
   title: string;
   messages: ConversationMessage[];
+  pendingTurn?: {
+    userMessageId: string;
+    prompt: string;
+    expectedUserSequence: number;
+  };
 };
 
 export type ConversationRequest =
@@ -68,10 +75,18 @@ export type ConversationRequest =
       prompt: string;
     };
 
-export type ConversationGeneratedReply = {
-  assistantMessageId: string;
-  chunks: string[];
-};
+export type ConversationGeneratedReply =
+  | {
+      status: "complete";
+      assistantMessageId: string;
+      chunks: string[];
+      persistedThread?: ConversationThread;
+    }
+  | {
+      status: "pending";
+      persistedThread: ConversationThread;
+      errorMessage: string;
+    };
 
 export type ConversationGenerationRequest = {
   conversationId: string;
@@ -93,7 +108,15 @@ export type ConversationExportResult =
       };
     };
 
+export type ConversationServiceCapabilities = {
+  delivery: "complete" | "chunked-preview";
+  canStop: boolean;
+  canRegenerate: boolean;
+  canExport: boolean;
+};
+
 export interface ConversationService {
+  readonly capabilities: ConversationServiceCapabilities;
   createConversation(): Promise<ConversationThread>;
   loadConversation(
     conversationId: string,

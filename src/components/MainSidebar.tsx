@@ -127,6 +127,7 @@ function MainSidebar({
                 conversation.id === activeConversationId ? "page" : undefined
               }
               onClick={() => onRecentConversationSelect(conversation.id)}
+              onContextMenu={(event) => event.preventDefault()}
             >
               <RecentConversationTitle title={conversation.title} />
             </button>

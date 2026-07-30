@@ -69,6 +69,17 @@ pub(crate) struct ConversationStore {
     connection: Connection,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) enum PreparedTurn {
+    Pending {
+        snapshot: ConversationSnapshot,
+        user_message_id: i64,
+    },
+    Completed {
+        snapshot: ConversationSnapshot,
+    },
+}
+
 impl ConversationStore {
     pub(crate) fn open_for_app(app: &AppHandle) -> Result<Self, String> {
         Ok(Self {
@@ -98,75 +109,126 @@ impl ConversationStore {
         self.get_required(self.connection.last_insert_rowid())
     }
 
+    #[cfg(test)]
     pub(crate) fn create_with_exchange(
         &mut self,
         model: &str,
         user_content: &str,
         assistant_content: &str,
     ) -> Result<ConversationSnapshot, String> {
-        validate_model(model)?;
-        validate_message("用户消息", user_content)?;
-        validate_message("助手消息", assistant_content)?;
-        let timestamp = unix_time_ms()?;
-        let title = title_from_first_message(user_content);
-        let transaction = self
-            .connection
-            .transaction()
-            .map_err(|error| format!("Quick AI 对话事务无法开始：{error}"))?;
-        transaction
-            .execute(
-                "INSERT INTO quick_ai_conversations (
-                    title, model, created_at_unix_ms, updated_at_unix_ms
-                 ) VALUES (?1, ?2, ?3, ?3)",
-                params![title, model, timestamp],
-            )
-            .map_err(|error| format!("Quick AI 对话创建失败：{error}"))?;
-        let conversation_id = transaction.last_insert_rowid();
-        insert_message(
-            &transaction,
-            conversation_id,
-            ConversationRole::User,
-            user_content,
-            1,
-            timestamp,
-        )?;
-        insert_message(
-            &transaction,
-            conversation_id,
-            ConversationRole::Assistant,
-            assistant_content,
-            2,
-            timestamp,
-        )?;
-        transaction
-            .commit()
-            .map_err(|error| format!("Quick AI 对话事务无法提交：{error}"))?;
-
-        self.get_required(conversation_id)
+        let conversation = self.create(model)?;
+        let user_message_id = match self.prepare_turn(conversation.id, 1, user_content)? {
+            PreparedTurn::Pending {
+                user_message_id, ..
+            } => user_message_id,
+            PreparedTurn::Completed { snapshot } => return Ok(snapshot),
+        };
+        self.complete_turn(conversation.id, 1, user_message_id, assistant_content)
     }
 
+    #[cfg(test)]
     pub(crate) fn append_exchange(
         &mut self,
         conversation_id: i64,
         user_content: &str,
         assistant_content: &str,
     ) -> Result<ConversationSnapshot, String> {
+        let conversation = self.get_required(conversation_id)?;
+        let expected_user_sequence = conversation
+            .messages
+            .last()
+            .map(|message| message.sequence + 1)
+            .unwrap_or(1);
+        let user_message_id =
+            match self.prepare_turn(conversation_id, expected_user_sequence, user_content)? {
+                PreparedTurn::Pending {
+                    user_message_id, ..
+                } => user_message_id,
+                PreparedTurn::Completed { snapshot } => return Ok(snapshot),
+            };
+        self.complete_turn(
+            conversation_id,
+            expected_user_sequence,
+            user_message_id,
+            assistant_content,
+        )
+    }
+
+    pub(crate) fn prepare_turn(
+        &mut self,
+        conversation_id: i64,
+        expected_user_sequence: i64,
+        user_content: &str,
+    ) -> Result<PreparedTurn, String> {
+        validate_user_sequence(expected_user_sequence)?;
         validate_message("用户消息", user_content)?;
-        validate_message("助手消息", assistant_content)?;
+        let normalized_content = user_content.trim();
         let timestamp = unix_time_ms()?;
-        let title = title_from_first_message(user_content);
+        let title = title_from_first_message(normalized_content);
         let transaction = self
             .connection
             .transaction()
-            .map_err(|error| format!("Quick AI 对话事务无法开始：{error}"))?;
-        let next_sequence: Option<i64> = transaction
-            .query_row(
-                "SELECT MAX(sequence) + 1 FROM quick_ai_messages WHERE conversation_id = ?1",
-                [conversation_id],
-                |row| row.get(0),
-            )
-            .map_err(|error| format!("Quick AI 消息序号读取失败：{error}"))?;
-        let next_sequence = next_sequence.unwrap_or(1);
+            .map_err(|error| format!("Quick AI 待回答消息事务无法开始：{error}"))?;
+        let current_max = max_sequence(&transaction, conversation_id)?.unwrap_or(0);
+
+        if let Some(stored_user) =
+            stored_message_at(&transaction, conversation_id, expected_user_sequence)?
+        {
+            if role_from_storage(&stored_user.role)? != ConversationRole::User {
+                return Err(format!(
+                    "Quick AI 轮次冲突：sequence={expected_user_sequence} 不是用户消息。"
+                ));
+            }
+            if stored_user.content != normalized_content {
+                return Err(format!(
+                    "Quick AI 轮次冲突：sequence={expected_user_sequence} 已属于另一条用户消息。"
+                ));
+            }
+
+            let next_message =
+                stored_message_at(&transaction, conversation_id, expected_user_sequence + 1)?;
+            let user_message_id = stored_user.id;
+            if let Some(next_message) = next_message {
+                if role_from_storage(&next_message.role)? != ConversationRole::Assistant {
+                    return Err(format!(
+                        "Quick AI 会话顺序无效：sequence={} 不是助手消息。",
+                        expected_user_sequence + 1
+                    ));
+                }
+                drop(transaction);
+                return Ok(PreparedTurn::Completed {
+                    snapshot: self.get_required(conversation_id)?,
+                });
+            }
+            if current_max != expected_user_sequence {
+                return Err(format!(
+                    "Quick AI 待回答轮次已过期：期望尾序号为 {expected_user_sequence}，实际为 {current_max}。"
+                ));
+            }
+
+            drop(transaction);
+            return Ok(PreparedTurn::Pending {
+                snapshot: self.get_required(conversation_id)?,
+                user_message_id,
+            });
+        }
+
+        let expected_next_sequence = current_max + 1;
+        if expected_user_sequence != expected_next_sequence {
+            return Err(format!(
+                "Quick AI 会话版本冲突：期望写入 user sequence={expected_user_sequence}，当前可写入 sequence={expected_next_sequence}。"
+            ));
+        }
+        if current_max > 0 {
+            let last_message = stored_message_at(&transaction, conversation_id, current_max)?
+                .ok_or_else(|| "Quick AI 会话尾消息无法读取。".to_string())?;
+            if role_from_storage(&last_message.role)? != ConversationRole::Assistant {
+                return Err(format!(
+                    "Quick AI 会话仍有待回答消息：user sequence={current_max}。"
+                ));
+            }
+        }
+
         let updated = transaction
             .execute(
                 "UPDATE quick_ai_conversations
@@ -182,21 +244,86 @@ impl ConversationStore {
             &transaction,
             conversation_id,
             ConversationRole::User,
-            user_content,
-            next_sequence,
+            normalized_content,
+            expected_user_sequence,
             timestamp,
         )?;
+        let user_message_id = transaction.last_insert_rowid();
+        transaction
+            .commit()
+            .map_err(|error| format!("Quick AI 待回答消息事务无法提交：{error}"))?;
+
+        Ok(PreparedTurn::Pending {
+            snapshot: self.get_required(conversation_id)?,
+            user_message_id,
+        })
+    }
+
+    pub(crate) fn complete_turn(
+        &mut self,
+        conversation_id: i64,
+        expected_user_sequence: i64,
+        user_message_id: i64,
+        assistant_content: &str,
+    ) -> Result<ConversationSnapshot, String> {
+        validate_user_sequence(expected_user_sequence)?;
+        validate_message("助手消息", assistant_content)?;
+        let timestamp = unix_time_ms()?;
+        let transaction = self
+            .connection
+            .transaction()
+            .map_err(|error| format!("Quick AI 回答事务无法开始：{error}"))?;
+        let stored_user = stored_message_at(
+            &transaction,
+            conversation_id,
+            expected_user_sequence,
+        )?
+        .ok_or_else(|| {
+            format!(
+                "Quick AI 待回答消息不存在：conversation_id={conversation_id}, sequence={expected_user_sequence}。"
+            )
+        })?;
+        if stored_user.id != user_message_id
+            || role_from_storage(&stored_user.role)? != ConversationRole::User
+        {
+            return Err("Quick AI 待回答消息身份不匹配。".to_string());
+        }
+
+        if let Some(stored_assistant) =
+            stored_message_at(&transaction, conversation_id, expected_user_sequence + 1)?
+        {
+            if role_from_storage(&stored_assistant.role)? != ConversationRole::Assistant {
+                return Err("Quick AI 已完成轮次包含无效角色。".to_string());
+            }
+            drop(transaction);
+            return self.get_required(conversation_id);
+        }
+
+        let current_max = max_sequence(&transaction, conversation_id)?.unwrap_or(0);
+        if current_max != expected_user_sequence {
+            return Err(format!(
+                "Quick AI 回答版本冲突：待回答 user sequence={expected_user_sequence}，当前尾序号为 {current_max}。"
+            ));
+        }
         insert_message(
             &transaction,
             conversation_id,
             ConversationRole::Assistant,
             assistant_content,
-            next_sequence + 1,
+            expected_user_sequence + 1,
             timestamp,
         )?;
         transaction
+            .execute(
+                "UPDATE quick_ai_conversations
+                 SET updated_at_unix_ms = ?1
+                 WHERE id = ?2",
+                params![timestamp, conversation_id],
+            )
+            .map_err(|error| format!("Quick AI 对话更新时间失败：{error}"))?;
+        transaction
             .commit()
-            .map_err(|error| format!("Quick AI 对话事务无法提交：{error}"))?;
+            .map_err(|error| format!("Quick AI 回答事务无法提交：{error}"))?;
 
         self.get_required(conversation_id)
     }
@@ -297,6 +424,42 @@ impl ConversationStore {
     }
 }
 
+fn max_sequence(connection: &Connection, conversation_id: i64) -> Result<Option<i64>, String> {
+    connection
+        .query_row(
+            "SELECT MAX(sequence) FROM quick_ai_messages WHERE conversation_id = ?1",
+            [conversation_id],
+            |row| row.get(0),
+        )
+        .map_err(|error| format!("Quick AI 消息尾序号读取失败：{error}"))
+}
+
+fn stored_message_at(
+    connection: &Connection,
+    conversation_id: i64,
+    sequence: i64,
+) -> Result<Option<StoredMessage>, String> {
+    connection
+        .query_row(
+            "SELECT id, conversation_id, role, content, sequence, created_at_unix_ms
+             FROM quick_ai_messages
+             WHERE conversation_id = ?1 AND sequence = ?2",
+            params![conversation_id, sequence],
+            |row| {
+                Ok(StoredMessage {
+                    id: row.get(0)?,
+                    conversation_id: row.get(1)?,
+                    role: row.get(2)?,
+                    content: row.get(3)?,
+                    sequence: row.get(4)?,
+                    created_at_unix_ms: row.get(5)?,
+                })
+            },
+        )
+        .optional()
+        .map_err(|error| format!("Quick AI 指定序号消息读取失败：{error}"))
+}
+
 fn insert_message(
     connection: &Connection,
     conversation_id: i64,
@@ -356,6 +519,15 @@ fn validate_message(label: &str, content: &str) -> Result<(), String> {
     if length > MAX_MESSAGE_LEN {
         return Err(format!(
             "Quick AI {label}长度不能超过 {MAX_MESSAGE_LEN} 个字符，当前为 {length}。"
+        ));
+    }
+    Ok(())
+}
+
+fn validate_user_sequence(sequence: i64) -> Result<(), String> {
+    if sequence <= 0 || sequence % 2 == 0 {
+        return Err(format!(
+            "Quick AI user sequence 必须是正奇数，当前为 {sequence}。"
         ));
     }
     Ok(())
@@ -457,6 +629,255 @@ pub(crate) mod tests {
         assert_eq!(loaded.messages[3].sequence, 4);
         assert_eq!(loaded.model, "deepseek-v4-flash");
         assert!(loaded.title.as_deref().unwrap().starts_with("Remember"));
+        drop(store);
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn saved_conversation_survives_store_reopen() {
+        let (root, path) = test_database_path();
+        let conversation_id = {
+            let mut store = ConversationStore::open_path(&path).unwrap();
+            store
+                .create_with_exchange(
+                    "deepseek-v4-flash",
+                    "Persist this question.",
+                    "This answer is persisted.",
+                )
+                .unwrap()
+                .id
+        };
+
+        let reopened = ConversationStore::open_path(&path).unwrap();
+        let loaded = reopened.get_required(conversation_id).unwrap();
+
+        assert_eq!(loaded.messages.len(), 2);
+        assert_eq!(loaded.messages[0].content, "Persist this question.");
+        assert_eq!(loaded.messages[1].content, "This answer is persisted.");
+        drop(reopened);
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn model_failure_pending_user_survives_store_reopen() {
+        let (root, path) = test_database_path();
+        let (conversation_id, user_message_id) = {
+            let mut store = ConversationStore::open_path(&path).unwrap();
+            let conversation = store.create("deepseek-v4-flash").unwrap();
+            let prepared = store
+                .prepare_turn(conversation.id, 1, "Persist before model request")
+                .unwrap();
+            let PreparedTurn::Pending {
+                snapshot,
+                user_message_id,
+            } = prepared
+            else {
+                panic!("first prepare must create a pending user");
+            };
+            assert_eq!(snapshot.messages.len(), 1);
+            (conversation.id, user_message_id)
+        };
+
+        let reopened = ConversationStore::open_path(&path).unwrap();
+        let loaded = reopened.get_required(conversation_id).unwrap();
+        assert_eq!(loaded.messages.len(), 1);
+        assert_eq!(loaded.messages[0].id, user_message_id);
+        assert_eq!(loaded.messages[0].role, ConversationRole::User);
+        assert_eq!(loaded.messages[0].content, "Persist before model request");
+        drop(reopened);
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn restart_retry_reuses_pending_user_and_adds_exactly_one_assistant() {
+        let (root, path) = test_database_path();
+        let (conversation_id, original_user_id) = {
+            let mut store = ConversationStore::open_path(&path).unwrap();
+            let conversation = store.create("deepseek-v4-flash").unwrap();
+            let PreparedTurn::Pending {
+                user_message_id, ..
+            } = store
+                .prepare_turn(conversation.id, 1, "Retry after restart")
+                .unwrap()
+            else {
+                panic!("first prepare must be pending");
+            };
+            (conversation.id, user_message_id)
+        };
+
+        let mut reopened = ConversationStore::open_path(&path).unwrap();
+        let PreparedTurn::Pending {
+            user_message_id, ..
+        } = reopened
+            .prepare_turn(conversation_id, 1, "Retry after restart")
+            .unwrap()
+        else {
+            panic!("retry must reuse the pending user");
+        };
+        assert_eq!(user_message_id, original_user_id);
+        let completed = reopened
+            .complete_turn(
+                conversation_id,
+                1,
+                user_message_id,
+                "Completed after restart",
+            )
+            .unwrap();
+
+        assert_eq!(completed.messages.len(), 2);
+        assert_eq!(
+            completed
+                .messages
+                .iter()
+                .filter(|message| message.role == ConversationRole::User)
+                .count(),
+            1
+        );
+        assert_eq!(
+            completed
+                .messages
+                .iter()
+                .filter(|message| message.role == ConversationRole::Assistant)
+                .count(),
+            1
+        );
+        drop(reopened);
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn completed_turn_retry_returns_authoritative_snapshot_without_duplicates() {
+        let (root, path) = test_database_path();
+        let mut store = ConversationStore::open_path(&path).unwrap();
+        let conversation = store.create("deepseek-v4-flash").unwrap();
+        let PreparedTurn::Pending {
+            user_message_id, ..
+        } = store
+            .prepare_turn(conversation.id, 1, "Caller may miss the response")
+            .unwrap()
+        else {
+            panic!("first prepare must be pending");
+        };
+        let completed = store
+            .complete_turn(conversation.id, 1, user_message_id, "Committed answer")
+            .unwrap();
+        assert_eq!(completed.messages.len(), 2);
+
+        let PreparedTurn::Completed { snapshot } = store
+            .prepare_turn(conversation.id, 1, "Caller may miss the response")
+            .unwrap()
+        else {
+            panic!("retry must detect the completed sequence slot");
+        };
+        let completed_again = store
+            .complete_turn(
+                conversation.id,
+                1,
+                user_message_id,
+                "Ignored duplicate answer",
+            )
+            .unwrap();
+
+        assert_eq!(snapshot.messages.len(), 2);
+        assert_eq!(completed_again.messages.len(), 2);
+        assert_eq!(completed_again.messages[1].content, "Committed answer");
+        drop(store);
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn stale_or_concurrent_turn_cannot_write_against_old_history() {
+        let (root, path) = test_database_path();
+        let mut store = ConversationStore::open_path(&path).unwrap();
+        let conversation = store
+            .create_with_exchange("deepseek-v4-flash", "First turn", "First answer")
+            .unwrap();
+        let PreparedTurn::Pending {
+            user_message_id, ..
+        } = store
+            .prepare_turn(conversation.id, 3, "Concurrent request A")
+            .unwrap()
+        else {
+            panic!("first concurrent request must reserve sequence 3");
+        };
+
+        let content_conflict = store
+            .prepare_turn(conversation.id, 3, "Concurrent request B")
+            .unwrap_err();
+        assert!(content_conflict.contains("轮次冲突"));
+        let stale_version = store
+            .prepare_turn(conversation.id, 5, "Skip pending answer")
+            .unwrap_err();
+        assert!(stale_version.contains("版本冲突") || stale_version.contains("待回答消息"));
+        let wrong_identity = store
+            .complete_turn(
+                conversation.id,
+                3,
+                user_message_id + 1000,
+                "Must not be saved",
+            )
+            .unwrap_err();
+        assert!(wrong_identity.contains("身份不匹配"));
+        let loaded = store.get_required(conversation.id).unwrap();
+        assert_eq!(loaded.messages.len(), 3);
+        assert_eq!(loaded.messages[2].content, "Concurrent request A");
+        drop(store);
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn assistant_save_failure_leaves_one_retriable_pending_user() {
+        let (root, path) = test_database_path();
+        let mut store = ConversationStore::open_path(&path).unwrap();
+        let conversation = store
+            .create_with_exchange("deepseek-v4-flash", "First turn", "First answer")
+            .unwrap();
+        let PreparedTurn::Pending {
+            user_message_id, ..
+        } = store
+            .prepare_turn(conversation.id, 3, "Retry this exact input")
+            .unwrap()
+        else {
+            panic!("turn must be pending before the assistant save");
+        };
+        store
+            .connection
+            .execute_batch(
+                "CREATE TRIGGER fail_quick_ai_assistant_insert
+                 BEFORE INSERT ON quick_ai_messages
+                 WHEN NEW.role = 'assistant'
+                 BEGIN
+                   SELECT RAISE(ABORT, 'simulated assistant save failure');
+                 END;",
+            )
+            .unwrap();
+
+        let error = store
+            .complete_turn(conversation.id, 3, user_message_id, "This save should fail")
+            .unwrap_err();
+        assert!(error.contains("simulated assistant save failure"));
+        let after_failure = store.get_required(conversation.id).unwrap();
+        assert_eq!(after_failure.messages.len(), 3);
+        assert_eq!(after_failure.messages[2].id, user_message_id);
+
+        store
+            .connection
+            .execute_batch("DROP TRIGGER fail_quick_ai_assistant_insert;")
+            .unwrap();
+        let PreparedTurn::Pending {
+            user_message_id: retried_user_id,
+            ..
+        } = store
+            .prepare_turn(conversation.id, 3, "Retry this exact input")
+            .unwrap()
+        else {
+            panic!("save failure must remain pending");
+        };
+        assert_eq!(retried_user_id, user_message_id);
+        let after_retry = store
+            .complete_turn(conversation.id, 3, retried_user_id, "This save succeeds")
+            .unwrap();
+        assert_eq!(after_retry.messages.len(), 4);
         drop(store);
         let _ = fs::remove_dir_all(root);
     }

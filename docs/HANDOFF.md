@@ -4,10 +4,10 @@
 
 ## TL;DR
 
-- 当前状态：主应用“记忆”页与“今天”页均已接入真实 Tauri/SQLite 数据；完整对话页已按 OpenDesign HTML 在同一外壳内实现，前端 fixture 已具备正确的多轮 thread、停止/继续、重生成、失败/重试、完整导出和抽屉焦点状态。
+- 当前状态：阶段一至阶段四已经完成；主应用“记忆”“今天”和完整对话均已接入真实 Tauri/SQLite 数据，下一项是写作功能正式接线。
 - 当前路线：Windows 原生，Tauri + React + TypeScript + Rust + SQLite。
-- 下一步：进入阶段四，在单独的端到端实施任务中完成完整对话页的真实 Quick AI repository/service 接线。
-- 后续顺序：阶段四验收后进入写作功能正式接线，其后的阶段顺序以 `docs/DEVELOPMENT_PLAN.md` 为准。
+- 下一步：进入阶段五，在端到端实施任务中完成写作功能正式 Tauri/SQLite/DeepSeek 接线。
+- 后续顺序：阶段五完成后进入会话管理闭环，其后的阶段顺序以 `docs/DEVELOPMENT_PLAN.md` 为准。
 - 当前约束：不使用通用 Agent 框架，不内置商业词典，不做 OCR、本地大模型或跨平台支持。
 - 交接原则：`HANDOFF.md` 只记录会影响下一次恢复上下文的信息，小型文档措辞和格式调整不记录。
 
@@ -27,7 +27,9 @@
 - `src/components/CenteredResultPanel.tsx`：MVP compact UI 的无选区输入后居中结果面板骨架，当前由 App 传入 ExplanationCard 映射后的真实查询结果。
 - `src/components/QuickAiPanel.tsx` / `src/types/quickAi.ts`：Quick AI 多轮对话视图及前端协议。
 - `src/components/MainAppShell.tsx` / `MainSidebar.tsx` / `TodayPage.tsx`：正常主应用壳、真实最近对话、今天事实摘要与状态装配。
-- `src/components/ConversationPage.tsx` / `src/conversationViewModel.ts` / `src/conversationFixtureService.ts`：完整对话页、类型协议和本轮可替换前端 fixture service。
+- `src/components/ConversationPage.tsx` / `src/conversationViewModel.ts`：完整对话页与可替换 service/能力协议；真实完整响应和预览分片走同一页面边界。
+- `src/conversationRepository.ts` / `src/conversationService.ts`：现有 Quick AI Tauri commands repository，以及 Rust ConversationSnapshot 到页面 thread 的正式映射。
+- `src/conversationFixtureService.ts`：只供非 Tauri 浏览器预览动态加载的 fixture service。
 - `src/todayRepository.ts` / `src/todayService.ts`：今日学习记录与 Quick AI 最近标题的 Tauri repository、本机日期范围和展示映射。
 - `src/mainAppFixture.ts` / `src/todayPreviewService.ts`：仅浏览器预览或测试使用，不进入正式 Tauri 数据路径。
 - `src/components/MemoryPage.tsx` / `src/memoryRepository.ts` / `src/memoryService.ts` / `src/types/learningRecord.ts`：记忆页真实分页/搜索/筛选/详情 UI，Tauri repository、四类 ExplanationCard 映射和 Rust camelCase 返回协议。
@@ -154,21 +156,26 @@
 - 写作状态和分析内容来自 `writingViewModel.ts` 的有类型 fixture；`WritingRepository` 隔离了页面与刷新恢复实现，当前 `BrowserWritingDemoRepository` 使用 localStorage，仅作为前端演示，未接 Rust、SQLite、DeepSeek、Quick AI、UIA 或真实写作分析接口。
 - 写作页已通过本机 pnpm 构建，并在浏览器 1440×900 与模拟真实应用 840×600 容器完成交互验收：文章库搜索/筛选/排序、空稿、已有稿、选区辅助、追问、问题操作、本轮改动保留、第二轮重新筛选、删除/新增差异、完成稿版本回看、长标题、720 词长正文、侧栏展开/折叠和窄窗教练覆盖均通过；未修改 Tauri 窗口、overlay、快捷键或设计稿目录。
 - 已按 `design-open-design/readray-conversation-2.html` 在现有 MainAppShell 中实现完整对话页：保留 1440×900 外壳、736px 消息列和输入区，覆盖空对话、设计示例消息、长提示折叠、生成/停止/失败/重试、更多菜单、导出提示和记忆引用抽屉。
-- 今天页输入、新对话和最近对话均已进入完整对话页；最近对话继续由现有 TodayService 提供标题，对话正文当前由有类型 `FixtureConversationService` 映射，不调用 Tauri、SQLite、DeepSeek 或真实 Quick AI commands。
-- `ConversationService.generateReply` 现显式接收 conversationId、完整消息上下文、prompt 和 append/regenerate 模式；续问保留全历史，完成回答写回 thread，重生成只替换当前最后一轮 assistant。生成未结束时输入草稿保持可编辑但禁止提交和导出；停止/继续保留已生成分片，create/load/generate/export 异常均有保留内容的失败状态。
+- 今天页输入、新对话和最近对话均已进入完整对话页；正式 Tauri 装配通过 `TauriConversationRepository` 调用现有 create/get/send Quick AI commands，页面组件不直接 invoke。
+- `RepositoryConversationService` 将 Rust camelCase `ConversationSnapshot` 映射为现有 thread，以 SQLite 返回的真实消息 ID、标题、时间和 sequence 覆盖临时页面状态；尾部为 user 时映射为明确 pendingTurn，重启加载后页面直接进入可重试失败态。
+- Tauri 正式路径不静态读取或实例化 `FixtureConversationService`；fixture 被 Vite 拆为非 Tauri 预览动态 chunk，继续保留原有分片、停止/继续、重生成、导出和故障注入演示。
+- 真实 Quick AI 当前是非流式完整响应，因此正式路径不显示可用的停止/继续，不开放重生成、原生导出或记忆引用；对应菜单项诚实禁用，未伪造阶段六能力。
+- Quick AI 发送使用 `conversationId + expectedUserSequence` 作为稳定轮次身份：`prepare_turn` 先单独提交 user，再调用 DeepSeek；`complete_turn` 校验 message ID、sequence 和当前尾版本后只补一条 assistant。模型、进程或 assistant 保存失败都会留下可恢复 pending user。
+- 同一轮重试复用既有 user message ID/sequence；若 assistant 已存在，后端直接返回权威快照且不再次请求模型。若事务已提交但 IPC 回传和随后读取都失败，页面仍保留原 expected sequence，下一次重试同样由后端幂等识别，不依赖 prompt 文本猜测。
+- 本轮未追加 migration：现有 v2 `quick_ai_messages` 的自增 ID 和 `UNIQUE(conversation_id, sequence)` 已足够提供 pending 身份与 expected-version 约束；旧历史、并发不同内容或错误 message ID 会明确冲突，不会静默写入。
 - 完成态 fixture 导出会生成用户可下载的 Markdown 文件，并按顺序包含 thread 的全部 user/assistant 消息；空结果或异常不会触发下载或成功提示。
 - fixture 通过 `conversationFailure=create|load|generate|export` 显式注入一次性失败，正常重新生成不再强制失败；`[fixture:slow]` 只用于停止/继续演示。记忆抽屉关闭时会移除内部焦点并恢复到原引用按钮。
-- 完整对话页已通过人工验收；本机 pnpm 构建与 Headless Playwright 回归均通过，覆盖生成中重复发送、连续两轮、生成中导出、完整 Markdown 下载、导出失败重试、停止/继续、重新生成和抽屉焦点。1440×900、840×600 与两档侧栏无页面级横纵溢出或重叠；`preview=responsive` 只用于浏览器真实容器验收，不改变默认等比预览和 Tauri。
+- 完整对话页此前完成的是 fixture 路径的视觉与交互人工验收；本机 pnpm 构建与 Headless Playwright 回归均通过，覆盖生成中重复发送、连续两轮、生成中导出、完整 Markdown 下载、导出失败重试、停止/继续、重新生成和抽屉焦点。1440×900、840×600 与两档侧栏无页面级横纵溢出或重叠；`preview=responsive` 只用于浏览器真实容器验收，不改变默认等比预览和 Tauri。阶段四收口时已另行完成真实 Tauri/SQLite/DeepSeek 功能验收。
+- 阶段四返修自动验证：前端 repository/service 共 9 项测试通过；Rust 40 项通过、2 项需真实网络的 live test 按既有标记忽略。覆盖模型失败后重开仍有 pending user、重启重试只补一条 assistant、已提交但调用方未确认时不重复、assistant 保存失败保留 pending、旧版本/并发冲突拒绝写入，以及 41/43 条消息长对话截断后仍从 user 开始。
+- 阶段四真实 Tauri 功能验收已经完成：真实创建、最近对话加载、多轮续聊和侧栏会话身份均可用；用户接受当前对话体验作为后续优化项，不再阻塞阶段五。
 
 ## 下一步
 
-进入阶段四：完整对话页视觉、前端状态和人工验收均已完成；下一项是在保持现有 `ConversationService` 边界的前提下，完成真实 Quick AI repository/service 接线，使 Tauri 主窗口可以创建、加载并继续真实会话。
+进入阶段五：将已经验收的写作页面从 fixture/localStorage 骨架升级为正式 Tauri/SQLite/DeepSeek 功能。任务范围、验收标准和后续顺序以 `docs/DEVELOPMENT_PLAN.md` 为准。
 
 - 记忆 UI 已通过 repository/service 调用 Rust 的分页、关键词搜索、queryType 筛选和单条读取 commands，不向前端暴露 SQL 或数据库路径；删除 command 本轮未增加页面入口。
 - 继续保持每次成功查询为独立事件；重复查询聚合、高频词、趋势和复盘规划属于后续阶段。
-- Quick AI 现已提供最小最近标题列表；对话页已具备 UI，但完整历史读取、真实继续对话、导出、删除和重命名仍待 repository/service 与 commands。
-- 首页输入已经进入完整对话页，不再丢失可见响应；当前响应仍是 fixture，接真实发送时必须替换 ConversationService，不能从页面组件直接 invoke。
-- 阶段四完成并验收后进入写作功能正式接线；再之后的阶段顺序统一以 `docs/DEVELOPMENT_PLAN.md` 为准。
+- 阶段五完成后进入会话管理闭环；再之后的阶段顺序统一以 `docs/DEVELOPMENT_PLAN.md` 为准。
 - 新环境仍需复制 `.env.example` 为 `.env` 后自行填写 `DEEPSEEK_API_KEY`；真实 `.env` 不提交。
 
 阶段一完成标准：
@@ -193,8 +200,8 @@
 - 本地查询分类是启发式规则，缩写、多句但很短的文本、缺少句末标点的长句仍可能被相邻类型吸收；优先通过真实样本调整规则，不增加第二次 LLM 分类请求。
 - 长段落输出受模型 JSON 稳定性和窗口最大高度约束；当前上限 4096 字符，不代表整页翻译能力。
 - 记忆页的重复出现聚合仍未实现；当前 learning_records 只保存独立查询事件，不能可靠生成“过去的出现”次数或时间线，因此正式 UI 隐藏该入口。
-- Quick AI 当前不渲染 Markdown，也不做流式输出；长回复需要等待完整响应后一次显示，这是后续体验优化点，不影响当前多轮对话闭环。
-- 主应用完整对话页当前使用前端 fixture service：页面状态和 Markdown 下载已验收，但刷新持久化、真实历史、真实模型发送、原生导出持久化和记忆引用聚合尚未接线。
+- Quick AI 当前不渲染 Markdown，也不做流式输出；模型即使收到纯文本要求仍可能返回 `**` 等 Markdown 标记并被原样显示。Prompt V1 只是软约束，信息不足的学习规划仍可能直接给出泛化建议；Markdown 渲染或规范化、真正流式输出和可靠的对话策略留待后续体验优化与个性化阶段。
+- 主应用完整对话页已接真实 Quick AI/SQLite；原生导出、查看全部、删除、重命名、回答重生成和记忆引用聚合仍未实现，分别留在后续阶段，当前正式 UI 不伪装支持。
 - 主窗口关闭后当前只隐藏并保持后台快捷键能力，但没有托盘、单实例或重新显示主窗口入口；发布前需要确定“关闭即隐藏”是否为正式产品策略，并补齐重新进入主应用的路径。
 
 ## 暂时不要做

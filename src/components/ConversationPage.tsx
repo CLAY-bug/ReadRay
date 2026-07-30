@@ -24,12 +24,14 @@ import MainAppIcon from "./MainAppIcon";
 type ConversationPageProps = {
   request: ConversationRequest;
   service: ConversationService;
+  onThreadIdentityChange?: (conversationId: string) => void;
 };
 
 type GenerationState = {
   phase: "generating" | "complete" | "stopped" | "failed";
   prompt: string;
   text: string;
+  errorMessage?: string;
   chunks: string[];
   nextChunkIndex: number;
   assistantMessageId: string;
@@ -230,10 +232,12 @@ function EmptyConversation() {
 
 function GenerationMessage({
   state,
+  canStop,
   onStop,
   onRetry,
 }: {
   state: GenerationState;
+  canStop: boolean;
   onStop: () => void;
   onRetry: () => void;
 }) {
@@ -244,7 +248,9 @@ function GenerationMessage({
           {state.text ? <p>{state.text}</p> : null}
           <div className="rr-conversation-answer-kicker">生成中断</div>
           <p className="rr-conversation-error-copy">
-            暂时无法完成回答。你的输入仍然保留，可以直接重试。
+            {state.errorMessage
+              ? `${state.errorMessage} 你的输入仍然保留，可以直接重试。`
+              : "暂时无法完成回答。你的输入仍然保留，可以直接重试。"}
           </p>
           <button
             className="rr-conversation-quiet-button"
@@ -265,7 +271,7 @@ function GenerationMessage({
           <div className="rr-conversation-answer-kicker">正在生成</div>
         ) : null}
         <p>{state.text}</p>
-        {state.phase === "generating" ? (
+        {state.phase === "generating" && canStop ? (
           <div className="rr-conversation-generation-row">
             <span className="rr-conversation-stream-line" />
             <button
@@ -293,7 +299,11 @@ function GenerationMessage({
   );
 }
 
-function ConversationPage({ request, service }: ConversationPageProps) {
+function ConversationPage({
+  request,
+  service,
+  onThreadIdentityChange,
+}: ConversationPageProps) {
   const [thread, setThread] = useState<ConversationThread | null>(null);
   const [draft, setDraft] = useState("");
   const [generation, setGeneration] = useState<GenerationState | null>(null);
@@ -322,10 +332,14 @@ function ConversationPage({ request, service }: ConversationPageProps) {
     }
   }, []);
 
-  const updateThread = useCallback((nextThread: ConversationThread) => {
-    threadRef.current = nextThread;
-    setThread(nextThread);
-  }, []);
+  const updateThread = useCallback(
+    (nextThread: ConversationThread) => {
+      threadRef.current = nextThread;
+      setThread(nextThread);
+      onThreadIdentityChange?.(nextThread.id);
+    },
+    [onThreadIdentityChange],
+  );
 
   const closeMemoryDrawer = useCallback((restoreFocus = true) => {
     const trigger = citationTriggerRef.current;
@@ -471,8 +485,28 @@ function ConversationPage({ request, service }: ConversationPageProps) {
         if (generationToken !== generationTokenRef.current) {
           return;
         }
+        if (reply.status === "pending") {
+          const pendingTurn = reply.persistedThread.pendingTurn;
+          updateThread(reply.persistedThread);
+          setGeneration({
+            ...pendingState,
+            phase: "failed",
+            userMessageId:
+              pendingTurn?.userMessageId ?? pendingState.userMessageId,
+            errorMessage: reply.errorMessage,
+          });
+          return;
+        }
         if (!reply.chunks.length || !reply.chunks.some((chunk) => chunk.trim())) {
-          throw new Error("fixture returned an empty reply");
+          throw new Error("对话服务返回了空回答。");
+        }
+        if (service.capabilities.delivery === "complete") {
+          if (!reply.persistedThread) {
+            throw new Error("正式对话服务没有返回已保存的会话。");
+          }
+          updateThread(reply.persistedThread);
+          setGeneration(null);
+          return;
         }
 
         streamRemainingChunks(
@@ -492,10 +526,18 @@ function ConversationPage({ request, service }: ConversationPageProps) {
         setGeneration({
           ...pendingState,
           phase: "failed",
+          errorMessage:
+            error instanceof Error ? error.message : String(error),
         });
       }
     },
-    [closeMemoryDrawer, service, stopTimer, streamRemainingChunks],
+    [
+      closeMemoryDrawer,
+      service,
+      stopTimer,
+      streamRemainingChunks,
+      updateThread,
+    ],
   );
 
   useEffect(() => {
@@ -503,6 +545,9 @@ function ConversationPage({ request, service }: ConversationPageProps) {
     const requestToken = ++generationTokenRef.current;
     stopTimer();
     setGeneration(null);
+    threadRef.current = null;
+    setThread(null);
+    setDraft("");
     setLastExportedMessageCount(0);
     setMenuOpen(false);
     closeMemoryDrawer(false);
@@ -516,6 +561,21 @@ function ConversationPage({ request, service }: ConversationPageProps) {
           );
           if (!ignore && requestToken === generationTokenRef.current) {
             updateThread(nextThread);
+            if (nextThread.pendingTurn) {
+              setGeneration({
+                phase: "failed",
+                prompt: nextThread.pendingTurn.prompt,
+                text: "",
+                errorMessage:
+                  "上次回答未完成。问题已经保存在本机，可以直接重试。",
+                chunks: [],
+                nextChunkIndex: 0,
+                assistantMessageId: "",
+                userMessageId: nextThread.pendingTurn.userMessageId,
+                mode: "append",
+                retryKind: "generation",
+              });
+            }
           }
           return;
         }
@@ -552,10 +612,15 @@ function ConversationPage({ request, service }: ConversationPageProps) {
           return;
         }
         console.error("ReadRay 对话打开失败：", error);
+        if (request.kind === "prompt") {
+          setDraft(request.prompt);
+        }
         setGeneration({
           phase: "failed",
-          prompt: "",
+          prompt: request.kind === "prompt" ? request.prompt : "",
           text: "",
+          errorMessage:
+            error instanceof Error ? error.message : String(error),
           chunks: [],
           nextChunkIndex: 0,
           assistantMessageId: "",
@@ -582,6 +647,7 @@ function ConversationPage({ request, service }: ConversationPageProps) {
 
   useEffect(
     () => () => {
+      generationTokenRef.current += 1;
       stopTimer();
       if (toastTimerRef.current !== undefined) {
         window.clearTimeout(toastTimerRef.current);
@@ -686,6 +752,11 @@ function ConversationPage({ request, service }: ConversationPageProps) {
   };
 
   const regenerate = () => {
+    if (!service.capabilities.canRegenerate) {
+      setMenuOpen(false);
+      notify("真实 Quick AI 暂不支持重新生成回答");
+      return;
+    }
     const currentThread = threadRef.current;
     if (!currentThread) {
       setMenuOpen(false);
@@ -741,14 +812,14 @@ function ConversationPage({ request, service }: ConversationPageProps) {
         structuredClone(currentThread),
       );
       if (!result.exported) {
-        throw new Error("fixture did not produce an export");
+        throw new Error("当前对话服务不支持导出。");
       }
       if (
         !result.file.fileName.trim() ||
         !result.file.mimeType.trim() ||
         !result.file.content.trim()
       ) {
-        throw new Error("fixture returned an invalid export file");
+        throw new Error("对话服务返回了无效的导出文件。");
       }
       downloadConversationFile(result.file);
       setLastExportedMessageCount(currentThread.messages.length);
@@ -761,6 +832,9 @@ function ConversationPage({ request, service }: ConversationPageProps) {
   };
 
   const stopGeneration = () => {
+    if (!service.capabilities.canStop) {
+      return;
+    }
     stopTimer();
     setGeneration((current) => {
       if (!current) {
@@ -822,6 +896,7 @@ function ConversationPage({ request, service }: ConversationPageProps) {
       {generation ? (
         <GenerationMessage
           state={generation}
+          canStop={service.capabilities.canStop}
           onStop={stopGeneration}
           onRetry={retryOrContinueGeneration}
         />
@@ -858,6 +933,15 @@ function ConversationPage({ request, service }: ConversationPageProps) {
                   className="rr-conversation-menu-item"
                   type="button"
                   role="menuitem"
+                  disabled={
+                    generation !== null ||
+                    !service.capabilities.canRegenerate
+                  }
+                  title={
+                    service.capabilities.canRegenerate
+                      ? undefined
+                      : "真实 Quick AI 暂不支持重新生成"
+                  }
                   onClick={regenerate}
                 >
                   重新生成回答
@@ -866,7 +950,14 @@ function ConversationPage({ request, service }: ConversationPageProps) {
                   className="rr-conversation-menu-item"
                   type="button"
                   role="menuitem"
-                  disabled={generation !== null}
+                  disabled={
+                    generation !== null || !service.capabilities.canExport
+                  }
+                  title={
+                    service.capabilities.canExport
+                      ? undefined
+                      : "原生导出将在后续阶段提供"
+                  }
                   onClick={() => void exportConversation()}
                 >
                   导出当前对话

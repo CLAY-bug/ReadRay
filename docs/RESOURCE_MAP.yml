@@ -4,8 +4,8 @@ project:
   repo_root: "."
 
 meta:
-  version: "1.5"
-  last_updated: "2026-07-29"
+  version: "1.7"
+  last_updated: "2026-07-30"
   updated_by: "Codex"
   source_of_truth: "docs/RESOURCE_MAP.yml"
   language: "zh-CN"
@@ -142,7 +142,7 @@ source_areas:
       - "调整正常主应用壳、标题栏、侧栏折叠或首页装配。"
       - "将主应用接入独立 Tauri 窗口。"
     notes: "当前通过 ?view=main 进入主应用，并在同一外壳内切换“今天”“写作”“记忆”和“对话”；由装配层加载 TodayService、MemoryService、ConversationService 与最近 Quick AI 对话，页面组件不直接读取数据库。"
-    risk: "不要把快捷 overlay 状态机或 invoke 迁入页面组件；对话页当前只接前端 fixture service，不能误当作真实 Quick AI 历史或发送链路。"
+    risk: "不要把快捷 overlay 状态机或 invoke 迁入页面组件；正式 Tauri 对话必须使用真实 ConversationService，fixture 只能由非 Tauri 预览动态加载。"
 
   - path: "src/components/MainSidebar.tsx"
     purpose: "主应用全局左侧栏，包含新对话、学习导航、最近对话、查看全部和设置入口。"
@@ -150,7 +150,7 @@ source_areas:
     read_when:
       - "调整主应用导航结构、最近对话展示或手动折叠态。"
     notes: "默认宽 252px，用户手动折叠为 72px 纯图标栏；展开态最近对话来自真实 Quick AI 标题，并支持 loading/empty/error/retry。"
-    risk: "组件只消费装配层数据；最近对话点击已进入前端对话页，但完整历史读取、查看全部、删除和重命名仍没有真实 service。"
+    risk: "组件只消费装配层数据；最近对话点击可加载真实正文，但查看全部、删除和重命名仍属于后续阶段。"
 
   - path: "src/components/TodayPage.tsx"
     purpose: "主应用首页“今天”的摘要、学习入口和底部输入框。"
@@ -158,32 +158,58 @@ source_areas:
     read_when:
       - "调整今天页内容层级、学习入口或首页输入交互。"
     notes: "消费 TodayService 映射后的本机日期、今日学习记录事实与状态；最近记录可进入记忆详情，写作入口继续进入文章库，输入框通过 callback 进入完整对话页。"
-    risk: "不要在本组件调用 invoke/SQLite，不得显示待复习、高频词或趋势推断；输入只负责把 prompt 交给对话页，真实发送链路仍应在 ConversationService 装配层替换。"
+    risk: "不要在本组件调用 invoke/SQLite，不得显示待复习、高频词或趋势推断；输入只负责把 prompt 交给正式 ConversationService。"
 
   - path: "src/components/ConversationPage.tsx"
     purpose: "主应用完整对话页的消息流、输入、长提示折叠、生成状态、操作菜单和记忆引用抽屉。"
-    status: "demo"
+    status: "active"
     read_when:
       - "调整完整对话页布局、消息展示或设计稿交互。"
       - "接入真实 Quick AI 历史、发送、导出或记忆引用。"
-    notes: "复用 MainAppShell、MainSidebar 和全局标题栏；严格按 readray-conversation-2.html 的 736px 消息列和完整状态实现。续问先追加当前 thread，完成回答再写入 assistant；生成未结束时保留草稿并阻止再次发送和导出；停止/继续保留分片位置，重生成只替换当前最后一轮回答。"
-    risk: "不得在页面组件直接调用 Tauri、SQLite 或 DeepSeek；不要重新加入设计稿之外的“带我学”“测试”等功能。"
+    notes: "复用 MainAppShell、MainSidebar 和全局标题栏；页面只消费 ConversationService。正式 Tauri 回答以 SQLite 权威快照回写，加载到以 user 结尾的会话时恢复明确的 pending 重试态；非 Tauri fixture 继续演示分片、停止、重生成和导出。"
+    risk: "不得在页面组件直接调用 Tauri、SQLite 或 DeepSeek；真实后端不支持的停止、重生成、导出和记忆引用必须保持禁用或无数据状态。"
 
   - path: "src/conversationViewModel.ts"
     purpose: "完整对话页的有类型消息、富文本块、记忆引用、入口请求和可替换 service 协议。"
     status: "active"
     read_when:
       - "调整对话页展示协议或替换真实对话 service。"
-    notes: "页面只消费 ConversationThread 与 ConversationService，不复制 Rust Quick AI 数据库 schema；生成协议显式携带 conversationId、完整消息上下文、prompt 和 append/regenerate 模式，导出必须返回实际结果。"
-    risk: "接真实 commands 时应在 service/repository 层映射，不能让 Rust 原始响应直接耦合组件。"
+    notes: "页面只消费 ConversationThread 与 ConversationService，不复制 Rust Quick AI 数据库 schema；消息可携带真实 sequence，thread 可携带由尾部 user 推导的 pendingTurn，生成结果区分 complete 与已持久化 pending。"
+    risk: "协议变化必须同步真实 service 与 fixture；不能让 Rust 原始响应直接耦合组件。"
+
+  - path: "src/conversationRepository.ts"
+    purpose: "完整对话页的 Tauri Quick AI command repository。"
+    status: "active"
+    read_when:
+      - "调整完整对话创建、读取或发送 command 调用。"
+      - "排查 Tauri 参数名或 Rust camelCase 返回协议。"
+    notes: "只调用现有 create_quick_ai_conversation、get_quick_ai_conversation 与 send_quick_ai_message；发送显式携带 conversationId、expectedUserSequence 与 content，不包含页面映射或第二套存储。"
+    risk: "不得在 repository 拼装上下文、复制 SQLite schema 或另建模型客户端。"
+
+  - path: "src/conversationService.ts"
+    purpose: "Rust Quick AI 会话到现有完整对话页面模型的映射与正式 service。"
+    status: "active"
+    read_when:
+      - "调整真实会话加载、续聊、失败重试或页面消息映射。"
+      - "排查正式能力降级和最近对话刷新。"
+    notes: "以 Rust 返回的 ConversationSnapshot 为权威；用 conversationId + expectedUserSequence 标识轮次，不靠 prompt 文本猜测完成状态。发送失败时读取数据库恢复 completed 或 pending；若 IPC 与读取都失败，页面仍保留同一 expected sequence，下一次重试由后端幂等返回。"
+    risk: "不得使用前端 messages 重建后端历史；多轮上下文只由现有 Quick AI/SQLite 事实提供。"
+
+  - path: "tests/conversationService.test.mjs"
+    purpose: "完整对话 Tauri repository 参数、Rust 快照映射和关键失败恢复测试。"
+    status: "active"
+    read_when:
+      - "修改 conversation repository/service 协议或失败重试语义。"
+    notes: "使用 Node 内置 test runner 与注入式 repository，不新增测试依赖；覆盖 9 项参数映射、pending 恢复、重启重试、模糊成功路径和正式能力降级。"
+    risk: "这些测试不替代真实 Tauri/DeepSeek 人工验收。"
 
   - path: "src/conversationFixtureService.ts"
-    purpose: "对话页浏览器预览与本轮桌面视觉骨架使用的有类型 fixture service。"
-    status: "demo"
+    purpose: "对话页非 Tauri 浏览器预览使用的有类型 fixture service。"
+    status: "preview-only"
     read_when:
       - "维护设计稿示例对话、生成/失败/重试状态或前端预览。"
     notes: "支持新对话、六类设计示例、未知最近标题降级、前端流式回答和包含完整 thread 的 Markdown 导出文件；conversationFailure=create|load|generate|export 提供一次性显式故障注入，[fixture:slow] 只用于停止/继续验证。"
-    risk: "该 service 不持久化 thread、不读取真实历史，也不请求 DeepSeek；接线后应在装配层替换而不是扩展成第二套业务层。"
+    risk: "该 service 不持久化 thread、不读取真实历史，也不请求 DeepSeek；不得由正式 Tauri 装配读取或实例化。"
 
   - path: "src/components/MemoryPage.tsx"
     purpose: "主应用“记忆”页的搜索、类型筛选、记录列表、详情和过去出现交互骨架。"
@@ -486,7 +512,7 @@ source_areas:
     read_when:
       - "调整 Quick AI 对话持久化或继续历史对话。"
       - "实现未来主应用对话历史读取。"
-    notes: "保存 ConversationSnapshot、user/assistant message 和严格递增 sequence；提供最小只读最近标题列表，空对话不进入侧栏。"
+    notes: "复用 v2 表、消息自增 ID 与 UNIQUE(conversation_id, sequence)，未新增迁移。prepare_turn 先独立提交 pending user；complete_turn 只在匹配的 user ID/expected sequence 后补 assistant，完成轮次重试直接返回权威快照，旧版本或并发冲突拒绝写入。"
     risk: "不要把 Quick AI 消息写入 learning_records；当前不实现完整历史页、删除、重命名、长期记忆或检索增强。"
 
   - path: "src-tauri/src/quick_ai.rs"
@@ -495,7 +521,7 @@ source_areas:
     read_when:
       - "调整 Quick AI system prompt、上下文窗口或发送流程。"
       - "排查 create/get/send/list_recent Quick AI commands。"
-    notes: "独立于 ExplanationCard JSON 协议；成功 exchange 写入 SQLite，list_recent_quick_ai_conversations 只读返回最近真实标题。"
+    notes: "独立于 ExplanationCard JSON 协议；send command 要求已创建的 conversationId 和 expectedUserSequence，先 prepare pending user，再从该 SQLite 快照装配多轮上下文并调用模型，成功后 complete assistant；已完成轮次不会再次请求模型。"
     risk: "不接学习记录检索、工具调用、联网搜索、长期记忆或通用 Agent 框架。"
 
   - path: "src-tauri/src/learning_records.rs"

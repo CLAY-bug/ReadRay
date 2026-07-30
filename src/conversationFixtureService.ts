@@ -1,6 +1,7 @@
 import type {
   ConversationAnswerBlock,
   ConversationExportResult,
+  ConversationGeneratedReply,
   ConversationGenerationRequest,
   ConversationMemoryCitation,
   ConversationService,
@@ -383,6 +384,12 @@ export type FixtureConversationServiceOptions = {
 };
 
 export class FixtureConversationService implements ConversationService {
+  readonly capabilities = {
+    delivery: "chunked-preview",
+    canStop: true,
+    canRegenerate: true,
+    canExport: true,
+  } as const;
   private nextConversationId = 1;
   private pendingFailure: FixtureConversationFailureOperation | null;
   private remainingFailures: number;
@@ -464,7 +471,7 @@ export class FixtureConversationService implements ConversationService {
 
   async generateReply(
     request: ConversationGenerationRequest,
-  ): Promise<{ assistantMessageId: string; chunks: string[] }> {
+  ): Promise<ConversationGeneratedReply> {
     this.failIfRequested("generate");
 
     const chunks =
@@ -481,6 +488,7 @@ export class FixtureConversationService implements ConversationService {
           ];
 
     return {
+      status: "complete",
       assistantMessageId: `${request.conversationId}-assistant-${Date.now()}`,
       chunks,
     };

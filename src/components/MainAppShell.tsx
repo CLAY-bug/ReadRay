@@ -30,7 +30,7 @@ type MainAppShellProps = {
   todayService: TodayService | null;
   learningRecordsRefreshToken: number;
   conversationRefreshToken: number;
-  conversationService: ConversationService;
+  conversationService: ConversationService | null;
   onNewConversation?: () => void;
   onNavigate?: (id: MainAppNavigationId) => void;
   onRecentConversationSelect?: (id: string) => void;
@@ -321,10 +321,25 @@ function MainAppShell({
           onRecentRetry={() => setRecentRetryToken((token) => token + 1)}
         />
         {activePageId === "conversation" ? (
-          <ConversationPage
-            request={conversationRequest}
-            service={conversationService}
-          />
+          conversationService ? (
+            <ConversationPage
+              request={conversationRequest}
+              service={conversationService}
+              onThreadIdentityChange={setActiveConversationId}
+            />
+          ) : (
+            <main
+              className="rr-main-panel rr-conversation-page"
+              aria-label="ReadRay 对话"
+            >
+              <div className="rr-conversation-empty">
+                <div className="rr-conversation-empty-copy">
+                  <h2>正在准备对话</h2>
+                  <p>浏览器预览数据正在加载。</p>
+                </div>
+              </div>
+            </main>
+          )
         ) : activePageId === "memory" ? (
           <MemoryPage
             viewModel={memoryViewModel}
