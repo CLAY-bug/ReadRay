@@ -58,6 +58,97 @@ export type ConversationThread = {
   };
 };
 
+export type ConversationSummary = {
+  id: string;
+  title: string;
+  updatedAtUnixMs: number;
+};
+
+export type ConversationOperationIdentity = {
+  requestKey: number;
+  conversationId: string;
+};
+
+export function isConversationOperationCurrent(
+  mounted: boolean,
+  operation: ConversationOperationIdentity,
+  currentRequestKey: number,
+  currentConversationId?: string,
+) {
+  return (
+    mounted &&
+    operation.requestKey === currentRequestKey &&
+    operation.conversationId === currentConversationId
+  );
+}
+
+export function shouldResetDeletedConversation(
+  activePageId: string,
+  activeConversationId: string | undefined,
+  currentRequestKey: number,
+  operation: ConversationOperationIdentity,
+) {
+  return isActiveConversationOperation(
+    activePageId,
+    activeConversationId,
+    currentRequestKey,
+    operation,
+  );
+}
+
+export function isActiveConversationOperation(
+  activePageId: string,
+  activeConversationId: string | undefined,
+  currentRequestKey: number,
+  operation: ConversationOperationIdentity,
+) {
+  return (
+    activePageId === "conversation" &&
+    isConversationOperationCurrent(
+      true,
+      operation,
+      currentRequestKey,
+      activeConversationId,
+    )
+  );
+}
+
+export function conversationTitleEditAction(
+  key: string,
+  isComposing: boolean,
+): "save" | "cancel" | undefined {
+  if (isComposing) {
+    return undefined;
+  }
+  if (key === "Enter") {
+    return "save";
+  }
+  if (key === "Escape") {
+    return "cancel";
+  }
+  return undefined;
+}
+
+export function conversationExportUnavailableReason(
+  thread: ConversationThread | null,
+  generating: boolean,
+  canExport: boolean,
+) {
+  if (generating) {
+    return "回答生成期间不能导出";
+  }
+  if (!thread) {
+    return "当前没有可导出的对话";
+  }
+  if (thread.messages.length === 0) {
+    return "空白会话没有可导出的消息";
+  }
+  if (!canExport) {
+    return "当前对话服务不支持导出";
+  }
+  return undefined;
+}
+
 export type ConversationRequest =
   | {
       key: number;
@@ -98,14 +189,18 @@ export type ConversationGenerationRequest = {
 export type ConversationExportResult =
   | {
       exported: false;
+      reason?: "cancelled" | "unavailable";
     }
   | {
       exported: true;
-      file: {
+      fileName: string;
+      messageCount: number;
+      browserFile?: {
         fileName: string;
         mimeType: string;
         content: string;
       };
+      nativeFilePath?: string;
     };
 
 export type ConversationServiceCapabilities = {
@@ -122,6 +217,12 @@ export interface ConversationService {
     conversationId: string,
     title: string,
   ): Promise<ConversationThread>;
+  listConversations(): Promise<ConversationSummary[]>;
+  renameConversation(
+    conversationId: string,
+    title: string,
+  ): Promise<ConversationThread>;
+  deleteConversation(conversationId: string): Promise<void>;
   generateReply(
     request: ConversationGenerationRequest,
   ): Promise<ConversationGeneratedReply>;

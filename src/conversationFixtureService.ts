@@ -469,6 +469,23 @@ export class FixtureConversationService implements ConversationService {
     };
   }
 
+  async listConversations() {
+    return Object.values(threads).map((thread, index) => ({
+      id: thread.id,
+      title: thread.title,
+      updatedAtUnixMs: Date.now() - index * 60_000,
+    }));
+  }
+
+  async renameConversation(conversationId: string, title: string) {
+    const thread = await this.loadConversation(conversationId, title);
+    return { ...thread, title: title.trim() };
+  }
+
+  async deleteConversation() {
+    return undefined;
+  }
+
   async generateReply(
     request: ConversationGenerationRequest,
   ): Promise<ConversationGeneratedReply> {
@@ -500,19 +517,21 @@ export class FixtureConversationService implements ConversationService {
     this.failIfRequested("export");
 
     if (thread.messages.length === 0) {
-      return { exported: false };
+      return { exported: false, reason: "unavailable" };
     }
 
     const exportedThread = cloneThread(thread);
     const content = renderThreadMarkdown(exportedThread);
     if (!content.trim()) {
-      return { exported: false };
+      return { exported: false, reason: "unavailable" };
     }
 
     this.lastExportedThread = exportedThread;
     return {
       exported: true,
-      file: {
+      fileName: exportFileName(exportedThread.title),
+      messageCount: exportedThread.messages.length,
+      browserFile: {
         fileName: exportFileName(exportedThread.title),
         mimeType: "text/markdown;charset=utf-8",
         content,

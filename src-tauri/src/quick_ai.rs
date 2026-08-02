@@ -1,11 +1,11 @@
 use crate::conversations::{
-    ConversationMessage, ConversationRole, ConversationSnapshot, ConversationStore, PreparedTurn,
-    RecentConversationSummary,
+    export_snapshot_to_path, ConversationExportSummary, ConversationMessage, ConversationRole,
+    ConversationSnapshot, ConversationStore, PreparedTurn, RecentConversationSummary,
 };
 use crate::deepseek_client::{configured_model, post_chat_completion};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
-use std::future::Future;
+use std::{future::Future, path::PathBuf};
 use tauri::AppHandle;
 
 const QUICK_AI_MAX_USER_MESSAGE_LEN: usize = 8_000;
@@ -58,6 +58,40 @@ pub fn list_recent_quick_ai_conversations(
 ) -> Result<Vec<RecentConversationSummary>, String> {
     let limit = resolve_recent_conversation_limit(limit)?;
     ConversationStore::open_for_app(&app)?.list_recent(limit)
+}
+
+#[tauri::command]
+pub fn list_all_quick_ai_conversations(
+    app: AppHandle,
+) -> Result<Vec<RecentConversationSummary>, String> {
+    ConversationStore::open_for_app(&app)?.list_all()
+}
+
+#[tauri::command]
+pub fn rename_quick_ai_conversation(
+    app: AppHandle,
+    conversation_id: i64,
+    title: String,
+) -> Result<ConversationSnapshot, String> {
+    ConversationStore::open_for_app(&app)?.rename(conversation_id, &title)
+}
+
+#[tauri::command]
+pub fn delete_quick_ai_conversation(app: AppHandle, conversation_id: i64) -> Result<bool, String> {
+    ConversationStore::open_for_app(&app)?.delete(conversation_id)
+}
+
+#[tauri::command]
+pub fn export_quick_ai_conversation(
+    app: AppHandle,
+    conversation_id: i64,
+    file_path: String,
+) -> Result<ConversationExportSummary, String> {
+    if file_path.trim().is_empty() {
+        return Err("Quick AI 导出路径不能为空。".to_string());
+    }
+    let snapshot = ConversationStore::open_for_app(&app)?.get_required(conversation_id)?;
+    export_snapshot_to_path(&snapshot, &PathBuf::from(file_path))
 }
 
 fn resolve_recent_conversation_limit(limit: Option<u32>) -> Result<u32, String> {

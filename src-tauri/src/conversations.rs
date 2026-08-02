@@ -3,7 +3,7 @@ use crate::learning_records::open_database;
 use crate::learning_records::{open_database_for_app, unix_time_ms};
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
-#[cfg(test)]
+use std::fs;
 use std::path::Path;
 use tauri::AppHandle;
 
@@ -46,6 +46,15 @@ pub struct RecentConversationSummary {
     pub id: i64,
     pub title: String,
     pub updated_at_unix_ms: i64,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ConversationExportSummary {
+    pub conversation_id: i64,
+    pub file_name: String,
+    pub file_path: String,
+    pub message_count: usize,
 }
 
 struct StoredConversation {
@@ -422,6 +431,123 @@ impl ConversationStore {
 
         Ok(conversations)
     }
+
+    pub(crate) fn list_all(&self) -> Result<Vec<RecentConversationSummary>, String> {
+        let mut statement = self
+            .connection
+            .prepare(
+                "SELECT id, title, updated_at_unix_ms
+                 FROM quick_ai_conversations
+                 WHERE title IS NOT NULL AND length(trim(title)) > 0
+                 ORDER BY updated_at_unix_ms DESC, id DESC",
+            )
+            .map_err(|error| format!("全部 Quick AI 对话语句无法准备：{error}"))?;
+        let rows = statement
+            .query_map([], |row| {
+                Ok(RecentConversationSummary {
+                    id: row.get(0)?,
+                    title: row.get(1)?,
+                    updated_at_unix_ms: row.get(2)?,
+                })
+            })
+            .map_err(|error| format!("全部 Quick AI 对话读取失败：{error}"))?;
+        let mut conversations = Vec::new();
+        for row in rows {
+            conversations
+                .push(row.map_err(|error| format!("全部 Quick AI 对话行读取失败：{error}"))?);
+        }
+        Ok(conversations)
+    }
+
+    pub(crate) fn rename(
+        &mut self,
+        conversation_id: i64,
+        title: &str,
+    ) -> Result<ConversationSnapshot, String> {
+        let title = validate_title(title)?;
+        let timestamp = unix_time_ms()?;
+        let message_count: i64 = self
+            .connection
+            .query_row(
+                "SELECT COUNT(*) FROM quick_ai_messages WHERE conversation_id = ?1",
+                [conversation_id],
+                |row| row.get(0),
+            )
+            .map_err(|error| format!("Quick AI 会话消息数量读取失败：{error}"))?;
+        if message_count == 0 {
+            return Err("空白 Quick AI 会话无需重命名。".to_string());
+        }
+        let updated = self
+            .connection
+            .execute(
+                "UPDATE quick_ai_conversations
+                 SET title = ?1, updated_at_unix_ms = ?2
+                 WHERE id = ?3",
+                params![title, timestamp, conversation_id],
+            )
+            .map_err(|error| format!("Quick AI 会话重命名失败：{error}"))?;
+        if updated == 0 {
+            return Err(format!("Quick AI 对话不存在：id={conversation_id}"));
+        }
+        self.get_required(conversation_id)
+    }
+
+    pub(crate) fn delete(&mut self, conversation_id: i64) -> Result<bool, String> {
+        self.connection
+            .execute(
+                "DELETE FROM quick_ai_conversations WHERE id = ?1",
+                [conversation_id],
+            )
+            .map(|deleted| deleted > 0)
+            .map_err(|error| format!("Quick AI 会话删除失败：{error}"))
+    }
+}
+
+pub(crate) fn export_snapshot_to_path(
+    snapshot: &ConversationSnapshot,
+    path: &Path,
+) -> Result<ConversationExportSummary, String> {
+    if snapshot.messages.is_empty() {
+        return Err("空白 Quick AI 会话没有可导出的消息。".to_string());
+    }
+    let file_name = path
+        .file_name()
+        .and_then(|value| value.to_str())
+        .filter(|value| !value.trim().is_empty())
+        .ok_or_else(|| "Quick AI 导出路径缺少有效文件名。".to_string())?;
+    let content = render_export_markdown(snapshot);
+    fs::write(path, content.as_bytes())
+        .map_err(|error| format!("Quick AI 对话文件写入失败：{error}"))?;
+    Ok(ConversationExportSummary {
+        conversation_id: snapshot.id,
+        file_name: file_name.to_string(),
+        file_path: path.to_string_lossy().into_owned(),
+        message_count: snapshot.messages.len(),
+    })
+}
+
+fn render_export_markdown(snapshot: &ConversationSnapshot) -> String {
+    let title = snapshot.title.as_deref().unwrap_or("ReadRay 对话").trim();
+    let mut output = format!(
+        "# {}\n\n",
+        if title.is_empty() {
+            "ReadRay 对话"
+        } else {
+            title
+        }
+    );
+    for message in &snapshot.messages {
+        let role = match message.role {
+            ConversationRole::User => "用户",
+            ConversationRole::Assistant => "ReadRay",
+        };
+        output.push_str("## ");
+        output.push_str(role);
+        output.push_str("\n\n");
+        output.push_str(&message.content);
+        output.push_str("\n\n");
+    }
+    output
 }
 
 fn max_sequence(connection: &Connection, conversation_id: i64) -> Result<Option<i64>, String> {
@@ -524,6 +650,20 @@ fn validate_message(label: &str, content: &str) -> Result<(), String> {
     Ok(())
 }
 
+fn validate_title(title: &str) -> Result<&str, String> {
+    let title = title.trim();
+    if title.is_empty() {
+        return Err("Quick AI 会话名称不能为空。".to_string());
+    }
+    let length = title.chars().count();
+    if length > MAX_TITLE_LEN {
+        return Err(format!(
+            "Quick AI 会话名称长度不能超过 {MAX_TITLE_LEN} 个字符，当前为 {length}。"
+        ));
+    }
+    Ok(title)
+}
+
 fn validate_user_sequence(sequence: i64) -> Result<(), String> {
     if sequence <= 0 || sequence % 2 == 0 {
         return Err(format!(
@@ -561,7 +701,6 @@ fn role_from_storage(value: &str) -> Result<ConversationRole, String> {
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
-    use std::fs;
     use std::path::PathBuf;
     use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -914,6 +1053,109 @@ pub(crate) mod tests {
         let all = store.list_recent(10).unwrap();
         assert_eq!(all.len(), 2);
         assert_eq!(all[1].id, first.id);
+
+        drop(store);
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn all_conversations_rename_and_delete_use_database_identity() {
+        let (root, path) = test_database_path();
+        let mut store = ConversationStore::open_path(&path).unwrap();
+        let first = store
+            .create_with_exchange("deepseek-v4-flash", "First topic", "First answer")
+            .unwrap();
+        let second = store
+            .create_with_exchange("deepseek-v4-flash", "Second topic", "Second answer")
+            .unwrap();
+        store.create("deepseek-v4-flash").unwrap();
+
+        let all = store.list_all().unwrap();
+        assert_eq!(all.len(), 2);
+        assert!(all.iter().any(|item| item.id == first.id));
+        assert!(all.iter().any(|item| item.id == second.id));
+
+        let renamed = store.rename(first.id, "  Renamed topic  ").unwrap();
+        assert_eq!(renamed.id, first.id);
+        assert_eq!(renamed.title.as_deref(), Some("Renamed topic"));
+        assert_eq!(renamed.messages, first.messages);
+
+        let rename_error = store.rename(second.id, "   ").unwrap_err();
+        assert!(rename_error.contains("不能为空"));
+        assert_eq!(
+            store.get_required(second.id).unwrap().title,
+            second.title,
+            "failed rename must not alter the target conversation"
+        );
+
+        assert!(store.delete(first.id).unwrap());
+        assert!(store.get(first.id).unwrap().is_none());
+        let remaining_messages: i64 = store
+            .connection
+            .query_row(
+                "SELECT COUNT(*) FROM quick_ai_messages WHERE conversation_id = ?1",
+                [first.id],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(remaining_messages, 0);
+        assert!(!store.delete(first.id).unwrap());
+        assert_eq!(store.get_required(second.id).unwrap(), second);
+
+        drop(store);
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn export_writes_every_message_in_database_sequence_order() {
+        let (root, path) = test_database_path();
+        let mut store = ConversationStore::open_path(&path).unwrap();
+        let conversation = store
+            .create_with_exchange("deepseek-v4-flash", "First user", "First assistant")
+            .unwrap();
+        let conversation = store
+            .append_exchange(conversation.id, "Second user", "Second assistant")
+            .unwrap();
+        let export_path = root.join("ordered-conversation.md");
+
+        let exported = export_snapshot_to_path(&conversation, &export_path).unwrap();
+        let content = fs::read_to_string(&export_path).unwrap();
+        let first_user = content.find("First user").unwrap();
+        let first_assistant = content.find("First assistant").unwrap();
+        let second_user = content.find("Second user").unwrap();
+        let second_assistant = content.find("Second assistant").unwrap();
+
+        assert_eq!(exported.conversation_id, conversation.id);
+        assert_eq!(exported.file_name, "ordered-conversation.md");
+        assert_eq!(exported.message_count, 4);
+        assert!(content.starts_with("# First user\n\n"));
+        assert!(first_user < first_assistant);
+        assert!(first_assistant < second_user);
+        assert!(second_user < second_assistant);
+        assert_eq!(content.matches("## 用户").count(), 2);
+        assert_eq!(content.matches("## ReadRay").count(), 2);
+
+        drop(store);
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn empty_or_unwritable_export_does_not_report_success() {
+        let (root, path) = test_database_path();
+        let mut store = ConversationStore::open_path(&path).unwrap();
+        let empty = store.create("deepseek-v4-flash").unwrap();
+        let empty_path = root.join("empty.md");
+        let empty_error = export_snapshot_to_path(&empty, &empty_path).unwrap_err();
+        assert!(empty_error.contains("没有可导出"));
+        assert!(!empty_path.exists());
+
+        let conversation = store
+            .create_with_exchange("deepseek-v4-flash", "Export me", "Stored answer")
+            .unwrap();
+        let blocked_path = root.join("missing-parent").join("export.md");
+        let write_error = export_snapshot_to_path(&conversation, &blocked_path).unwrap_err();
+        assert!(write_error.contains("写入失败"));
+        assert!(store.get_required(conversation.id).is_ok());
 
         drop(store);
         let _ = fs::remove_dir_all(root);

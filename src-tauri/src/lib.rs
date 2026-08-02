@@ -834,6 +834,7 @@ pub fn run() {
                 .build(),
         )
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_dialog::init())
         .setup(move |app| {
             learning_records::initialize_for_app(app.handle()).map_err(std::io::Error::other)?;
 
@@ -901,6 +902,10 @@ pub fn run() {
             quick_ai::create_quick_ai_conversation,
             quick_ai::get_quick_ai_conversation,
             quick_ai::list_recent_quick_ai_conversations,
+            quick_ai::list_all_quick_ai_conversations,
+            quick_ai::rename_quick_ai_conversation,
+            quick_ai::delete_quick_ai_conversation,
+            quick_ai::export_quick_ai_conversation,
             quick_ai::send_quick_ai_message,
             writing::create_writing_document,
             writing::list_writing_documents,

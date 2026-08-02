@@ -1,7 +1,12 @@
 import { useEffect, useRef, useState, type MouseEvent } from "react";
 import type {
+  ConversationOperationIdentity,
   ConversationRequest,
   ConversationService,
+} from "../conversationViewModel";
+import {
+  isActiveConversationOperation,
+  shouldResetDeletedConversation,
 } from "../conversationViewModel";
 import type {
   MainAppNavigationId,
@@ -17,6 +22,10 @@ import {
 } from "../todayService";
 import type { WritingService } from "../writingService";
 import ConversationPage from "./ConversationPage";
+import ConversationHistoryPage from "./ConversationHistoryPage";
+import ConversationManagementMenu, {
+  type ConversationManagementTarget,
+} from "./ConversationManagementMenu";
 import MainAppIcon from "./MainAppIcon";
 import MainSidebar from "./MainSidebar";
 import MemoryPage from "./MemoryPage";
@@ -72,7 +81,9 @@ function MainAppShell({
 }: MainAppShellProps) {
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [activePageId, setActivePageId] =
-    useState<MainAppNavigationId | "conversation">("today");
+    useState<MainAppNavigationId | "conversation" | "conversation-history">(
+      "today",
+    );
   const [activeConversationId, setActiveConversationId] = useState<string>();
   const conversationRequestKeyRef = useRef(0);
   const [conversationRequest, setConversationRequest] =
@@ -80,6 +91,40 @@ function MainAppShell({
       key: 0,
       kind: "new",
     });
+  const appRootRef = useRef<HTMLDivElement>(null);
+  const conversationMenuKeyRef = useRef(0);
+  const conversationTitleUpdateKeyRef = useRef(0);
+  const [conversationMenuTarget, setConversationMenuTarget] =
+    useState<ConversationManagementTarget | null>(null);
+  const [externalConversationTitle, setExternalConversationTitle] = useState<{
+    key: number;
+    conversationId: string;
+    title: string;
+  }>();
+  const activePageIdRef = useRef(activePageId);
+  const activeConversationIdRef = useRef(activeConversationId);
+  const conversationRequestRef = useRef(conversationRequest);
+  activePageIdRef.current = activePageId;
+  activeConversationIdRef.current = activeConversationId;
+  conversationRequestRef.current = conversationRequest;
+
+  function updateActivePage(
+    nextPageId: MainAppNavigationId | "conversation" | "conversation-history",
+  ) {
+    activePageIdRef.current = nextPageId;
+    setConversationMenuTarget(null);
+    setActivePageId(nextPageId);
+  }
+
+  function updateActiveConversation(nextConversationId?: string) {
+    activeConversationIdRef.current = nextConversationId;
+    setActiveConversationId(nextConversationId);
+  }
+
+  function updateConversationRequest(nextRequest: ConversationRequest) {
+    conversationRequestRef.current = nextRequest;
+    setConversationRequest(nextRequest);
+  }
   const [writingLibraryRequest, setWritingLibraryRequest] = useState(0);
   const [writingWindowTitle, setWritingWindowTitle] = useState("写作");
   const [requestedMemoryRecordId, setRequestedMemoryRecordId] = useState<string>();
@@ -183,7 +228,7 @@ function MainAppShell({
 
   function handleNavigate(id: MainAppNavigationId) {
     if (id === "today" || id === "memory" || id === "writing") {
-      setActivePageId(id);
+      updateActivePage(id);
     }
     if (id === "memory") {
       setRequestedMemoryRecordId(undefined);
@@ -201,7 +246,7 @@ function MainAppShell({
       const action = todayViewModel.actions.find((item) => item.id === id);
       if (action && !action.disabled) {
         setRequestedMemoryRecordId(action.recordId);
-        setActivePageId("memory");
+        updateActivePage("memory");
         onNavigate("memory");
       }
     }
@@ -214,12 +259,12 @@ function MainAppShell({
   }
 
   function handleNewConversation() {
-    setActiveConversationId(undefined);
-    setConversationRequest({
+    updateActiveConversation(undefined);
+    updateConversationRequest({
       key: nextConversationRequestKey(),
       kind: "new",
     });
-    setActivePageId("conversation");
+    updateActivePage("conversation");
     onNewConversation();
   }
 
@@ -228,25 +273,109 @@ function MainAppShell({
     if (!conversation) {
       return;
     }
-    setActiveConversationId(id);
-    setConversationRequest({
+    updateActiveConversation(id);
+    updateConversationRequest({
       key: nextConversationRequestKey(),
       kind: "existing",
       conversationId: id,
       title: conversation.title,
     });
-    setActivePageId("conversation");
+    updateActivePage("conversation");
     onRecentConversationSelect(id);
   }
 
+  function handleConversationOpen(id: string, title: string) {
+    updateActiveConversation(id);
+    updateConversationRequest({
+      key: nextConversationRequestKey(),
+      kind: "existing",
+      conversationId: id,
+      title,
+    });
+    updateActivePage("conversation");
+    onRecentConversationSelect(id);
+  }
+
+  function handleViewAllConversations() {
+    updateActiveConversation(undefined);
+    updateActivePage("conversation-history");
+    onViewAllConversations();
+  }
+
+  function handleConversationContextMenu(
+    conversation: { id: string; title: string },
+    event: MouseEvent<HTMLElement>,
+  ) {
+    event.preventDefault();
+    event.stopPropagation();
+    const root = appRootRef.current;
+    if (!root) {
+      return;
+    }
+    const bounds = root.getBoundingClientRect();
+    const scaleX = bounds.width / root.offsetWidth || 1;
+    const scaleY = bounds.height / root.offsetHeight || 1;
+    const localX = (event.clientX - bounds.left) / scaleX;
+    const localY = (event.clientY - bounds.top) / scaleY;
+    conversationMenuKeyRef.current += 1;
+    setConversationMenuTarget({
+      interactionKey: conversationMenuKeyRef.current,
+      conversationId: conversation.id,
+      title: conversation.title,
+      x: Math.max(8, Math.min(localX, root.offsetWidth - 184)),
+      y: Math.max(8, Math.min(localY, root.offsetHeight - 120)),
+      routeIdentity: {
+        requestKey: conversationRequestRef.current.key,
+        conversationId: conversation.id,
+      },
+    });
+  }
+
+  function handleCurrentConversationDeleted(
+    operation: ConversationOperationIdentity,
+  ) {
+    if (
+      shouldResetDeletedConversation(
+        activePageIdRef.current,
+        activeConversationIdRef.current,
+        conversationRequestRef.current.key,
+        operation,
+      )
+    ) {
+      handleNewConversation();
+    }
+  }
+
+  function handleManagedConversationRenamed(
+    conversationId: string,
+    title: string,
+    operation: ConversationOperationIdentity,
+  ) {
+    if (
+      isActiveConversationOperation(
+        activePageIdRef.current,
+        activeConversationIdRef.current,
+        conversationRequestRef.current.key,
+        operation,
+      )
+    ) {
+      conversationTitleUpdateKeyRef.current += 1;
+      setExternalConversationTitle({
+        key: conversationTitleUpdateKeyRef.current,
+        conversationId,
+        title,
+      });
+    }
+  }
+
   function handleSubmitPrompt(value: string) {
-    setActiveConversationId(undefined);
-    setConversationRequest({
+    updateActiveConversation(undefined);
+    updateConversationRequest({
       key: nextConversationRequestKey(),
       kind: "prompt",
       prompt: value,
     });
-    setActivePageId("conversation");
+    updateActivePage("conversation");
     onSubmitPrompt(value);
   }
 
@@ -265,6 +394,7 @@ function MainAppShell({
 
   return (
     <div
+      ref={appRootRef}
       className={`rr-main-app${sidebarCollapsed ? " is-sidebar-collapsed" : ""}${
         activePageId === "conversation" ? " is-conversation-page" : ""
       }`}
@@ -282,6 +412,8 @@ function MainAppShell({
         <div className="rr-main-drag-zone">
           {activePageId === "conversation"
             ? "对话"
+            : activePageId === "conversation-history"
+            ? "全部对话"
             : activePageId === "memory"
             ? "记忆"
             : activePageId === "writing" ? writingWindowTitle : "今天"}
@@ -312,7 +444,10 @@ function MainAppShell({
           recentStatus={recentStatus}
           recentError={recentError}
           activeNavigationId={
-            activePageId === "conversation" ? undefined : activePageId
+            activePageId === "conversation" ||
+            activePageId === "conversation-history"
+              ? undefined
+              : activePageId
           }
           activeConversationId={
             activePageId === "conversation" ? activeConversationId : undefined
@@ -320,7 +455,8 @@ function MainAppShell({
           onNewConversation={handleNewConversation}
           onNavigate={handleNavigate}
           onRecentConversationSelect={handleRecentConversationSelect}
-          onViewAllConversations={onViewAllConversations}
+          onRecentConversationContextMenu={handleConversationContextMenu}
+          onViewAllConversations={handleViewAllConversations}
           onRecentRetry={() => setRecentRetryToken((token) => token + 1)}
         />
         {activePageId === "conversation" ? (
@@ -328,7 +464,9 @@ function MainAppShell({
             <ConversationPage
               request={conversationRequest}
               service={conversationService}
-              onThreadIdentityChange={setActiveConversationId}
+              onThreadIdentityChange={updateActiveConversation}
+              onConversationDeleted={handleCurrentConversationDeleted}
+              externalTitleUpdate={externalConversationTitle}
             />
           ) : (
             <main
@@ -340,6 +478,23 @@ function MainAppShell({
                   <h2>正在准备对话</h2>
                   <p>浏览器预览数据正在加载。</p>
                 </div>
+              </div>
+            </main>
+          )
+        ) : activePageId === "conversation-history" ? (
+          conversationService ? (
+            <ConversationHistoryPage
+              service={conversationService}
+              refreshToken={conversationRefreshToken}
+              onOpenConversation={(conversation) =>
+                handleConversationOpen(conversation.id, conversation.title)
+              }
+              onConversationContextMenu={handleConversationContextMenu}
+            />
+          ) : (
+            <main className="rr-main-panel rr-conversation-history">
+              <div className="rr-conversation-history-state">
+                正在准备对话历史…
               </div>
             </main>
           )
@@ -367,6 +522,16 @@ function MainAppShell({
           onWindowTitleChange={setWritingWindowTitle}
         />
       </div>
+      {conversationService ? (
+        <ConversationManagementMenu
+          service={conversationService}
+          target={conversationMenuTarget}
+          pageIdentity={`${activePageId}:${conversationRequest.key}`}
+          onCloseMenu={() => setConversationMenuTarget(null)}
+          onRenamed={handleManagedConversationRenamed}
+          onDeleted={handleCurrentConversationDeleted}
+        />
+      ) : null}
     </div>
   );
 }

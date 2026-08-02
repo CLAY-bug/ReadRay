@@ -23,3 +23,10 @@ export type RecentQuickAiConversation = {
   title: string;
   updatedAtUnixMs: number;
 };
+
+export type QuickAiConversationExport = {
+  conversationId: number;
+  fileName: string;
+  filePath: string;
+  messageCount: number;
+};

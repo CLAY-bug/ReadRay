@@ -5,6 +5,7 @@ import type {
   ConversationGenerationRequest,
   ConversationMessage,
   ConversationService,
+  ConversationSummary,
   ConversationThread,
   ConversationUserMessage,
 } from "./conversationViewModel.ts";
@@ -17,7 +18,7 @@ const COMPLETE_DELIVERY_CAPABILITIES = {
   delivery: "complete",
   canStop: false,
   canRegenerate: false,
-  canExport: false,
+  canExport: true,
 } as const;
 
 function requireConversationId(value: string) {
@@ -176,6 +177,15 @@ function errorMessage(error: unknown) {
   return error instanceof Error ? error.message : String(error);
 }
 
+function exportFileName(title: string) {
+  const safeTitle = title
+    .trim()
+    .replace(/[<>:"/\\|?*\u0000-\u001f]/g, "-")
+    .replace(/[. ]+$/g, "")
+    .slice(0, 64);
+  return `${safeTitle || "ReadRay-对话"}.md`;
+}
+
 function turnAt(
   snapshot: QuickAiConversation,
   userSequence: number,
@@ -221,6 +231,50 @@ export class RepositoryConversationService implements ConversationService {
       throw new Error("这个 Quick AI 会话不存在或已无法读取。");
     }
     return mapQuickAiConversation(snapshot);
+  }
+
+  async listConversations(): Promise<ConversationSummary[]> {
+    const snapshots = await this.repository.list();
+    return snapshots.map((snapshot) => {
+      if (
+        !Number.isSafeInteger(snapshot.id) ||
+        snapshot.id <= 0 ||
+        !snapshot.title.trim() ||
+        !Number.isFinite(snapshot.updatedAtUnixMs)
+      ) {
+        throw new Error("Quick AI 返回了无效的会话摘要。");
+      }
+      return {
+        id: String(snapshot.id),
+        title: snapshot.title.trim(),
+        updatedAtUnixMs: snapshot.updatedAtUnixMs,
+      };
+    });
+  }
+
+  async renameConversation(conversationId: string, title: string) {
+    const normalizedTitle = title.trim();
+    if (!normalizedTitle) {
+      throw new Error("会话名称不能为空。");
+    }
+    const renamed = mapQuickAiConversation(
+      await this.repository.rename(
+        requireConversationId(conversationId),
+        normalizedTitle,
+      ),
+    );
+    this.onConversationUpdated?.();
+    return renamed;
+  }
+
+  async deleteConversation(conversationId: string) {
+    const deleted = await this.repository.delete(
+      requireConversationId(conversationId),
+    );
+    if (!deleted) {
+      throw new Error("这个 Quick AI 会话不存在或已经被删除。");
+    }
+    this.onConversationUpdated?.();
   }
 
   async generateReply(request: ConversationGenerationRequest) {
@@ -277,7 +331,34 @@ export class RepositoryConversationService implements ConversationService {
     };
   }
 
-  async exportConversation(): Promise<ConversationExportResult> {
-    return { exported: false };
+  async exportConversation(
+    thread: ConversationThread,
+  ): Promise<ConversationExportResult> {
+    if (thread.messages.length === 0) {
+      return { exported: false, reason: "unavailable" };
+    }
+    const conversationId = requireConversationId(thread.id);
+    const result = await this.repository.export(
+      conversationId,
+      exportFileName(thread.title),
+    );
+    if (!result) {
+      return { exported: false, reason: "cancelled" };
+    }
+    if (
+      result.conversationId !== conversationId ||
+      !result.fileName.trim() ||
+      !result.filePath.trim() ||
+      !Number.isSafeInteger(result.messageCount) ||
+      result.messageCount <= 0
+    ) {
+      throw new Error("Quick AI 返回了无效的导出结果。");
+    }
+    return {
+      exported: true,
+      fileName: result.fileName,
+      messageCount: result.messageCount,
+      nativeFilePath: result.filePath,
+    };
   }
 }

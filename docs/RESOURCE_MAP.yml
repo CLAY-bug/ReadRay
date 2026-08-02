@@ -4,7 +4,7 @@ project:
   repo_root: "."
 
 meta:
-  version: "1.13"
+  version: "1.16"
   last_updated: "2026-08-02"
   updated_by: "Codex"
   source_of_truth: "docs/RESOURCE_MAP.yml"
@@ -42,11 +42,11 @@ core_docs:
     risk: "不要从聊天历史恢复已被本文件覆盖的旧决策。"
 
   - path: "docs/HANDOFF.md"
-    purpose: "当前状态快照、已确认决策、下一步、待解决问题。"
+    purpose: "当前状态快照、已确认决策、下一步和当前已知限制。"
     status: "active"
     read_when:
       - "继续上一次开发。"
-      - "需要了解当前状态、下一步或待解决问题。"
+      - "需要了解当前状态、下一步或当前已知限制。"
       - "任务产生交接价值，需要更新当前状态快照。"
     notes: "只记录会影响下一次恢复上下文的信息；开头 TL;DR 用于新会话快速恢复。"
     risk: "不要把小型措辞、格式调整或已经能从文件本身看出的变化写成流水账。"
@@ -141,7 +141,7 @@ source_areas:
     read_when:
       - "调整正常主应用壳、标题栏、侧栏折叠或首页装配。"
       - "将主应用接入独立 Tauri 窗口。"
-    notes: "当前通过 ?view=main 进入主应用，并在同一外壳内切换“今天”“写作”“记忆”和“对话”；由装配层加载 TodayService、MemoryService、ConversationService、WritingService 与最近 Quick AI 对话，页面组件不直接读取数据库。写作页保持挂载并在离开时隐藏，使失败草稿仍可返回重试。"
+    notes: "当前通过 ?view=main 进入主应用，并在同一外壳内切换“今天”“写作”“记忆”“对话”和“全部对话”；由装配层加载 TodayService、MemoryService、ConversationService、WritingService 与最近 Quick AI 对话，页面组件不直接读取数据库。侧栏和全部历史的右键管理统一由外壳装配，成功后复用既有刷新令牌同步列表；只有实时页面、请求键和目标 ID 仍匹配时才同步当前标题或删除后进入空会话。写作页保持挂载并在离开时隐藏，使失败草稿仍可返回重试。"
     risk: "不要把快捷 overlay 状态机或 invoke 迁入页面组件；正式 Tauri 对话和写作必须使用真实 service，fixture 只能由非 Tauri 预览动态加载。"
 
   - path: "src/components/MainSidebar.tsx"
@@ -149,8 +149,8 @@ source_areas:
     status: "active"
     read_when:
       - "调整主应用导航结构、最近对话展示或手动折叠态。"
-    notes: "默认宽 252px，用户手动折叠为 72px 纯图标栏；展开态最近对话来自真实 Quick AI 标题，并支持 loading/empty/error/retry。"
-    risk: "组件只消费装配层数据；最近对话点击可加载真实正文，但查看全部、删除和重命名仍属于后续阶段。"
+    notes: "默认宽 252px，用户手动折叠为 72px 纯图标栏；展开态最近对话来自真实 Quick AI 标题，并支持 loading/empty/error/retry。最近项左键打开，右键把数据库 ID 和标题交给统一的会话管理菜单；不维护常驻或悬停操作按钮。"
+    risk: "组件只消费装配层数据；最近对话和查看全部入口不得自行读取 SQLite 或维护第二份会话事实。"
 
   - path: "src/components/TodayPage.tsx"
     purpose: "主应用首页“今天”的摘要、学习入口和底部输入框。"
@@ -166,41 +166,67 @@ source_areas:
     read_when:
       - "调整完整对话页布局、消息展示或设计稿交互。"
       - "接入真实 Quick AI 历史、发送、导出或记忆引用。"
-    notes: "复用 MainAppShell、MainSidebar 和全局标题栏；页面只消费 ConversationService。正式 Tauri 回答以 SQLite 权威快照回写，加载到以 user 结尾的会话时恢复明确的 pending 重试态；非 Tauri fixture 继续演示分片、停止、重生成和导出。"
-    risk: "不得在页面组件直接调用 Tauri、SQLite 或 DeepSeek；真实后端不支持的停止、重生成、导出和记忆引用必须保持禁用或无数据状态。"
+    notes: "复用 MainAppShell、MainSidebar 和全局标题栏；页面只消费 ConversationService。当前标题单击原地编辑，Enter 保存、Esc 或失焦安全取消；正式 Tauri 重命名、删除和导出同时绑定 mounted、request key 与数据库 ID，迟到结果只有仍对应当前页面请求时才更新；父级回调还会复核实时页面和会话身份。删除当前会话后安全进入新会话；空白会话不开放导出，取消导出不提示成功。加载到以 user 结尾的会话时恢复明确的 pending 重试态；非 Tauri fixture 继续演示分片、停止、重生成和浏览器下载。"
+    risk: "不得在页面组件直接调用 Tauri、SQLite 或 DeepSeek；真实后端不支持的停止、重生成和记忆引用必须保持禁用或无数据状态。"
+
+  - path: "src/components/ConversationHistoryPage.tsx"
+    purpose: "主应用“全部对话”的真实历史列表与加载状态页。"
+    status: "active"
+    read_when:
+      - "调整查看全部对话的 loading、empty、error、retry 或列表交互。"
+      - "排查历史列表打开或右键管理入口。"
+    notes: "只消费 ConversationService；列表来自 SQLite 摘要，覆盖 loading、empty、error、retry。列表项左键打开，右键只把目标交给外壳的统一管理菜单，不在本页复制重命名、导出或删除业务状态。"
+    risk: "不得从侧栏最近六条推导全部历史，也不得把列表标题当成数据库外的第二份权威状态。"
+
+  - path: "src/components/ConversationManagementMenu.tsx"
+    purpose: "侧栏最近会话与全部历史共用的右键菜单、重命名和删除确认交互。"
+    status: "active"
+    read_when:
+      - "调整列表右键重命名、导出、删除或失败重试。"
+      - "排查列表管理操作的目标 ID 和迟到结果隔离。"
+    notes: "菜单只接收目标数据库 ID、标题和鼠标位置；重命名、删除、导出均复用 ConversationService 与既有异步身份守卫。列表导出先按 ID 加载权威消息，确认非空后才允许打开保存对话框。"
+    risk: "不得在侧栏或历史页再复制一套管理请求，也不得用列表标题代替数据库 ID。"
+
+  - path: "src/conversationExportDelivery.ts"
+    purpose: "原生与非 Tauri 预览共用的导出结果校验和浏览器文件交付。"
+    status: "active"
+    read_when:
+      - "调整导出成功结果校验或预览下载交付。"
+    notes: "不生成会话内容；只验证 service 已返回的文件元数据，原生路径确认可取得文件，预览路径交付隔离的 browserFile。"
+    risk: "正式导出内容仍必须由 Rust 按数据库 ID 生成，不得在此用页面 messages 重建。"
 
   - path: "src/conversationViewModel.ts"
     purpose: "完整对话页的有类型消息、富文本块、记忆引用、入口请求和可替换 service 协议。"
     status: "active"
     read_when:
       - "调整对话页展示协议或替换真实对话 service。"
-    notes: "页面只消费 ConversationThread 与 ConversationService，不复制 Rust Quick AI 数据库 schema；消息可携带真实 sequence，thread 可携带由尾部 user 推导的 pendingTurn，生成结果区分 complete 与已持久化 pending。"
+    notes: "页面只消费 ConversationThread、ConversationSummary 与 ConversationService，不复制 Rust Quick AI 数据库 schema；协议同时覆盖全部历史、重命名、删除和原生/预览两类导出结果。消息可携带真实 sequence，thread 可携带由尾部 user 推导的 pendingTurn，生成结果区分 complete 与已持久化 pending。"
     risk: "协议变化必须同步真实 service 与 fixture；不能让 Rust 原始响应直接耦合组件。"
 
   - path: "src/conversationRepository.ts"
     purpose: "完整对话页的 Tauri Quick AI command repository。"
     status: "active"
     read_when:
-      - "调整完整对话创建、读取或发送 command 调用。"
+      - "调整完整对话创建、读取、管理、导出或发送 command 调用。"
       - "排查 Tauri 参数名或 Rust camelCase 返回协议。"
-    notes: "只调用现有 create_quick_ai_conversation、get_quick_ai_conversation 与 send_quick_ai_message；发送显式携带 conversationId、expectedUserSequence 与 content，不包含页面映射或第二套存储。"
+    notes: "调用 create/get/send/list_all/rename/delete/export Quick AI commands；发送显式携带 conversationId、expectedUserSequence 与 content。原生导出先通过 Tauri dialog 取得用户选择的 Markdown 路径，取消时不调用 Rust 写文件 command；不包含页面映射或第二套存储。"
     risk: "不得在 repository 拼装上下文、复制 SQLite schema 或另建模型客户端。"
 
   - path: "src/conversationService.ts"
     purpose: "Rust Quick AI 会话到现有完整对话页面模型的映射与正式 service。"
     status: "active"
     read_when:
-      - "调整真实会话加载、续聊、失败重试或页面消息映射。"
+      - "调整真实会话加载、续聊、管理、导出、失败重试或页面消息映射。"
       - "排查正式能力降级和最近对话刷新。"
-    notes: "以 Rust 返回的 ConversationSnapshot 为权威；用 conversationId + expectedUserSequence 标识轮次，不靠 prompt 文本猜测完成状态。发送失败时读取数据库恢复 completed 或 pending；若 IPC 与读取都失败，页面仍保留同一 expected sequence，下一次重试由后端幂等返回。"
+    notes: "以 Rust 返回的 ConversationSnapshot 和数据库会话 ID 为权威；全部历史、重命名、删除和原生导出均只提交目标 ID，导出不使用页面 messages 重建内容。用 conversationId + expectedUserSequence 标识轮次，不靠 prompt 文本猜测完成状态。发送失败时读取数据库恢复 completed 或 pending；若 IPC 与读取都失败，页面仍保留同一 expected sequence，下一次重试由后端幂等返回。"
     risk: "不得使用前端 messages 重建后端历史；多轮上下文只由现有 Quick AI/SQLite 事实提供。"
 
   - path: "tests/conversationService.test.mjs"
-    purpose: "完整对话 Tauri repository 参数、Rust 快照映射和关键失败恢复测试。"
+    purpose: "完整对话 Tauri repository 参数、Rust 快照映射、会话管理、导出和关键失败恢复测试。"
     status: "active"
     read_when:
       - "修改 conversation repository/service 协议或失败重试语义。"
-    notes: "使用 Node 内置 test runner 与注入式 repository，不新增测试依赖；覆盖 9 项参数映射、pending 恢复、重启重试、模糊成功路径和正式能力降级。"
+    notes: "使用 Node 内置 test runner 与注入式 repository，不新增测试依赖；覆盖 18 项正式路径 fixture 隔离、参数映射、pending 恢复、重启重试、模糊成功路径、全部历史、列表左键/右键边界、标题原地编辑、重命名/删除失败重试、卸载/请求/会话身份守卫、空白导出双层阻断、原生导出 ID 绑定和保存对话框取消。"
     risk: "这些测试不替代真实 Tauri/DeepSeek 人工验收。"
 
   - path: "src/conversationFixtureService.ts"
@@ -208,7 +234,7 @@ source_areas:
     status: "preview-only"
     read_when:
       - "维护设计稿示例对话、生成/失败/重试状态或前端预览。"
-    notes: "支持新对话、六类设计示例、未知最近标题降级、前端流式回答和包含完整 thread 的 Markdown 导出文件；conversationFailure=create|load|generate|export 提供一次性显式故障注入，[fixture:slow] 只用于停止/继续验证。"
+    notes: "支持新对话、六类设计示例、未知最近标题降级、隔离的历史/管理预览、前端流式回答和包含完整 thread 的浏览器 Markdown 下载；conversationFailure=create|load|generate|export 提供一次性显式故障注入，[fixture:slow] 只用于停止/继续验证。"
     risk: "该 service 不持久化 thread、不读取真实历史，也不请求 DeepSeek；不得由正式 Tauri 装配读取或实例化。"
 
   - path: "src/components/MemoryPage.tsx"
@@ -586,16 +612,16 @@ source_areas:
     read_when:
       - "调整 Quick AI 对话持久化或继续历史对话。"
       - "实现未来主应用对话历史读取。"
-    notes: "复用 v2 表、消息自增 ID 与 UNIQUE(conversation_id, sequence)，未新增迁移。prepare_turn 先独立提交 pending user；complete_turn 只在匹配的 user ID/expected sequence 后补 assistant，完成轮次重试直接返回权威快照，旧版本或并发冲突拒绝写入。"
-    risk: "不要把 Quick AI 消息写入 learning_records；当前不实现完整历史页、删除、重命名、长期记忆或检索增强。"
+    notes: "复用 v2 表、消息自增 ID 与 UNIQUE(conversation_id, sequence)，未新增迁移。仓库提供全部有标题会话、按 ID 重命名和级联删除；导出从数据库快照按 sequence 顺序写出完整 user/assistant Markdown。prepare_turn 先独立提交 pending user；complete_turn 只在匹配的 user ID/expected sequence 后补 assistant，完成轮次重试直接返回权威快照，旧版本或并发冲突拒绝写入。"
+    risk: "不要把 Quick AI 消息写入 learning_records；不实现长期记忆、回答重生成、检索增强或第二套会话存储。"
 
   - path: "src-tauri/src/quick_ai.rs"
     purpose: "Quick AI 多轮 DeepSeek 请求、上下文装配和 Tauri commands。"
     status: "active"
     read_when:
       - "调整 Quick AI system prompt、上下文窗口或发送流程。"
-      - "排查 create/get/send/list_recent Quick AI commands。"
-    notes: "独立于 ExplanationCard JSON 协议；send command 要求已创建的 conversationId 和 expectedUserSequence，先 prepare pending user，再从该 SQLite 快照装配多轮上下文并调用模型，成功后 complete assistant；已完成轮次不会再次请求模型。"
+      - "排查 create/get/send/list_recent/list_all/rename/delete/export Quick AI commands。"
+    notes: "独立于 ExplanationCard JSON 协议；管理和导出 commands 始终携带数据库 conversationId，export 在用户选定路径后重新读取权威快照再写文件。send command 要求已创建的 conversationId 和 expectedUserSequence，先 prepare pending user，再从该 SQLite 快照装配多轮上下文并调用模型，成功后 complete assistant；已完成轮次不会再次请求模型。"
     risk: "不接学习记录检索、工具调用、联网搜索、长期记忆或通用 Agent 框架。"
 
   - path: "src-tauri/src/writing.rs"
@@ -650,7 +676,7 @@ app_scaffold:
     read_when:
       - "调整 npm/pnpm 脚本。"
       - "排查前端构建或 Tauri CLI 调用。"
-    notes: "包管理器使用 pnpm；当前脚本包含 dev、build、preview、test:conversation、test:writing 和 tauri。"
+    notes: "包管理器使用 pnpm；当前脚本包含 dev、build、preview、test:conversation、test:writing 和 tauri。阶段六使用官方 @tauri-apps/plugin-dialog 提供原生 Markdown 保存路径选择和取消语义。"
     risk: "不要无依据新增运行时依赖。"
 
   - path: "pnpm-lock.yaml"
@@ -670,6 +696,24 @@ app_scaffold:
       - "复现 Tauri 编译问题。"
     notes: "由 cargo fetch / pnpm tauri dev 生成。"
     risk: "不要手工编辑锁文件。"
+
+  - path: "src-tauri/Cargo.toml"
+    purpose: "Rust/Tauri crate、插件和 Windows 功能依赖声明。"
+    status: "active"
+    read_when:
+      - "调整 Tauri 插件或 Rust 依赖。"
+      - "排查原生导出、SQLite 或 Windows 编译。"
+    notes: "阶段六新增官方 tauri-plugin-dialog，与前端插件配套；SQLite 仍由现有 rusqlite bundled 负责。"
+    risk: "新增依赖前必须说明必要性、替代方案及打包影响；不得为会话管理引入第二套存储或模型客户端。"
+
+  - path: "src-tauri/capabilities/default.json"
+    purpose: "主窗口 Tauri capability 权限。"
+    status: "active"
+    read_when:
+      - "调整主窗口插件权限。"
+      - "排查原生保存对话框权限。"
+    notes: "主窗口允许 dialog:allow-save；文件内容仍由受控 Rust command 写入用户选择的路径。"
+    risk: "只开放当前功能需要的权限，不使用 dialog:default 或无关文件系统权限扩大范围。"
 
 external_refs:
   - name: "Tauri 官方文档"

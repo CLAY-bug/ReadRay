@@ -1,4 +1,9 @@
-import { useLayoutEffect, useRef, useState } from "react";
+import {
+  useLayoutEffect,
+  useRef,
+  useState,
+  type MouseEvent,
+} from "react";
 import type {
   MainAppNavigationId,
   MainAppNavigationItem,
@@ -17,6 +22,10 @@ type MainSidebarProps = {
   onNewConversation: () => void;
   onNavigate: (id: MainAppNavigationId) => void;
   onRecentConversationSelect: (id: string) => void;
+  onRecentConversationContextMenu: (
+    conversation: RecentConversationItem,
+    event: MouseEvent<HTMLElement>,
+  ) => void;
   onViewAllConversations: () => void;
   onRecentRetry: () => void;
 };
@@ -67,6 +76,7 @@ function MainSidebar({
   onNewConversation,
   onNavigate,
   onRecentConversationSelect,
+  onRecentConversationContextMenu,
   onViewAllConversations,
   onRecentRetry,
 }: MainSidebarProps) {
@@ -127,7 +137,9 @@ function MainSidebar({
                 conversation.id === activeConversationId ? "page" : undefined
               }
               onClick={() => onRecentConversationSelect(conversation.id)}
-              onContextMenu={(event) => event.preventDefault()}
+              onContextMenu={(event) =>
+                onRecentConversationContextMenu(conversation, event)
+              }
             >
               <RecentConversationTitle title={conversation.title} />
             </button>

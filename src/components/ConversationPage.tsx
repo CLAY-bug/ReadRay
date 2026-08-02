@@ -11,6 +11,7 @@ import {
 } from "react";
 import type {
   ConversationAssistantMessage,
+  ConversationOperationIdentity,
   ConversationInline,
   ConversationMessage,
   ConversationMemoryCitation,
@@ -19,12 +20,26 @@ import type {
   ConversationThread,
   ConversationUserMessage,
 } from "../conversationViewModel";
+import {
+  conversationExportUnavailableReason,
+  conversationTitleEditAction,
+  isConversationOperationCurrent,
+} from "../conversationViewModel";
+import { deliverConversationExport } from "../conversationExportDelivery";
 import MainAppIcon from "./MainAppIcon";
 
 type ConversationPageProps = {
   request: ConversationRequest;
   service: ConversationService;
   onThreadIdentityChange?: (conversationId: string) => void;
+  onConversationDeleted?: (
+    operation: ConversationOperationIdentity,
+  ) => void;
+  externalTitleUpdate?: {
+    key: number;
+    conversationId: string;
+    title: string;
+  };
 };
 
 type GenerationState = {
@@ -42,27 +57,6 @@ type GenerationState = {
 };
 
 const USER_CLAMP_LINES = 5;
-
-function downloadConversationFile(file: {
-  fileName: string;
-  mimeType: string;
-  content: string;
-}) {
-  const blob = new Blob([file.content], { type: file.mimeType });
-  if (blob.size === 0) {
-    throw new Error("conversation export is empty");
-  }
-
-  const downloadUrl = URL.createObjectURL(blob);
-  const downloadLink = document.createElement("a");
-  downloadLink.href = downloadUrl;
-  downloadLink.download = file.fileName;
-  downloadLink.style.display = "none";
-  document.body.appendChild(downloadLink);
-  downloadLink.click();
-  downloadLink.remove();
-  window.setTimeout(() => URL.revokeObjectURL(downloadUrl), 0);
-}
 
 function resizeComposer(input: HTMLTextAreaElement) {
   input.style.height = "auto";
@@ -303,6 +297,8 @@ function ConversationPage({
   request,
   service,
   onThreadIdentityChange,
+  onConversationDeleted,
+  externalTitleUpdate,
 }: ConversationPageProps) {
   const [thread, setThread] = useState<ConversationThread | null>(null);
   const [draft, setDraft] = useState("");
@@ -310,6 +306,12 @@ function ConversationPage({
   const [requestRetryToken, setRequestRetryToken] = useState(0);
   const [lastExportedMessageCount, setLastExportedMessageCount] = useState(0);
   const [menuOpen, setMenuOpen] = useState(false);
+  const [renameDraft, setRenameDraft] = useState<string | null>(null);
+  const [deleteConfirmationOpen, setDeleteConfirmationOpen] = useState(false);
+  const [managementBusy, setManagementBusy] = useState<
+    "rename" | "delete" | null
+  >(null);
+  const [managementError, setManagementError] = useState("");
   const [drawerCitation, setDrawerCitation] =
     useState<ConversationMemoryCitation | null>(null);
   const [toast, setToast] = useState("");
@@ -320,10 +322,24 @@ function ConversationPage({
   const drawerCloseRef = useRef<HTMLButtonElement>(null);
   const citationTriggerRef = useRef<HTMLButtonElement | null>(null);
   const threadRef = useRef<ConversationThread | null>(null);
+  const mountedRef = useRef(true);
+  const requestKeyRef = useRef(request.key);
   const timerRef = useRef<number | undefined>(undefined);
   const generationTokenRef = useRef(0);
   const toastTimerRef = useRef<number | undefined>(undefined);
   const messageIdRef = useRef(0);
+  requestKeyRef.current = request.key;
+
+  const operationIsCurrent = useCallback(
+    (operation: ConversationOperationIdentity) =>
+      isConversationOperationCurrent(
+        mountedRef.current,
+        operation,
+        requestKeyRef.current,
+        threadRef.current?.id,
+      ),
+    [],
+  );
 
   const stopTimer = useCallback(() => {
     if (timerRef.current !== undefined) {
@@ -550,6 +566,10 @@ function ConversationPage({
     setDraft("");
     setLastExportedMessageCount(0);
     setMenuOpen(false);
+    setRenameDraft(null);
+    setDeleteConfirmationOpen(false);
+    setManagementBusy(null);
+    setManagementError("");
     closeMemoryDrawer(false);
 
     const load = async () => {
@@ -646,15 +666,30 @@ function ConversationPage({
   ]);
 
   useEffect(
-    () => () => {
-      generationTokenRef.current += 1;
-      stopTimer();
-      if (toastTimerRef.current !== undefined) {
-        window.clearTimeout(toastTimerRef.current);
-      }
+    () => {
+      mountedRef.current = true;
+      return () => {
+        mountedRef.current = false;
+        generationTokenRef.current += 1;
+        stopTimer();
+        if (toastTimerRef.current !== undefined) {
+          window.clearTimeout(toastTimerRef.current);
+        }
+      };
     },
     [stopTimer],
   );
+
+  useEffect(() => {
+    const currentThread = threadRef.current;
+    if (
+      currentThread &&
+      externalTitleUpdate?.conversationId === currentThread.id &&
+      externalTitleUpdate.title !== currentThread.title
+    ) {
+      updateThread({ ...currentThread, title: externalTitleUpdate.title });
+    }
+  }, [externalTitleUpdate, updateThread]);
 
   useEffect(() => {
     const handlePointerDown = (event: PointerEvent) => {
@@ -799,35 +834,128 @@ function ConversationPage({
   const exportConversation = async () => {
     const currentThread = threadRef.current;
     setMenuOpen(false);
-    if (generation) {
+    const unavailableReason = conversationExportUnavailableReason(
+      currentThread,
+      generation !== null,
+      service.capabilities.canExport,
+    );
+    if (unavailableReason) {
+      notify(unavailableReason);
       return;
     }
     if (!currentThread) {
-      notify("当前没有可导出的对话");
       return;
     }
+    const operation = {
+      requestKey: requestKeyRef.current,
+      conversationId: currentThread.id,
+    };
 
     try {
       const result = await service.exportConversation(
         structuredClone(currentThread),
       );
       if (!result.exported) {
-        throw new Error("当前对话服务不支持导出。");
+        if (result.reason === "cancelled") {
+          return;
+        }
+        throw new Error("当前对话无法导出。");
       }
-      if (
-        !result.file.fileName.trim() ||
-        !result.file.mimeType.trim() ||
-        !result.file.content.trim()
-      ) {
-        throw new Error("对话服务返回了无效的导出文件。");
+      if (!operationIsCurrent(operation)) {
+        return;
       }
-      downloadConversationFile(result.file);
-      setLastExportedMessageCount(currentThread.messages.length);
-      notify("当前对话已导出");
+      deliverConversationExport(result);
+      setLastExportedMessageCount(result.messageCount);
+      notify(`已导出 ${result.fileName}`);
     } catch (error) {
+      if (!operationIsCurrent(operation)) {
+        return;
+      }
       console.error("ReadRay 对话导出失败：", error);
       setLastExportedMessageCount(0);
       notify("导出失败，请稍后重试");
+    }
+  };
+
+  const openInlineRename = () => {
+    const currentThread = threadRef.current;
+    setMenuOpen(false);
+    if (!currentThread?.messages.length || generation) {
+      return;
+    }
+    setManagementError("");
+    setRenameDraft(currentThread.title);
+  };
+
+  const cancelInlineRename = () => {
+    if (managementBusy === "rename") {
+      return;
+    }
+    setRenameDraft(null);
+    setManagementError("");
+  };
+
+  const renameConversation = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    const currentThread = threadRef.current;
+    const title = renameDraft?.trim() ?? "";
+    if (!currentThread || !title || managementBusy) {
+      return;
+    }
+    const targetId = currentThread.id;
+    const operation = {
+      requestKey: requestKeyRef.current,
+      conversationId: targetId,
+    };
+    setManagementBusy("rename");
+    setManagementError("");
+    try {
+      const renamed = await service.renameConversation(targetId, title);
+      if (!operationIsCurrent(operation)) {
+        return;
+      }
+      updateThread(renamed);
+      setRenameDraft(null);
+      notify("会话名称已更新");
+    } catch (error) {
+      if (operationIsCurrent(operation)) {
+        setManagementError(error instanceof Error ? error.message : String(error));
+        notify("重命名失败，请重试");
+      }
+    } finally {
+      if (operationIsCurrent(operation)) {
+        setManagementBusy(null);
+      }
+    }
+  };
+
+  const deleteConversation = async () => {
+    const currentThread = threadRef.current;
+    if (!currentThread || managementBusy) {
+      return;
+    }
+    const targetId = currentThread.id;
+    const operation = {
+      requestKey: requestKeyRef.current,
+      conversationId: targetId,
+    };
+    setManagementBusy("delete");
+    setManagementError("");
+    try {
+      await service.deleteConversation(targetId);
+      if (!operationIsCurrent(operation)) {
+        return;
+      }
+      setDeleteConfirmationOpen(false);
+      onConversationDeleted?.(operation);
+    } catch (error) {
+      if (operationIsCurrent(operation)) {
+        setManagementError(error instanceof Error ? error.message : String(error));
+      }
+    } finally {
+      if (operationIsCurrent(operation)) {
+        setManagementBusy(null);
+      }
     }
   };
 
@@ -903,6 +1031,11 @@ function ConversationPage({
       ) : null}
     </>
   );
+  const exportUnavailableReason = conversationExportUnavailableReason(
+    thread,
+    generation !== null,
+    service.capabilities.canExport,
+  );
 
   return (
     <main
@@ -914,7 +1047,51 @@ function ConversationPage({
       data-exported-message-count={lastExportedMessageCount}
     >
       <header className="rr-conversation-bar">
-        <div className="rr-conversation-title">{thread?.title ?? "对话"}</div>
+        {renameDraft !== null ? (
+          <form
+            className="rr-conversation-title-edit"
+            onSubmit={renameConversation}
+          >
+            <input
+              autoFocus
+              maxLength={80}
+              value={renameDraft}
+              aria-label="会话名称"
+              aria-invalid={managementError ? true : undefined}
+              title={managementError || undefined}
+              disabled={managementBusy === "rename"}
+              onChange={(event) => setRenameDraft(event.target.value)}
+              onBlur={cancelInlineRename}
+              onKeyDown={(event) => {
+                const action = conversationTitleEditAction(
+                  event.key,
+                  event.nativeEvent.isComposing,
+                );
+                if (action === "save") {
+                  event.preventDefault();
+                  event.currentTarget.form?.requestSubmit();
+                } else if (action === "cancel") {
+                  event.preventDefault();
+                  cancelInlineRename();
+                }
+              }}
+            />
+          </form>
+        ) : (
+          <button
+            className="rr-conversation-title"
+            type="button"
+            disabled={generation !== null || !thread?.messages.length}
+            title={
+              thread?.messages.length
+                ? "单击重命名会话"
+                : "空白会话无需重命名"
+            }
+            onClick={openInlineRename}
+          >
+            {thread?.title ?? "对话"}
+          </button>
+        )}
         <div className="rr-conversation-controls">
           <div className="rr-conversation-more-wrap" ref={menuRef}>
             <button
@@ -951,16 +1128,25 @@ function ConversationPage({
                   type="button"
                   role="menuitem"
                   disabled={
-                    generation !== null || !service.capabilities.canExport
+                    exportUnavailableReason !== undefined
                   }
-                  title={
-                    service.capabilities.canExport
-                      ? undefined
-                      : "原生导出将在后续阶段提供"
-                  }
+                  title={exportUnavailableReason}
                   onClick={() => void exportConversation()}
                 >
                   导出当前对话
+                </button>
+                <button
+                  className="rr-conversation-menu-item is-danger"
+                  type="button"
+                  role="menuitem"
+                  disabled={generation !== null || !thread}
+                  onClick={() => {
+                    setMenuOpen(false);
+                    setManagementError("");
+                    setDeleteConfirmationOpen(true);
+                  }}
+                >
+                  删除会话
                 </button>
               </div>
             ) : null}
@@ -1067,6 +1253,39 @@ function ConversationPage({
       >
         {toast}
       </div>
+      {deleteConfirmationOpen ? (
+        <div className="rr-conversation-dialog-backdrop">
+          <section
+            className="rr-conversation-dialog"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="rr-conversation-delete-title"
+          >
+            <h2 id="rr-conversation-delete-title">删除这个会话？</h2>
+            <p>完整消息将从本机 SQLite 中删除，此操作无法撤销。</p>
+            {managementError ? (
+              <p className="rr-conversation-dialog-error">{managementError}</p>
+            ) : null}
+            <div className="rr-conversation-dialog-actions">
+              <button
+                type="button"
+                disabled={managementBusy !== null}
+                onClick={() => setDeleteConfirmationOpen(false)}
+              >
+                取消
+              </button>
+              <button
+                className="is-danger"
+                type="button"
+                disabled={managementBusy !== null}
+                onClick={() => void deleteConversation()}
+              >
+                {managementBusy === "delete" ? "正在删除…" : "删除"}
+              </button>
+            </div>
+          </section>
+        </div>
+      ) : null}
     </main>
   );
 }

@@ -32,6 +32,7 @@
 }
 
 .rr-conversation-title {
+  display: block;
   min-width: 0;
   flex: 1;
   overflow: hidden;
@@ -39,6 +40,30 @@
   font-weight: 630;
   text-overflow: ellipsis;
   white-space: nowrap;
+  text-align: left;
+}
+
+button.rr-conversation-title:not(:disabled) {
+  cursor: text;
+}
+
+.rr-conversation-title-edit {
+  min-width: 0;
+  flex: 1;
+}
+
+.rr-conversation-title-edit input {
+  width: min(520px, 100%);
+  height: 30px;
+  border: 1px solid var(--rr-main-accent);
+  border-radius: 6px;
+  outline: 0;
+  padding: 0 8px;
+  color: var(--rr-main-fg);
+  background: var(--rr-main-bg);
+  box-shadow: 0 0 0 2px rgba(245, 78, 0, 0.12);
+  font-size: 14px;
+  font-weight: 630;
 }
 
 .rr-conversation-controls {
@@ -87,6 +112,13 @@
     0 0 0 1px var(--rr-main-border);
 }
 
+.rr-conversation-context-menu {
+  position: absolute;
+  z-index: 90;
+  top: auto;
+  right: auto;
+}
+
 .rr-conversation-menu-item {
   width: 100%;
   min-height: 34px !important;
@@ -102,6 +134,15 @@
 .rr-conversation-menu-item:focus-visible {
   outline: 0;
   background: var(--rr-main-border-soft) !important;
+}
+
+.rr-conversation-menu-item.is-danger {
+  color: #a2382a !important;
+}
+
+.rr-conversation-menu-item:disabled {
+  opacity: 0.45;
+  cursor: default;
 }
 
 .rr-conversation-scroll {
@@ -607,6 +648,222 @@
   transform: translateX(-50%);
 }
 
+.rr-conversation-history {
+  overflow: auto;
+  scrollbar-color: var(--rr-main-border) transparent;
+  scrollbar-width: thin;
+}
+
+.rr-conversation-history-inner {
+  width: min(840px, calc(100% - 64px));
+  margin-inline: auto;
+  padding: 48px 0 64px;
+}
+
+.rr-conversation-history-heading {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 24px;
+  border-bottom: 1px solid var(--rr-main-border);
+  padding-bottom: 22px;
+}
+
+.rr-conversation-history-heading h1 {
+  margin: 0;
+  font-size: 27px;
+  font-weight: 520;
+}
+
+.rr-conversation-history-heading p,
+.rr-conversation-history-heading > span {
+  margin: 7px 0 0;
+  color: var(--rr-main-muted);
+  font-size: 12px;
+}
+
+.rr-conversation-history-heading > span {
+  flex: 0 0 auto;
+  margin-bottom: 2px;
+  font-family: var(--rr-main-font-mono);
+}
+
+.rr-conversation-history-list {
+  border-bottom: 1px solid var(--rr-main-border);
+}
+
+.rr-conversation-history-row {
+  display: grid;
+  min-height: 68px;
+  grid-template-columns: minmax(0, 1fr);
+  align-items: center;
+  gap: 18px;
+  border-bottom: 1px solid var(--rr-main-border-soft);
+}
+
+.rr-conversation-history-row:last-child {
+  border-bottom: 0;
+}
+
+.rr-conversation-history-open {
+  min-width: 0;
+  padding: 13px 4px !important;
+  text-align: left;
+  cursor: pointer;
+}
+
+.rr-conversation-history-open strong,
+.rr-conversation-history-open span {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.rr-conversation-history-open strong {
+  font-size: 15px;
+  font-weight: 610;
+}
+
+.rr-conversation-history-open span {
+  margin-top: 5px;
+  color: var(--rr-main-meta);
+  font-family: var(--rr-main-font-mono);
+  font-size: 10px;
+}
+
+.rr-conversation-history-state button {
+  min-height: 30px !important;
+  border-radius: 6px !important;
+  padding: 0 9px !important;
+  color: var(--rr-main-muted) !important;
+  cursor: pointer;
+  font-size: 11px !important;
+}
+
+.rr-conversation-history-open:hover strong,
+.rr-conversation-history-open:focus-visible strong,
+.rr-conversation-history-state button:hover,
+.rr-conversation-history-state button:focus-visible {
+  outline: 0;
+  color: var(--rr-main-fg) !important;
+}
+
+.rr-conversation-history-state button:hover,
+.rr-conversation-history-state button:focus-visible {
+  background: var(--rr-main-border-soft) !important;
+}
+
+.rr-conversation-history-state {
+  display: grid;
+  min-height: 280px;
+  place-content: center;
+  justify-items: center;
+  padding: 40px;
+  color: var(--rr-main-muted);
+  text-align: center;
+}
+
+.rr-conversation-history-state strong {
+  color: var(--rr-main-fg);
+  font-size: 16px;
+}
+
+.rr-conversation-history-state p {
+  max-width: 480px;
+  margin: 8px 0 14px;
+  line-height: 1.6;
+}
+
+.rr-conversation-dialog-backdrop {
+  position: absolute;
+  z-index: 100;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background: color-mix(in oklab, var(--rr-main-fg), transparent 82%);
+}
+
+.rr-conversation-dialog {
+  width: min(420px, 100%);
+  border: 1px solid var(--rr-main-border);
+  border-radius: 10px;
+  padding: 22px;
+  background: var(--rr-main-bg);
+  box-shadow: 0 24px 64px rgba(0, 0, 0, 0.2);
+}
+
+.rr-conversation-dialog h2 {
+  margin: 0 0 10px;
+  font-size: 17px;
+}
+
+.rr-conversation-dialog > p {
+  margin: 0 0 18px;
+  color: var(--rr-main-muted);
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+.rr-conversation-dialog input {
+  width: 100%;
+  height: 40px;
+  border: 1px solid var(--rr-main-border);
+  border-radius: 7px;
+  outline: 0;
+  padding: 0 11px;
+  color: var(--rr-main-fg);
+  background: var(--rr-main-bg);
+  font-size: 14px;
+}
+
+.rr-conversation-dialog input:focus {
+  border-color: var(--rr-main-accent);
+  box-shadow: 0 0 0 2px rgba(245, 78, 0, 0.12);
+}
+
+.rr-conversation-dialog .rr-conversation-dialog-error {
+  margin: 10px 0 0;
+  color: #a2382a;
+  font-size: 12px;
+}
+
+.rr-conversation-dialog-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 20px;
+}
+
+.rr-conversation-dialog-actions button {
+  min-height: 34px !important;
+  border: 1px solid var(--rr-main-border) !important;
+  border-radius: 7px !important;
+  padding: 0 12px !important;
+  color: var(--rr-main-fg-secondary) !important;
+  background: var(--rr-main-bg) !important;
+  cursor: pointer;
+  font-size: 12px !important;
+}
+
+.rr-conversation-dialog-actions button.is-primary {
+  border-color: var(--rr-main-accent) !important;
+  color: #fff !important;
+  background: var(--rr-main-accent) !important;
+}
+
+.rr-conversation-dialog-actions button.is-danger {
+  border-color: #a2382a !important;
+  color: #fff !important;
+  background: #a2382a !important;
+}
+
+.rr-conversation-dialog-actions button:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
 @container (max-width: 920px) {
   .rr-conversation-bar {
     gap: 8px;
@@ -625,6 +882,15 @@
 
   .rr-conversation-user-bubble {
     max-width: 88%;
+  }
+
+  .rr-conversation-history-inner {
+    width: calc(100% - 32px);
+    padding-top: 28px;
+  }
+
+  .rr-conversation-history-row {
+    gap: 8px;
   }
 }
 

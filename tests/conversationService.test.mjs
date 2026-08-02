@@ -1,10 +1,18 @@
 import assert from "node:assert/strict";
+import { readFile } from "node:fs/promises";
 import test from "node:test";
 import {
   RepositoryConversationService,
   mapQuickAiConversation,
 } from "../src/conversationService.ts";
 import { TauriConversationRepository } from "../src/conversationRepository.ts";
+import {
+  conversationExportUnavailableReason,
+  conversationTitleEditAction,
+  isActiveConversationOperation,
+  isConversationOperationCurrent,
+  shouldResetDeletedConversation,
+} from "../src/conversationViewModel.ts";
 
 const NOW = new Date(2026, 6, 30, 12, 0, 0);
 
@@ -31,8 +39,37 @@ function message(id, role, content, sequence) {
   };
 }
 
+test("正式 Tauri 会话路径不读取 fixture 或 localStorage", async () => {
+  const formalFiles = [
+    "src/components/ConversationPage.tsx",
+    "src/components/ConversationHistoryPage.tsx",
+    "src/conversationRepository.ts",
+    "src/conversationService.ts",
+  ];
+  for (const file of formalFiles) {
+    const content = await readFile(file, "utf8");
+    assert.doesNotMatch(
+      content,
+      /conversationFixtureService|FixtureConversationService|localStorage/,
+    );
+  }
+
+  const app = await readFile("src/App.tsx", "utf8");
+  const previewBranch = app.slice(
+    app.indexOf("if (isTauriRuntime) {", app.indexOf("function MainAppWindow")),
+    app.indexOf(
+      "return () => {",
+      app.indexOf('import("./conversationFixtureService")'),
+    ),
+  );
+  assert.match(previewBranch, /if \(isTauriRuntime\) \{\s*return;/);
+  assert.match(previewBranch, /import\("\.\/conversationFixtureService"\)/);
+  assert.match(app, /new RepositoryConversationService\(\s*new TauriConversationRepository\(\)/);
+});
+
 test("Tauri repository 使用既有 Quick AI commands 和 camelCase 参数", async () => {
   const calls = [];
+  const saveRequests = [];
   const repository = new TauriConversationRepository(
     async (command, args) => {
       calls.push({ command, args });
@@ -41,10 +78,18 @@ test("Tauri repository 使用既有 Quick AI commands 和 camelCase 参数", asy
       }
       return snapshot();
     },
+    async (options) => {
+      saveRequests.push(options);
+      return "D:\\Exports\\真实会话.md";
+    },
   );
 
   await repository.create();
   await repository.get(17);
+  await repository.list();
+  await repository.rename(17, "新名称");
+  await repository.delete(17);
+  await repository.export(17, "真实会话.md");
   await repository.send(17, 3, "继续问题");
 
   assert.deepEqual(calls, [
@@ -52,6 +97,22 @@ test("Tauri repository 使用既有 Quick AI commands 和 camelCase 参数", asy
     {
       command: "get_quick_ai_conversation",
       args: { conversationId: 17 },
+    },
+    { command: "list_all_quick_ai_conversations", args: undefined },
+    {
+      command: "rename_quick_ai_conversation",
+      args: { conversationId: 17, title: "新名称" },
+    },
+    {
+      command: "delete_quick_ai_conversation",
+      args: { conversationId: 17 },
+    },
+    {
+      command: "export_quick_ai_conversation",
+      args: {
+        conversationId: 17,
+        filePath: "D:\\Exports\\真实会话.md",
+      },
     },
     {
       command: "send_quick_ai_message",
@@ -62,6 +123,139 @@ test("Tauri repository 使用既有 Quick AI commands 和 camelCase 参数", asy
       },
     },
   ]);
+  assert.deepEqual(saveRequests, [
+    {
+      title: "导出 ReadRay 对话",
+      defaultPath: "真实会话.md",
+      filters: [{ name: "Markdown", extensions: ["md"] }],
+    },
+  ]);
+});
+
+test("原生保存对话框取消后不调用 Rust 导出 command", async () => {
+  const calls = [];
+  const repository = new TauriConversationRepository(
+    async (command, args) => {
+      calls.push({ command, args });
+      return snapshot();
+    },
+    async () => null,
+  );
+
+  const result = await repository.export(17, "真实会话.md");
+
+  assert.equal(result, null);
+  assert.deepEqual(calls, []);
+});
+
+test("迟到重命名和删除必须同时匹配挂载、请求与会话身份", () => {
+  const operation = { requestKey: 8, conversationId: "17" };
+
+  assert.equal(isConversationOperationCurrent(true, operation, 8, "17"), true);
+  assert.equal(isConversationOperationCurrent(false, operation, 8, "17"), false);
+  assert.equal(isConversationOperationCurrent(true, operation, 9, "17"), false);
+  assert.equal(isConversationOperationCurrent(true, operation, 8, "23"), false);
+  assert.equal(
+    shouldResetDeletedConversation("conversation", "17", 8, operation),
+    true,
+  );
+  for (const page of ["today", "memory", "writing", "conversation-history"]) {
+    assert.equal(
+      shouldResetDeletedConversation(page, "17", 8, operation),
+      false,
+      `迟到删除不得从 ${page} 返回会话页`,
+    );
+  }
+  assert.equal(
+    shouldResetDeletedConversation("conversation", "23", 8, operation),
+    false,
+  );
+  assert.equal(
+    shouldResetDeletedConversation("conversation", "17", 9, operation),
+    false,
+  );
+  assert.equal(
+    isActiveConversationOperation("conversation", "17", 8, operation),
+    true,
+  );
+  assert.equal(isActiveConversationOperation("today", "17", 8, operation), false);
+});
+
+test("会话列表仅由左键打开，右键统一进入三项管理菜单", async () => {
+  const sidebar = await readFile("src/components/MainSidebar.tsx", "utf8");
+  const history = await readFile(
+    "src/components/ConversationHistoryPage.tsx",
+    "utf8",
+  );
+  const menu = await readFile(
+    "src/components/ConversationManagementMenu.tsx",
+    "utf8",
+  );
+
+  assert.match(sidebar, /onClick=\{\(\) => onRecentConversationSelect/);
+  assert.match(sidebar, /onContextMenu=\{\(event\) =>\s*onRecentConversationContextMenu/);
+  assert.match(history, /onClick=\{\(\) => onOpenConversation/);
+  assert.match(history, /onContextMenu=\{\(event\) =>\s*onConversationContextMenu/);
+  assert.doesNotMatch(history, /rr-conversation-history-actions/);
+  assert.doesNotMatch(`${sidebar}\n${history}`, /Shift\+F10|aria-label="更多操作"/);
+  assert.match(menu, />\s*重命名\s*<\/button>/);
+  assert.match(menu, />\s*导出\s*<\/button>/);
+  assert.match(menu, />\s*删除\s*<\/button>/);
+
+  const loadIndex = menu.indexOf("service.loadConversation(");
+  const exportIndex = menu.indexOf("service.exportConversation(thread)");
+  assert.ok(loadIndex >= 0 && exportIndex > loadIndex);
+  assert.match(menu, /conversationExportUnavailableReason\(/);
+  assert.match(menu, /isConversationOperationCurrent\(/);
+});
+
+test("当前会话标题原地编辑支持 Enter 保存、Esc 和失焦取消", async () => {
+  assert.equal(conversationTitleEditAction("Enter", false), "save");
+  assert.equal(conversationTitleEditAction("Escape", false), "cancel");
+  assert.equal(conversationTitleEditAction("Enter", true), undefined);
+  assert.equal(conversationTitleEditAction("Tab", false), undefined);
+
+  const page = await readFile("src/components/ConversationPage.tsx", "utf8");
+  assert.match(page, /className="rr-conversation-title-edit"/);
+  assert.match(page, /onSubmit=\{renameConversation\}/);
+  assert.match(page, /onBlur=\{cancelInlineRename\}/);
+  assert.match(page, /conversationTitleEditAction\(/);
+  assert.doesNotMatch(page, /rr-conversation-rename-title/);
+});
+
+test("空白会话导出在按钮判断和 service 入口均被阻断", async () => {
+  let exportCalls = 0;
+  const service = new RepositoryConversationService({
+    create: async () => snapshot(),
+    get: async () => snapshot(),
+    list: async () => [],
+    rename: async () => snapshot(),
+    delete: async () => true,
+    export: async () => {
+      exportCalls += 1;
+      throw new Error("空白会话不应打开保存对话框");
+    },
+    send: async () => snapshot(),
+  });
+  const emptyThread = { id: "17", title: "新对话", messages: [] };
+
+  assert.equal(
+    conversationExportUnavailableReason(emptyThread, false, true),
+    "空白会话没有可导出的消息",
+  );
+  assert.equal(
+    conversationExportUnavailableReason(emptyThread, false, false),
+    "空白会话没有可导出的消息",
+  );
+  assert.equal(
+    conversationExportUnavailableReason(emptyThread, true, true),
+    "回答生成期间不能导出",
+  );
+  assert.deepEqual(await service.exportConversation(emptyThread), {
+    exported: false,
+    reason: "unavailable",
+  });
+  assert.equal(exportCalls, 0);
 });
 
 test("Rust 会话快照映射为现有页面模型", () => {
@@ -342,4 +536,152 @@ test("缺失会话和真实后端不支持的重新生成会明确失败", async
     }),
     /暂不支持重新生成/,
   );
+});
+
+test("全部会话、重命名和删除只使用数据库 ID 并在成功后刷新", async () => {
+  const calls = [];
+  let updated = 0;
+  const service = new RepositoryConversationService(
+    {
+      create: async () => snapshot(),
+      get: async () => snapshot(),
+      list: async () => [
+        { id: 17, title: "  第一段历史  ", updatedAtUnixMs: NOW.getTime() },
+        { id: 23, title: "第二段历史", updatedAtUnixMs: NOW.getTime() - 1 },
+      ],
+      rename: async (conversationId, title) => {
+        calls.push({ operation: "rename", conversationId, title });
+        return snapshot(
+          [
+            message(41, "user", "第一问", 1),
+            message(42, "assistant", "第一答", 2),
+          ],
+          { id: conversationId, title },
+        );
+      },
+      delete: async (conversationId) => {
+        calls.push({ operation: "delete", conversationId });
+        return true;
+      },
+      export: async () => null,
+      send: async () => snapshot(),
+    },
+    { onConversationUpdated: () => updated += 1 },
+  );
+
+  const all = await service.listConversations();
+  const renamed = await service.renameConversation("17", "  新名称  ");
+  await service.deleteConversation("23");
+
+  assert.deepEqual(all, [
+    { id: "17", title: "第一段历史", updatedAtUnixMs: NOW.getTime() },
+    { id: "23", title: "第二段历史", updatedAtUnixMs: NOW.getTime() - 1 },
+  ]);
+  assert.equal(renamed.id, "17");
+  assert.equal(renamed.title, "新名称");
+  assert.deepEqual(calls, [
+    { operation: "rename", conversationId: 17, title: "新名称" },
+    { operation: "delete", conversationId: 23 },
+  ]);
+  assert.equal(updated, 2);
+});
+
+test("重命名或删除失败不刷新且可以安全重试", async () => {
+  let renameAttempts = 0;
+  let deleteAttempts = 0;
+  let updated = 0;
+  const service = new RepositoryConversationService(
+    {
+      create: async () => snapshot(),
+      get: async () => snapshot(),
+      list: async () => [],
+      rename: async (_conversationId, title) => {
+        renameAttempts += 1;
+        if (renameAttempts === 1) {
+          throw new Error("模拟重命名失败");
+        }
+        return snapshot(
+          [
+            message(41, "user", "第一问", 1),
+            message(42, "assistant", "第一答", 2),
+          ],
+          { title },
+        );
+      },
+      delete: async () => {
+        deleteAttempts += 1;
+        return deleteAttempts > 1;
+      },
+      export: async () => null,
+      send: async () => snapshot(),
+    },
+    { onConversationUpdated: () => updated += 1 },
+  );
+
+  await assert.rejects(
+    service.renameConversation("17", "重试名称"),
+    /模拟重命名失败/,
+  );
+  const renamed = await service.renameConversation("17", "重试名称");
+  await assert.rejects(service.deleteConversation("17"), /已经被删除/);
+  await service.deleteConversation("17");
+
+  assert.equal(renamed.title, "重试名称");
+  assert.equal(renameAttempts, 2);
+  assert.equal(deleteAttempts, 2);
+  assert.equal(updated, 2);
+});
+
+test("正式导出只提交目标数据库 ID，取消不返回成功，失败可重试", async () => {
+  const exports = [];
+  let attempts = 0;
+  const service = new RepositoryConversationService({
+    create: async () => snapshot(),
+    get: async () => snapshot(),
+    list: async () => [],
+    rename: async () => snapshot(),
+    delete: async () => true,
+    export: async (conversationId, suggestedFileName) => {
+      exports.push({ conversationId, suggestedFileName });
+      attempts += 1;
+      if (attempts === 1) {
+        return null;
+      }
+      if (attempts === 2) {
+        throw new Error("模拟写文件失败");
+      }
+      return {
+        conversationId,
+        fileName: "真实会话.md",
+        filePath: "D:\\Exports\\真实会话.md",
+        messageCount: 2,
+      };
+    },
+    send: async () => snapshot(),
+  });
+  const stalePageThread = {
+    id: "17",
+    title: "真实:会话",
+    messages: [{ id: "temporary", role: "user", content: "页面临时消息" }],
+  };
+
+  const cancelled = await service.exportConversation(stalePageThread);
+  await assert.rejects(
+    service.exportConversation(stalePageThread),
+    /模拟写文件失败/,
+  );
+  const exported = await service.exportConversation(stalePageThread);
+
+  assert.deepEqual(cancelled, { exported: false, reason: "cancelled" });
+  assert.deepEqual(exported, {
+    exported: true,
+    fileName: "真实会话.md",
+    messageCount: 2,
+    nativeFilePath: "D:\\Exports\\真实会话.md",
+  });
+  assert.deepEqual(exports, [
+    { conversationId: 17, suggestedFileName: "真实-会话.md" },
+    { conversationId: 17, suggestedFileName: "真实-会话.md" },
+    { conversationId: 17, suggestedFileName: "真实-会话.md" },
+  ]);
 });

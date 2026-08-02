@@ -4,27 +4,25 @@
 
 ## TL;DR
 
-- 当前状态：阶段一至阶段五已经完成；阶段五“写作功能正式接线”已通过自动验证和用户执行的真实 Tauri 人工验收，`DEVELOPMENT_PLAN` 已标记完成。
+- 当前状态：阶段一至阶段六已经完成；阶段六“会话管理闭环”已通过代码审核、自动验证和用户执行的真实 Tauri 人工验收，`DEVELOPMENT_PLAN` 已标记完成。
 - 当前路线：Windows 原生，Tauri + React + TypeScript + Rust + SQLite。
-- 下一步：进入阶段六“会话管理闭环”，补齐查看全部真实会话、重命名、删除和原生导出；范围与验收标准以 `docs/DEVELOPMENT_PLAN.md` 为准。
-- 后续顺序：阶段六完成后进入设置与桌面生命周期，再讨论复习闭环；其后的阶段顺序以 `docs/DEVELOPMENT_PLAN.md` 为准。
+- 下一步：进入阶段七“设置与桌面生命周期”，先核对现有设置入口、密钥加载、快捷键和主窗口关闭/隐藏链路，再按 `docs/DEVELOPMENT_PLAN.md` 完成最小闭环。
+- 后续顺序：阶段七完成后进入复习闭环；其后的阶段顺序以 `docs/DEVELOPMENT_PLAN.md` 为准。
 - 当前约束：不使用通用 Agent 框架，不内置商业词典，不做 OCR、本地大模型或跨平台支持。
 - 交接原则：`HANDOFF.md` 只记录会影响下一次恢复上下文的信息，小型文档措辞和格式调整不记录。
 
 ## 当前阶段入口
 
-完整文件职责和按任务检索入口以 `docs/RESOURCE_MAP.yml` 为准；这里仅保留恢复阶段六时最先需要的入口，避免维护第二份资源地图。
+完整文件职责和按任务检索入口以 `docs/RESOURCE_MAP.yml` 为准；这里仅保留恢复阶段七时最先需要的入口，避免维护第二份资源地图。
 
 - `AGENTS.md`：协作规则；开始任务时先读。
 - `docs/DEVELOPMENT_PLAN.md`：项目方向、阶段边界和验收标准的权威来源。
 - `docs/RESOURCE_MAP.yml`：完整资源索引；未在本节列出的文件从这里查找。
 - `docs/WINDOWS_ENVIRONMENT.md`：本机 pnpm、Rust、Tauri、构建和发布命令基线。
-- `src/components/ConversationPage.tsx` / `src/conversationViewModel.ts`：阶段六会话页面、状态和能力边界。
-- `src/conversationRepository.ts` / `src/conversationService.ts`：正式 Tauri repository 与 Rust 会话快照映射；页面不得绕过它们直接 invoke。
-- `src-tauri/src/conversations.rs` / `src-tauri/src/quick_ai.rs` / `src-tauri/src/learning_records.rs`：会话仓库、模型请求、Tauri commands 与 SQLite migration。
-- `src/components/MainAppShell.tsx` / `src/components/MainSidebar.tsx` / `src/App.tsx`：当前会话、最近会话和“查看全部对话”的装配与同步入口。
-- `tests/conversationService.test.mjs`：现有会话 repository/service、失败恢复和幂等语义回归。
-- `src/conversationFixtureService.ts`：仅供非 Tauri 浏览器预览；不得进入正式桌面数据路径。
+- `src/App.tsx` / `src/components/MainAppShell.tsx` / `src/components/MainSidebar.tsx`：设置入口、主窗口装配和页面导航边界。
+- `src-tauri/src/lib.rs` / `src-tauri/tauri.conf.json`：主窗口与 overlay 的命令、快捷键、关闭/隐藏和生命周期入口。
+- `.env.example` / `src-tauri/src/deepseek_client.rs`：当前 DeepSeek 配置加载边界；阶段七不得把真实密钥写入仓库或普通日志。
+- `package.json` / `src-tauri/Cargo.toml` / `src-tauri/capabilities/default.json`：前端、Rust 插件和最小权限装配；新增设置能力前先确认是否能复用现有依赖。
 
 ## 已确认决策
 
@@ -116,7 +114,7 @@
 - 今天页输入、新对话和最近对话均已进入完整对话页；正式 Tauri 装配通过 `TauriConversationRepository` 调用现有 create/get/send Quick AI commands，页面组件不直接 invoke。
 - `RepositoryConversationService` 将 Rust camelCase `ConversationSnapshot` 映射为现有 thread，以 SQLite 返回的真实消息 ID、标题、时间和 sequence 覆盖临时页面状态；尾部为 user 时映射为明确 pendingTurn，重启加载后页面直接进入可重试失败态。
 - Tauri 正式路径不静态读取或实例化 `FixtureConversationService`；fixture 被 Vite 拆为非 Tauri 预览动态 chunk，继续保留原有分片、停止/继续、重生成、导出和故障注入演示。
-- 真实 Quick AI 当前是非流式完整响应，因此正式路径不显示可用的停止/继续，不开放重生成、原生导出或记忆引用；对应菜单项诚实禁用，未伪造阶段六能力。
+- 阶段四收口时真实 Quick AI 是非流式完整响应，正式路径不显示可用的停止/继续，也未开放重生成、原生导出或记忆引用；阶段六现已补上原生导出，但停止、重生成和记忆引用仍保持禁用。
 - Quick AI 发送使用 `conversationId + expectedUserSequence` 作为稳定轮次身份：`prepare_turn` 先单独提交 user，再调用 DeepSeek；`complete_turn` 校验 message ID、sequence 和当前尾版本后只补一条 assistant。模型、进程或 assistant 保存失败都会留下可恢复 pending user。
 - 同一轮重试复用既有 user message ID/sequence；若 assistant 已存在，后端直接返回权威快照且不再次请求模型。若事务已提交但 IPC 回传和随后读取都失败，页面仍保留原 expected sequence，下一次重试同样由后端幂等识别，不依赖 prompt 文本猜测。
 - 本轮未追加 migration：现有 v2 `quick_ai_messages` 的自增 ID 和 `UNIQUE(conversation_id, sequence)` 已足够提供 pending 身份与 expected-version 约束；旧历史、并发不同内容或错误 message ID 会明确冲突，不会静默写入。
@@ -126,13 +124,25 @@
 - 阶段四返修自动验证：前端 repository/service 共 9 项测试通过；Rust 40 项通过、2 项需真实网络的 live test 按既有标记忽略。覆盖模型失败后重开仍有 pending user、重启重试只补一条 assistant、已提交但调用方未确认时不重复、assistant 保存失败保留 pending、旧版本/并发冲突拒绝写入，以及 41/43 条消息长对话截断后仍从 user 开始。
 - 阶段四真实 Tauri 功能验收已经完成：真实创建、最近对话加载、多轮续聊和侧栏会话身份均可用；用户接受当前对话体验作为后续优化项，不再阻塞阶段五。
 
+### 阶段六：会话管理闭环（已完成）
+
+- “查看全部对话”已接入 `list_all_quick_ai_conversations`，直接读取 SQLite 中全部有标题会话并按 `updated_at_unix_ms DESC, id DESC` 排列；独立页面覆盖 loading、empty、error 和 retry，不从侧栏最近六条推导历史。
+- 重命名和删除复用现有 `ConversationService` / `ConversationStore`，所有操作只提交数据库 conversation ID。侧栏最近项与全部历史均为左键打开、右键显示“重命名/导出/删除”，列表不保留常驻文字按钮或悬停更多按钮；两处共用 Shell 级管理浮层，不复制业务请求。当前会话标题单击后原地编辑，Enter 保存，Esc 或失焦安全取消。重命名成功后用 Rust 返回的完整权威快照同步当前 thread；删除依赖既有外键级联清理消息，删除当前会话后进入新的空会话。成功操作触发既有刷新令牌，使侧栏与全部历史重新读取。
+- 当前页的管理操作同时绑定 mounted、request key 与 conversation ID；父级再用实时页面、请求和会话 ref 复核删除回调。在操作期间切换到其他会话或“今天/记忆/写作/全部对话”后，迟到结果不会回写已卸载页面，也不会创建新对话或把用户带回会话页。重命名、删除失败保留当前对话和弹窗状态，可原地重试；不存在的删除不会提示成功。
+- 原生导出使用官方 Tauri 2 dialog 插件让用户选择 Markdown 路径并提供明确取消语义；取消时不调用 Rust 导出 command，也不显示成功。用户确认路径后，Rust 按 conversation ID 重新读取 SQLite 权威快照并按 sequence 写出完整 user/assistant 消息，不使用前端 messages 重建文件。空白会话在菜单和 service 入口两层禁用，不会打开保存对话框；无效结果和写文件失败均不修改会话。
+- 新增依赖仅为 `@tauri-apps/plugin-dialog` / `tauri-plugin-dialog` 及其 capability `dialog:allow-save`；替代方案是固定写入下载目录，但无法覆盖用户选择路径和取消验收。SQLite、DeepSeek 客户端和会话表均未新增第二套实现，也未追加 migration。
+- 正式 Tauri 会话路径的静态测试确认不读取 fixture/localStorage；非 Tauri 预览仍只通过动态 import 加载 `conversationFixtureService.ts`，继续与正式路径隔离。
+- 阶段六自动验证已通过：会话前端 18 项、写作前端回归 25 项、完整 Rust 65 项通过且 2 项真实 DeepSeek 联网测试按既有 ignored 标记跳过；`pnpm build`、`cargo fmt --check`、`cargo check`、RESOURCE_MAP YAML 解析和 `git diff --check` 均通过。没有使用浏览器或 Computer Use，也没有启动 Tauri 窗口替代人工验收。
+- 用户已在真实 Tauri 主窗口完成人工验收：全部历史、侧栏与历史页左键打开/右键管理、当前标题原地重命名、删除确认、原生导出及列表同步符合预期；阶段六已正式收口。
+
 ## 下一步
 
-阶段五已经完成，下一项是阶段六“会话管理闭环”。
+阶段六已经完成，下一项是阶段七“设置与桌面生命周期”。
 
-- “查看全部对话”应读取真实 SQLite 会话，并具备稳定的 loading、empty、error 和 retry 状态。
-- 会话重命名、删除和原生导出必须同步当前页面与侧栏，不误报成功，也不破坏已有消息。
-- 继续复用现有 ConversationService、Quick AI commands、SQLite schema 与 `deepseek_client`；不把阶段八的复习、去重或长期记忆提前并入阶段六。
+- 设置页只接入真实可用的选项，优先形成 DeepSeek 密钥首次配置、校验、更新和清除闭环，不展示无效开关。
+- 在现有主窗口与 overlay 边界上明确快捷键、开机启动、关闭/隐藏、托盘退出、单实例和重新打开主窗口的正式行为。
+- 配置必须持久化并在重启后保持一致；敏感信息不得明文写入仓库、普通日志或前端持久化。
+- 继续复用现有 Tauri/Rust 装配和最小权限原则，不提前并入阶段八的复习、去重或长期记忆。
 - 新环境仍需复制 `.env.example` 为 `.env` 后自行填写 `DEEPSEEK_API_KEY`；真实 `.env` 不提交。
 
 ## 当前已知限制与后续边界
@@ -147,7 +157,7 @@
 - **解释体验限制**：CaptureInput 和 ExplanationCard 当前上限为 4096 字符，长段落还受模型 JSON 稳定性与浮窗最大高度约束，不代表整页翻译能力。
 - **阶段八边界**：记忆页还不能可靠生成重复出现次数或时间线，“过去的出现”入口保持隐藏；复习、去重和长期记忆留到对应阶段统一设计。
 - **后续体验优化**：Quick AI 当前按纯文本、非流式展示，模型仍可能返回 Markdown 标记；Markdown 渲染/规范化、真正流式输出和更可靠的对话策略不自动并入阶段六。
-- **阶段六范围**：查看全部、重命名、删除和原生导出尚未实现，是下一阶段的正式任务；回答重生成和记忆引用聚合属于更后续能力，当前 UI 继续诚实禁用。
+- **对话后续边界**：阶段六的查看全部、重命名、删除和原生导出已经完成；回答重生成和记忆引用聚合属于更后续能力，当前 UI 继续诚实禁用。
 - **阶段七范围**：主窗口关闭后只隐藏并保留后台快捷键；托盘、单实例和重新显示主窗口入口尚未形成完整桌面生命周期，需要在阶段七确定正式策略。
 
 ## 暂时不要做
