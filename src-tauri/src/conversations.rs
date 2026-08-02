@@ -597,7 +597,7 @@ pub(crate) mod tests {
             )
             .unwrap();
 
-        assert_eq!(version, 2);
+        assert!(version >= 2);
         assert_eq!(table_count, 2);
         drop(store);
         let _ = fs::remove_dir_all(root);

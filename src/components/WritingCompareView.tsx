@@ -1,4 +1,7 @@
-import { writingPatterns, type WritingSnapshot } from "../writingViewModel";
+import type {
+  WritingPattern,
+  WritingSnapshot,
+} from "../writingViewModel";
 
 type DiffToken = {
   value: string;
@@ -8,6 +11,7 @@ type DiffToken = {
 type WritingCompareViewProps = {
   original: WritingSnapshot;
   current: WritingSnapshot;
+  patterns: WritingPattern[];
   origin: "review" | "completed";
   checking: boolean;
   onBack: () => void;
@@ -96,6 +100,7 @@ function DiffContent({
 function WritingCompareView({
   original,
   current,
+  patterns,
   origin,
   checking,
   onBack,
@@ -148,15 +153,22 @@ function WritingCompareView({
         </article>
       </div>
 
-      <section className="rr-writing-patterns" aria-label="本次语言模式总结">
-        <div className="rr-writing-patterns-title">两个值得带走的模式</div>
-        {writingPatterns.map((pattern) => (
-          <article key={pattern.id}>
-            <span>{pattern.id}</span>
-            <div><h2>{pattern.title}</h2><p>{pattern.description}</p></div>
-          </article>
-        ))}
-      </section>
+      {patterns.length ? (
+        <section className="rr-writing-patterns" aria-labelledby="rr-writing-patterns-title">
+          <header className="rr-writing-patterns-title">
+            <h2 id="rr-writing-patterns-title">本次写作要点</h2>
+            <p>随本文版本保存，未加入复习</p>
+          </header>
+          <div className="rr-writing-pattern-grid">
+            {patterns.map((pattern) => (
+              <article key={pattern.id}>
+                <span>{pattern.id}</span>
+                <div><h2>{pattern.title}</h2><p>{pattern.description}</p></div>
+              </article>
+            ))}
+          </div>
+        </section>
+      ) : null}
     </section>
   );
 }

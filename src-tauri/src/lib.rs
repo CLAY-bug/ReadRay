@@ -15,6 +15,7 @@ pub mod learning_records;
 pub mod quick_ai;
 #[cfg(target_os = "windows")]
 pub mod windows_uia;
+pub mod writing;
 
 const READRAY_SHORTCUT_LABEL: &str = "Ctrl+Alt+R";
 const MAIN_WINDOW_LABEL: &str = "main";
@@ -900,7 +901,16 @@ pub fn run() {
             quick_ai::create_quick_ai_conversation,
             quick_ai::get_quick_ai_conversation,
             quick_ai::list_recent_quick_ai_conversations,
-            quick_ai::send_quick_ai_message
+            quick_ai::send_quick_ai_message,
+            writing::create_writing_document,
+            writing::list_writing_documents,
+            writing::get_writing_document,
+            writing::save_writing_draft,
+            writing::delete_writing_document,
+            writing::complete_writing_document,
+            writing::continue_writing_document,
+            writing::analyze_writing_document,
+            writing::ask_writing_question
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

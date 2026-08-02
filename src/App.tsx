@@ -41,6 +41,11 @@ import {
   RepositoryTodayService,
   type TodayService,
 } from "./todayService";
+import { TauriWritingRepository } from "./writingRepository";
+import {
+  RepositoryWritingService,
+  type WritingService,
+} from "./writingService";
 import "./App.css";
 import "./styles/main-app.css";
 import "./styles/conversation-page.css";
@@ -997,6 +1002,12 @@ function MainAppWindow() {
           )
         : null,
   );
+  const [writingService, setWritingService] =
+    useState<WritingService | null>(() =>
+      isTauriRuntime
+        ? new RepositoryWritingService(new TauriWritingRepository())
+        : null,
+    );
 
   useEffect(() => {
     if (!isTauriRuntime) {
@@ -1092,6 +1103,13 @@ function MainAppWindow() {
         );
       },
     );
+    void import("./writingFixtureService").then(
+      ({ createBrowserPreviewWritingService }) => {
+        if (!ignore) {
+          setWritingService(createBrowserPreviewWritingService());
+        }
+      },
+    );
     return () => {
       ignore = true;
     };
@@ -1176,6 +1194,7 @@ function MainAppWindow() {
       learningRecordsRefreshToken={learningRecordsRefreshToken}
       conversationRefreshToken={conversationRefreshToken}
       conversationService={conversationService}
+      writingService={writingService}
       isMaximized={isMaximized}
       onStartDragging={() => {
         void runMainWindowCommand("start_main_window_drag");

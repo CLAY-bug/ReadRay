@@ -1,13 +1,13 @@
 # ReadRay 交接记录
 
-最后更新：2026-07-30
+最后更新：2026-08-02
 
 ## TL;DR
 
-- 当前状态：阶段一至阶段四已经完成；主应用“记忆”“今天”和完整对话均已接入真实 Tauri/SQLite 数据，下一项是写作功能正式接线。
+- 当前状态：阶段一至阶段五已经完成；阶段五“写作功能正式接线”已通过自动验证和用户执行的真实 Tauri 人工验收，`DEVELOPMENT_PLAN` 已标记完成。
 - 当前路线：Windows 原生，Tauri + React + TypeScript + Rust + SQLite。
-- 下一步：进入阶段五，在端到端实施任务中完成写作功能正式 Tauri/SQLite/DeepSeek 接线。
-- 后续顺序：阶段五完成后进入会话管理闭环，其后的阶段顺序以 `docs/DEVELOPMENT_PLAN.md` 为准。
+- 下一步：进入阶段六“会话管理闭环”，补齐查看全部真实会话、重命名、删除和原生导出；范围与验收标准以 `docs/DEVELOPMENT_PLAN.md` 为准。
+- 后续顺序：阶段六完成后进入设置与桌面生命周期，再讨论复习闭环；其后的阶段顺序以 `docs/DEVELOPMENT_PLAN.md` 为准。
 - 当前约束：不使用通用 Agent 框架，不内置商业词典，不做 OCR、本地大模型或跨平台支持。
 - 交接原则：`HANDOFF.md` 只记录会影响下一次恢复上下文的信息，小型文档措辞和格式调整不记录。
 
@@ -36,16 +36,21 @@
 - `src/memoryPageFixture.ts` / `src/memoryPreviewService.ts`：仅浏览器预览或测试使用的记忆 fixture，不进入正式 Tauri 数据路径。
 - `src/mainAppViewModel.ts` / `src/styles/main-app.css`：主应用展示类型、静态导航和独立浅色视觉样式。
 - `src/styles/conversation-page.css`：完整对话内容区、消息流、输入框、抽屉和窄窗口的独立 `rr-conversation-*` 样式。
-- `src/components/WritingPage.tsx` / `WritingEditor.tsx` / `WritingCoach.tsx` / `WritingCompareView.tsx` / `WritingLibrary.tsx`：写作草稿、辅助问答、文章检查、对比、完成稿和文章库交互骨架。
-- `src/writingViewModel.ts` / `src/writingRepository.ts` / `src/styles/writing-page.css`：写作类型与 fixture、可替换前端演示 repository、独立 `rr-writing-*` 样式；当前 repository 使用 localStorage 只为演示刷新恢复，不是正式 SQLite 方案。
+- `src/components/WritingPage.tsx` / `WritingEditor.tsx` / `WritingCoach.tsx` / `WritingCompareView.tsx` / `WritingLibrary.tsx`：正式写作草稿、辅助问答、文章检查、对比、完成稿、版本回看和文章库交互。
+- `src/writingViewModel.ts` / `src/writingRepository.ts` / `src/writingService.ts`：正式写作页面协议、Tauri commands repository 与 Rust 返回结果运行时映射。
+- `src/writingDraftSaveCoordinator.ts` / `src/writingRequestIdentity.ts` / `src/writingReviewState.ts` / `src/writingLibraryLoader.ts`：防抖串行自动保存与失败读回对账、模型请求可见身份/generation 守卫、当前/历史检查状态和同目标问答序号、切换/卸载竞态及文章库 loading/empty/error/retry。
+- `src/writingFixtureService.ts`：只供非 Tauri 浏览器预览动态加载的 fixture/localStorage service；不进入正式桌面路径。
+- `tests/writingService.test.mjs` / `tests/writingFormalPath.test.mjs`：写作前端协议、保存竞态、状态恢复和正式/预览路径隔离测试。
+- `src/styles/writing-page.css`：保持既有 `rr-writing-*` 视觉，在必要位置补充真实错误重试、删除和版本选择状态。
 - `src/assets/fonts/`：应用随包内嵌的 Geist、Geist Mono、Newsreader、思源黑体和思源宋体变量字体及对应 OFL 许可证。
 - `src/styles/tokens.css`：ReadRay Graphite + Amber 轻量样式 token。
 - `src-tauri/`：Tauri v2 / Rust 原生层脚手架源码；当前同时配置正常主窗口 `main` 与快捷浮窗 `overlay`。
 - `src-tauri/src/windows_uia.rs`：Windows UI Automation 上下文捕获与正式划词输入来源；当前已接入 DeepSeek 锚定解释卡。
 - `src-tauri/src/explanation.rs`：四类 ExplanationCard 中间协议、CaptureInput、查询类型判断和 Rust validator。
 - `src-tauri/src/deepseek_explanation.rs`：分类型 DeepSeek 结构化查询、prompt、响应解析和 validator 装配。
-- `src-tauri/src/deepseek_client.rs`：ExplanationCard 与 Quick AI 共用的 DeepSeek HTTP 边界。
+- `src-tauri/src/deepseek_client.rs`：ExplanationCard、Quick AI 与写作分析/问答共用的 DeepSeek HTTP 边界。
 - `src-tauri/src/conversations.rs` / `src-tauri/src/quick_ai.rs`：Quick AI SQLite 对话仓库、多轮上下文请求和 Tauri commands。
+- `src-tauri/src/writing.rs`：写作文章/版本/分析/问答 SQLite repository、结构化 DeepSeek schema/validator 与 Tauri commands。
 - `package.json` / `pnpm-lock.yaml`：pnpm 前端依赖和脚本。
 - `src-tauri/Cargo.lock`：Rust / Tauri 依赖锁定文件。
 - `resource/`：已恢复的比赛官网页面、附件和文本抽取。
@@ -151,10 +156,16 @@
 - 主应用“记忆”内容区已接入真实 Tauri/SQLite 学习记录：TypeScript 协议与 Rust camelCase 返回一致，独立 repository/service 负责 list/search/get commands 和四类 ExplanationCard 到 MemoryRecordItem 的映射；总数、分页、关键词、queryType、选择详情、真实来源应用和今天/昨天/更早时间分组均来自后端记录。
 - 正式 Tauri 路径不再读取 memory fixture；fixture 仅由非 Tauri 浏览器预览动态加载。overlay 成功保存 ExplanationCard 后广播记录更新，已打开的主窗口记忆页会重新读取当前后端查询。当前 schema 没有可靠的重复出现聚合，正式记录的“过去的出现”入口保持隐藏。
 - “记忆”与“今天”在同一主应用外壳内切换；侧栏仍只允许手动折叠，折叠态继续隐藏品牌并保留导航/设置图标，记忆选中态保持可见。记忆页样式只使用 `rr-memory-*` 作用域，没有改变 overlay、Quick AI、UIA、快捷键或原生窗口行为。
-- 已按 `design-open-design/readray-writing-2.html` 在现有 MainAppShell 中实现“写作”页：写作导航和“今天”页写作入口进入本地文章库，支持空白稿/已有稿、标题与正文编辑、自动保存演示、文档切换、选区菜单、“问 ReadRay”多轮追问、四类写作教练问题、定位/修改/进一步提示/参考/忽略、多轮检查、双栏文本差异、写作模式总结、完成版本和继续修改。
+- 已按 `design-open-design/readray-writing-2.html` 在现有 MainAppShell 中实现“写作”页：写作导航和“今天”页写作入口进入本地文章库，支持空白稿/已有稿、标题与正文编辑、文档切换、选区菜单、“问 ReadRay”多轮追问、真实写作教练问题、定位/修改/进一步提示/参考/忽略、多轮检查、双栏文本差异、随完成版本保存的“本次写作要点”、完成版本和继续修改；要点明确未加入复习，也没有全局模式库。
 - 写作编辑区沿用 1440×900 / scale 1：纸张宽 680px、正文 18px / 1.68 行高、编辑列上限 736px；草稿/完成稿未打开辅助栏时纸张视觉居中，检查或辅助打开后自然重排。900px 以下教练保持 320px 右侧覆盖层，正文列宽不变；全局侧栏仍只允许用户手动在 252/72px 间折叠。
-- 写作状态和分析内容来自 `writingViewModel.ts` 的有类型 fixture；`WritingRepository` 隔离了页面与刷新恢复实现，当前 `BrowserWritingDemoRepository` 使用 localStorage，仅作为前端演示，未接 Rust、SQLite、DeepSeek、Quick AI、UIA 或真实写作分析接口。
-- 写作页已通过本机 pnpm 构建，并在浏览器 1440×900 与模拟真实应用 840×600 容器完成交互验收：文章库搜索/筛选/排序、空稿、已有稿、选区辅助、追问、问题操作、本轮改动保留、第二轮重新筛选、删除/新增差异、完成稿版本回看、长标题、720 词长正文、侧栏展开/折叠和窄窗教练覆盖均通过；未修改 Tauri 窗口、overlay、快捷键或设计稿目录。
+- 阶段五已追加 SQLite v3 migration：`writing_documents` 保存文章、当前草稿、完成稿、revision 和对比基线；`writing_versions` 保存不可变完成版本；`writing_analyses` 保存通过 schema/validator 的整篇检查；`writing_assistant_answers` 保存选区问答与追问。返修继续追加 v4，保存对比基线/分析 revision 元数据和回答目标 versionId；v3 旧数据无法可靠证明的基线 revision 与版本 analysis revision 均保持 `null`，不从 source revision 伪造来源。写作数据不写入 `learning_records` 或 Quick AI 表。
+- 正式 Tauri 写作路径使用 `TauriWritingRepository` / `RepositoryWritingService` 和 `src-tauri/src/writing.rs`；页面组件不直接 invoke。非 Tauri 预览通过动态 import 单独加载 `writingFixtureService.ts`，正式模块已静态检查不含 localStorage、演示文章、硬编码问题或演示回答。
+- 草稿自动保存使用每篇文章独立 revision 和已落盘快照的防抖串行协调器；调用失败后先读回文章对账：数据库已推进且目标快照一致则确认成功，仍为旧 revision 才允许安全重试。分析先提交且权威结果证明正文仍为送检基线时，在途 pending 会自动基于新 revision 重试；权威正文不同仍保留当前正文并阻止覆盖。切换文章和返回文章库前先 flush；应用卸载时仍会尝试落盘且不回写已卸载组件。
+- 检查和问答均先确认正文已保存，再记录 documentId、数据库 revision、屏幕可见快照、可选完成版本 ID 和本地编辑 generation 后调用 DeepSeek。模型 JSON 先经 Rust serde schema 和 validator；正文、文章或版本在请求期间变化时，后端 revision 与前端可见身份会分别拒绝旧结果。当前草稿的辅导会话按文章和最近完成版本边界保持，自动保存推进 revision 后已接受回答及 parentAnswerId 仍可连续追问；前端按时间持续展开完整问答，不再折叠成“之前的问题”，Rust 沿 parentAnswerId 向模型提供最近 8 条同一可见身份问答。新一次完成会切断旧草稿回答，历史版本问答继续按 versionId 严格隔离。提问框按内容自动增高和回缩，常规多行不显示原生滚动条，极长输入达到安全上限后保留无可见滚动条的内部滚动。写作页 hidden 时不再接管其他页面的 Ctrl+J/Escape。
+- 分析保存会在事务中推进文章 revision，`activeAnalysis` 只读取与当前草稿 revision 相同的结果；另以 `baselineAnalysis` 保留 comparisonBaselineRevision 绑定的本轮检查，因此检查后编辑和重启不会把它冒充当前分析，也不会丢失问题、模式和差异基线。完成与分析写事务串行化，同一 expectedRevision 只能一方提交；不可变版本固化当前 source revision，以及同一基线绑定的 analysis/baseline revision、问题和模式，检查后编辑时 source 可晚于二者。legacy 基线 revision 为 null 时，完成操作只接受与 expectedRevision 精确匹配的分析并保存其 analysisRevision，未知基线继续为 null。历史版本切换会重建只读“基线问题/处理回顾”、清理辅助面板，不把基线问题标为当前待处理项或在完成稿中定位；问答携带 versionId 和同目标请求序号，使用屏幕所见版本正文并拒绝乱序旧结果。
+- 已有修改中草稿时，Rust `continue_editing` 默认拒绝用完成版本覆盖；前端明确提示并提供“回到草稿”。文章搜索分别检查 draft/completed 标题与正文；分析 validator 拒绝正文中不存在的 source、与 targetText 无法验证的原文，以及当前 UI 无法定位的标题目标。
+- 阶段五本轮返修自动验证已通过：写作前端 25 项、既有完整对话前端 9 项；完整 Rust 测试 62 项通过、2 项真实 DeepSeek 联网测试按既有 ignored 标记跳过；`pnpm build`、`cargo fmt --check`、`cargo check` 均通过。覆盖 v2→v3→v4 升级及旧 analysis revision 保持 null、CRUD/双字段搜索、重启恢复、继续修改防覆盖、不可变版本、当前/基线分析身份、检查后编辑再完成、历史版本问题/回答重建、自动保存推进 revision 后连续追问、新完成版本边界隔离、完整问答顺序/去重、最近 8 条 parentAnswerId 上下文、辅导 transcript 与输入框自动增高、同目标问答乱序、结构化 source 校验、自动保存模糊提交对账/分析 revision 组合竞态、迟到分析/回答和 hidden 快捷键。
+- 阶段五已经由用户在真实 Tauri 窗口完成人工验收；正式 SQLite/DeepSeek 写作链路与既有视觉、连续辅导和“本次写作要点”布局均已确认，不再作为进入阶段六的阻断项。
 - 已按 `design-open-design/readray-conversation-2.html` 在现有 MainAppShell 中实现完整对话页：保留 1440×900 外壳、736px 消息列和输入区，覆盖空对话、设计示例消息、长提示折叠、生成/停止/失败/重试、更多菜单、导出提示和记忆引用抽屉。
 - 今天页输入、新对话和最近对话均已进入完整对话页；正式 Tauri 装配通过 `TauriConversationRepository` 调用现有 create/get/send Quick AI commands，页面组件不直接 invoke。
 - `RepositoryConversationService` 将 Rust camelCase `ConversationSnapshot` 映射为现有 thread，以 SQLite 返回的真实消息 ID、标题、时间和 sequence 覆盖临时页面状态；尾部为 user 时映射为明确 pendingTurn，重启加载后页面直接进入可重试失败态。
@@ -171,11 +182,11 @@
 
 ## 下一步
 
-进入阶段五：将已经验收的写作页面从 fixture/localStorage 骨架升级为正式 Tauri/SQLite/DeepSeek 功能。任务范围、验收标准和后续顺序以 `docs/DEVELOPMENT_PLAN.md` 为准。
+阶段五已经完成，下一项是阶段六“会话管理闭环”。
 
-- 记忆 UI 已通过 repository/service 调用 Rust 的分页、关键词搜索、queryType 筛选和单条读取 commands，不向前端暴露 SQL 或数据库路径；删除 command 本轮未增加页面入口。
-- 继续保持每次成功查询为独立事件；重复查询聚合、高频词、趋势和复盘规划属于后续阶段。
-- 阶段五完成后进入会话管理闭环；再之后的阶段顺序统一以 `docs/DEVELOPMENT_PLAN.md` 为准。
+- “查看全部对话”应读取真实 SQLite 会话，并具备稳定的 loading、empty、error 和 retry 状态。
+- 会话重命名、删除和原生导出必须同步当前页面与侧栏，不误报成功，也不破坏已有消息。
+- 继续复用现有 ConversationService、Quick AI commands、SQLite schema 与 `deepseek_client`；不把阶段八的复习、去重或长期记忆提前并入阶段六。
 - 新环境仍需复制 `.env.example` 为 `.env` 后自行填写 `DEEPSEEK_API_KEY`；真实 `.env` 不提交。
 
 阶段一完成标准：

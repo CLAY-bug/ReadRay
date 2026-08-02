@@ -9,7 +9,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use tauri::{AppHandle, Manager};
 
 const DATABASE_FILE_NAME: &str = "readray.sqlite3";
-const DATABASE_SCHEMA_VERSION: i64 = 2;
+const DATABASE_SCHEMA_VERSION: i64 = 4;
 pub const EXPLANATION_CARD_SCHEMA_VERSION: i64 = 1;
 const DEFAULT_PAGE: u32 = 1;
 const DEFAULT_PAGE_SIZE: u32 = 20;
@@ -60,7 +60,104 @@ CREATE INDEX idx_quick_ai_messages_conversation_sequence
   ON quick_ai_messages(conversation_id, sequence);
 "#;
 
-const MIGRATIONS: &[(i64, &str)] = &[(1, MIGRATION_1), (DATABASE_SCHEMA_VERSION, MIGRATION_2)];
+const MIGRATION_3: &str = r#"
+CREATE TABLE writing_documents (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  revision INTEGER NOT NULL DEFAULT 0 CHECK (revision >= 0),
+  created_at_unix_ms INTEGER NOT NULL,
+  updated_at_unix_ms INTEGER NOT NULL,
+  last_opened_at_unix_ms INTEGER,
+  draft_title TEXT,
+  draft_paragraphs_json TEXT,
+  draft_updated_at_unix_ms INTEGER,
+  completed_title TEXT,
+  completed_paragraphs_json TEXT,
+  completed_at_unix_ms INTEGER,
+  comparison_baseline_title TEXT NOT NULL,
+  comparison_baseline_paragraphs_json TEXT NOT NULL,
+  CHECK (
+    (draft_title IS NULL AND draft_paragraphs_json IS NULL AND draft_updated_at_unix_ms IS NULL)
+    OR
+    (draft_title IS NOT NULL AND draft_paragraphs_json IS NOT NULL AND draft_updated_at_unix_ms IS NOT NULL)
+  ),
+  CHECK (
+    (completed_title IS NULL AND completed_paragraphs_json IS NULL AND completed_at_unix_ms IS NULL)
+    OR
+    (completed_title IS NOT NULL AND completed_paragraphs_json IS NOT NULL AND completed_at_unix_ms IS NOT NULL)
+  )
+);
+
+CREATE TABLE writing_analyses (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  document_id INTEGER NOT NULL REFERENCES writing_documents(id) ON DELETE CASCADE,
+  document_revision INTEGER NOT NULL,
+  round INTEGER NOT NULL,
+  analysis_json TEXT NOT NULL,
+  schema_version INTEGER NOT NULL,
+  created_at_unix_ms INTEGER NOT NULL,
+  UNIQUE(document_id, round)
+);
+
+CREATE TABLE writing_versions (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  document_id INTEGER NOT NULL REFERENCES writing_documents(id) ON DELETE CASCADE,
+  ordinal INTEGER NOT NULL,
+  source_revision INTEGER NOT NULL,
+  title TEXT NOT NULL,
+  paragraphs_json TEXT NOT NULL,
+  comparison_baseline_title TEXT NOT NULL,
+  comparison_baseline_paragraphs_json TEXT NOT NULL,
+  analysis_json TEXT,
+  completed_at_unix_ms INTEGER NOT NULL,
+  UNIQUE(document_id, ordinal)
+);
+
+CREATE TABLE writing_assistant_answers (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  document_id INTEGER NOT NULL REFERENCES writing_documents(id) ON DELETE CASCADE,
+  document_revision INTEGER NOT NULL,
+  parent_answer_id INTEGER REFERENCES writing_assistant_answers(id) ON DELETE SET NULL,
+  question TEXT NOT NULL,
+  scope TEXT NOT NULL CHECK (scope IN ('document', 'paragraph', 'selection')),
+  selection_text TEXT,
+  answer_json TEXT NOT NULL,
+  schema_version INTEGER NOT NULL,
+  created_at_unix_ms INTEGER NOT NULL
+);
+
+CREATE INDEX idx_writing_documents_updated_at
+  ON writing_documents(updated_at_unix_ms DESC, id DESC);
+CREATE INDEX idx_writing_analyses_document_round
+  ON writing_analyses(document_id, round DESC);
+CREATE INDEX idx_writing_versions_document_ordinal
+  ON writing_versions(document_id, ordinal DESC);
+CREATE INDEX idx_writing_answers_document_created
+  ON writing_assistant_answers(document_id, created_at_unix_ms, id);
+"#;
+
+const MIGRATION_4: &str = r#"
+ALTER TABLE writing_documents
+  ADD COLUMN comparison_baseline_revision INTEGER;
+
+ALTER TABLE writing_versions
+  ADD COLUMN analysis_revision INTEGER;
+
+ALTER TABLE writing_versions
+  ADD COLUMN comparison_baseline_revision INTEGER;
+
+ALTER TABLE writing_assistant_answers
+  ADD COLUMN version_id INTEGER REFERENCES writing_versions(id) ON DELETE CASCADE;
+
+CREATE INDEX idx_writing_answers_version_created
+  ON writing_assistant_answers(version_id, created_at_unix_ms, id);
+"#;
+
+const MIGRATIONS: &[(i64, &str)] = &[
+    (1, MIGRATION_1),
+    (2, MIGRATION_2),
+    (3, MIGRATION_3),
+    (DATABASE_SCHEMA_VERSION, MIGRATION_4),
+];
 
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -666,6 +763,178 @@ mod tests {
         assert_eq!(version, DATABASE_SCHEMA_VERSION);
         assert!(path.exists());
         drop(store);
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn version_two_database_upgrades_without_losing_existing_data() {
+        let (root, path) = test_database_path();
+        fs::create_dir_all(&root).unwrap();
+        let connection = Connection::open(&path).unwrap();
+        connection
+            .execute_batch(
+                "CREATE TABLE schema_migrations (
+                    version INTEGER PRIMARY KEY,
+                    applied_at_unix_ms INTEGER NOT NULL
+                 );",
+            )
+            .unwrap();
+        connection.execute_batch(MIGRATION_1).unwrap();
+        connection.execute_batch(MIGRATION_2).unwrap();
+        connection
+            .execute(
+                "INSERT INTO schema_migrations (version, applied_at_unix_ms)
+                 VALUES (1, 100), (2, 200)",
+                [],
+            )
+            .unwrap();
+        connection
+            .execute(
+                "INSERT INTO quick_ai_conversations (
+                    id, title, model, created_at_unix_ms, updated_at_unix_ms
+                 ) VALUES (44, '保留的会话', 'deepseek-v4-flash', 100, 100)",
+                [],
+            )
+            .unwrap();
+        drop(connection);
+
+        let upgraded = open_database(&path).unwrap();
+        let version: i64 = upgraded
+            .query_row("SELECT MAX(version) FROM schema_migrations", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        let preserved_title: String = upgraded
+            .query_row(
+                "SELECT title FROM quick_ai_conversations WHERE id = 44",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        let writing_table_count: i64 = upgraded
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master
+                 WHERE type = 'table' AND name = 'writing_documents'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+
+        assert_eq!(version, DATABASE_SCHEMA_VERSION);
+        assert_eq!(preserved_title, "保留的会话");
+        assert_eq!(writing_table_count, 1);
+        drop(upgraded);
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn version_three_database_upgrades_writing_target_metadata_without_data_loss() {
+        let (root, path) = test_database_path();
+        fs::create_dir_all(&root).unwrap();
+        let connection = Connection::open(&path).unwrap();
+        connection
+            .execute_batch(
+                "CREATE TABLE schema_migrations (
+                    version INTEGER PRIMARY KEY,
+                    applied_at_unix_ms INTEGER NOT NULL
+                 );",
+            )
+            .unwrap();
+        connection.execute_batch(MIGRATION_1).unwrap();
+        connection.execute_batch(MIGRATION_2).unwrap();
+        connection.execute_batch(MIGRATION_3).unwrap();
+        connection
+            .execute(
+                "INSERT INTO schema_migrations (version, applied_at_unix_ms)
+                 VALUES (1, 100), (2, 200), (3, 300)",
+                [],
+            )
+            .unwrap();
+        connection
+            .execute(
+                "INSERT INTO writing_documents (
+                    id, revision, created_at_unix_ms, updated_at_unix_ms,
+                    last_opened_at_unix_ms, draft_title, draft_paragraphs_json,
+                    draft_updated_at_unix_ms, comparison_baseline_title,
+                    comparison_baseline_paragraphs_json
+                 ) VALUES (71, 5, 100, 200, NULL, '保留草稿', '[\"body\"]', 200, '', '[\"\"]')",
+                [],
+            )
+            .unwrap();
+        connection
+            .execute(
+                "INSERT INTO writing_versions (
+                    id, document_id, ordinal, source_revision, title, paragraphs_json,
+                    comparison_baseline_title, comparison_baseline_paragraphs_json,
+                    analysis_json, completed_at_unix_ms
+                 ) VALUES (
+                    81, 71, 1, 4, '旧完成稿', '[\"version body\"]',
+                    '旧基线', '[\"baseline body\"]',
+                    '{\"issues\":[],\"patterns\":[]}', 190
+                 )",
+                [],
+            )
+            .unwrap();
+        drop(connection);
+
+        let upgraded = open_database(&path).unwrap();
+        let version: i64 = upgraded
+            .query_row("SELECT MAX(version) FROM schema_migrations", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        let document_metadata_columns: i64 = upgraded
+            .query_row(
+                "SELECT COUNT(*) FROM pragma_table_info('writing_documents')
+                 WHERE name = 'comparison_baseline_revision'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        let answer_target_columns: i64 = upgraded
+            .query_row(
+                "SELECT COUNT(*) FROM pragma_table_info('writing_assistant_answers')
+                 WHERE name = 'version_id'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        let preserved: (String, i64) = upgraded
+            .query_row(
+                "SELECT draft_title, revision FROM writing_documents WHERE id = 71",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
+        let unknown_legacy_baseline_revision: Option<i64> = upgraded
+            .query_row(
+                "SELECT comparison_baseline_revision
+                 FROM writing_documents WHERE id = 71",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        let preserved_legacy_version: (i64, String, Option<i64>) = upgraded
+            .query_row(
+                "SELECT source_revision, analysis_json, analysis_revision
+                 FROM writing_versions WHERE id = 81",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .unwrap();
+
+        assert_eq!(version, 4);
+        assert_eq!(document_metadata_columns, 1);
+        assert_eq!(answer_target_columns, 1);
+        assert_eq!(preserved, ("保留草稿".to_string(), 5));
+        assert_eq!(unknown_legacy_baseline_revision, None);
+        assert_eq!(preserved_legacy_version.0, 4);
+        assert_eq!(
+            preserved_legacy_version.1,
+            "{\"issues\":[],\"patterns\":[]}"
+        );
+        assert_eq!(preserved_legacy_version.2, None);
+        drop(upgraded);
         let _ = fs::remove_dir_all(root);
     }
 

@@ -4,8 +4,8 @@ project:
   repo_root: "."
 
 meta:
-  version: "1.7"
-  last_updated: "2026-07-30"
+  version: "1.13"
+  last_updated: "2026-08-02"
   updated_by: "Codex"
   source_of_truth: "docs/RESOURCE_MAP.yml"
   language: "zh-CN"
@@ -141,8 +141,8 @@ source_areas:
     read_when:
       - "调整正常主应用壳、标题栏、侧栏折叠或首页装配。"
       - "将主应用接入独立 Tauri 窗口。"
-    notes: "当前通过 ?view=main 进入主应用，并在同一外壳内切换“今天”“写作”“记忆”和“对话”；由装配层加载 TodayService、MemoryService、ConversationService 与最近 Quick AI 对话，页面组件不直接读取数据库。"
-    risk: "不要把快捷 overlay 状态机或 invoke 迁入页面组件；正式 Tauri 对话必须使用真实 ConversationService，fixture 只能由非 Tauri 预览动态加载。"
+    notes: "当前通过 ?view=main 进入主应用，并在同一外壳内切换“今天”“写作”“记忆”和“对话”；由装配层加载 TodayService、MemoryService、ConversationService、WritingService 与最近 Quick AI 对话，页面组件不直接读取数据库。写作页保持挂载并在离开时隐藏，使失败草稿仍可返回重试。"
+    risk: "不要把快捷 overlay 状态机或 invoke 迁入页面组件；正式 Tauri 对话和写作必须使用真实 service，fixture 只能由非 Tauri 预览动态加载。"
 
   - path: "src/components/MainSidebar.tsx"
     purpose: "主应用全局左侧栏，包含新对话、学习导航、最近对话、查看全部和设置入口。"
@@ -225,25 +225,99 @@ source_areas:
     status: "active"
     read_when:
       - "调整写作草稿、检查、对比、完成稿或文章库状态流。"
-      - "将写作前端演示 repository 替换为 Tauri/SQLite commands。"
-    notes: "复用 MainAppShell、MainSidebar 和标题栏；WritingEditor、WritingCoach、WritingCompareView、WritingLibrary 分别负责正文编辑、写作辅助/问题教练、双栏差异和文章目录，支持空稿、自动保存演示、选区菜单、多轮检查、完成版本与继续修改。"
-    risk: "不要复制第二套 App Shell，不要在页面组件直接读取 localStorage/SQLite，也不要把当前前端分析 fixture 误当作真实模型结果。"
+      - "调整正式写作 repository/service 状态、保存竞态或失败重试。"
+    notes: "复用 MainAppShell、MainSidebar 和标题栏；只消费 WritingService。新建、搜索、加载、删除、自动保存、检查、真实问答、完成版本与继续修改均以 Rust/SQLite 返回的 ID、revision 和时间为权威；模型请求绑定文章、数据库 revision、可见快照、完成版本 ID、本地编辑 generation 和同目标请求序号。当前草稿辅导会话按文章和最近完成版本边界保持，自动保存推进 revision 不会清除已接受回答或追问身份；问答按时间持续展开，下一问接续最后回答，不再另设“之前的问题”折叠摘要。完成版本仍按 versionId 严格隔离。当前 revision 分析与基线检查分开消费；完成版本切换会重建只读“基线问题/处理回顾”，清理辅助面板并只显示自身固化的问题、模式和问答，不把基线问题重置为待处理状态或在完成稿中定位。已有草稿时“继续修改”提示返回该草稿。页面 hidden 时不接管 Ctrl+J/Escape。"
+    risk: "不要复制第二套 App Shell，不要在页面组件直接 invoke、读取 localStorage/SQLite 或重新引入硬编码问题和回答。"
 
   - path: "src/writingViewModel.ts"
-    purpose: "写作模块的类型、文档/问题 fixture、写作模式总结和前端问答演示映射。"
+    purpose: "写作模块的页面模型、文章/版本/分析/问答类型和纯展示工具。"
     status: "active"
     read_when:
-      - "调整写作页面协议、教练问题、示例文档或写作辅助演示回答。"
-    notes: "包含 WritingSnapshot、WritingDocumentRecord、WritingIssue 等类型及设计稿确认的演示数据；不调用 Rust、SQLite、DeepSeek 或 Quick AI。"
-    risk: "接入真实分析接口时保留页面模型边界，不把 LLM 原始响应直接耦合到组件。"
+      - "调整写作页面协议、文章状态或 Rust camelCase 映射。"
+    notes: "只包含 WritingSnapshot、WritingDocumentRecord、WritingAnalysis、WritingAgentAnswer 等正式页面类型和快照工具；不再包含示例文章、硬编码问题或演示回答。"
+    risk: "保持页面模型边界，不把 LLM 原始响应或 SQLite schema 直接耦合到组件。"
 
   - path: "src/writingRepository.ts"
-    purpose: "可替换的写作文章前端 repository 边界。"
-    status: "demo"
+    purpose: "写作模块正式 Tauri command repository。"
+    status: "active"
     read_when:
-      - "调整写作刷新恢复演示或接入正式本地存储。"
-    notes: "当前 BrowserWritingDemoRepository 仅为前端演示刷新恢复而封装 localStorage；页面组件只依赖 WritingRepository。"
-    risk: "这不是正式 SQLite 方案；接入 Tauri commands 后应在装配层替换，不让页面组件直接访问数据库或 localStorage。"
+      - "调整写作 command 名称、camelCase 参数或 Rust 返回协议。"
+    notes: "只调用 create/list/get/save/delete/analyze/ask/complete/continue writing commands；保存、分析、删除和完成均显式携带 expectedRevision，历史完成版本问答额外携带 versionId。原始 payload 类型允许 Rust Option 序列化的 null。"
+    risk: "不得在 repository 读取 localStorage、复制 SQLite schema、拼装模型上下文或建立第二套模型客户端。"
+
+  - path: "src/writingService.ts"
+    purpose: "写作 Rust 返回协议的运行时校验、深拷贝映射与正式 service。"
+    status: "active"
+    read_when:
+      - "调整真实写作加载、保存、分析、问答、完成或继续修改。"
+      - "排查跨文章映射、无效 ID/revision 或空快照。"
+    notes: "RepositoryWritingService 校验数据库 ID、revision、时间、文章归属、版本、问题、模式和回答，再把结构化结果交给页面；Rust Option 的 null 统一规范化为 undefined。activeAnalysis 只接受当前 revision，baselineAnalysis 只接受 comparisonBaselineRevision；完成版本允许 sourceRevision 晚于同一基线绑定的 analysisRevision/comparisonBaselineRevision。兼容 legacy 基线 revision 为 null 时，只有 analysisRevision 与 sourceRevision 精确相同才接受。缺失文章和无效协议明确失败。"
+    risk: "不得让页面绕过 service 使用 Rust 原始响应，也不得用前端正文重建数据库版本。"
+
+  - path: "src/writingDraftSaveCoordinator.ts"
+    purpose: "写作草稿防抖、串行保存、revision 推进、切换 flush 与卸载落盘协调器。"
+    status: "active"
+    read_when:
+      - "调整自动保存延迟、失败重试或文档切换/卸载竞态。"
+    notes: "每篇文章独立跟踪数据库 revision 与对应已落盘快照，只保存最新 pending 快照；保存调用失败后读回文章对账：revision 已推进且目标快照一致则确认成功，仍为旧 revision 才允许安全重试。若权威分析只推进一个 revision 且正文仍与送检基线一致，在途 pending 会自动改用新 revision 重试；远端正文不同则保留本地正文并阻止覆盖。切换前可等待 flush，dispose 会尝试落盘且不回写已卸载组件。"
+    risk: "不得绕过 expectedRevision；对账不明或内容冲突时不得携带旧 revision 无限重试。"
+
+  - path: "src/writingRequestIdentity.ts"
+    purpose: "写作模型请求的可见正文身份与隐藏页面快捷键纯状态守卫。"
+    status: "active"
+    read_when:
+      - "调整迟到分析/回答拒绝、本地编辑 generation 或历史版本身份。"
+      - "调整 WritingPage hidden 时的 Ctrl+J/Escape 行为。"
+    notes: "请求身份同时包含 documentId、数据库 revision、本地 generation、深拷贝快照和可选 versionId；Promise 返回后必须仍与当前可见身份完全一致才可显示。"
+    risk: "不能只比较数据库 revision；防抖尚未落盘的本地编辑也必须使旧模型结果失效。"
+
+  - path: "src/writingReviewState.ts"
+    purpose: "写作当前草稿/历史版本的检查状态重建与同目标问答序号守卫。"
+    status: "active"
+    read_when:
+      - "调整 activeAnalysis、基线检查、历史版本问题/回答显示或问答乱序处理。"
+    notes: "当前草稿按 documentId 与最近完成版本边界生成稳定 targetKey，并保留该边界之后、当前 revision 以内的已接受回答；自动保存推进 revision 不重建辅导面板。mergeWritingConversationAnswers 以数据库回答 ID 去重并按时间/ID 保持完整问答顺序。历史完成版本仍按 versionId 独立筛选问题、模式和回答，并为每次目标切换重建 issueStates；LatestWritingRequestSequence 只允许同一可见身份中最后发出的问答更新页面。"
+    risk: "不得把 baselineAnalysis 冒充当前 revision 的 activeAnalysis，也不得让旧版本或乱序 Promise 复用辅助面板状态。"
+
+  - path: "src/writingLibraryLoader.ts"
+    purpose: "写作文章库 loading/ready/error 状态与查询加载边界。"
+    status: "active"
+    read_when:
+      - "调整文章库空状态、错误重试或搜索加载。"
+    notes: "把 WritingService.listDocuments 的 loading、空 ready 和 error 明确交给页面，不在组件里伪造文章或静默吞错。"
+    risk: "搜索必须继续下推正式 service/Rust，不退回前端全量正文过滤。"
+
+  - path: "src/writingFixtureService.ts"
+    purpose: "非 Tauri 浏览器预览专用写作 fixture/localStorage service。"
+    status: "preview-only"
+    read_when:
+      - "维护写作设计预览样本或浏览器刷新恢复。"
+    notes: "仅由 App 的非 Tauri 动态分支加载；预览文章、分析和问答不进入正式桌面路径。"
+    risk: "不得从 Tauri 正式装配导入、读取或实例化本文件。"
+
+  - path: "tests/writingService.test.mjs"
+    purpose: "写作 repository/service、加载状态、防抖保存和竞态测试。"
+    status: "active"
+    read_when:
+      - "修改写作前端协议、loading/error/retry 或自动保存语义。"
+    notes: "使用 Node 内置 test runner，不新增测试依赖；覆盖真实 Rust null payload、当前/基线分析映射、command/versionId 参数、loading/empty/error/search、自动保存对账与分析 revision 组合竞态、防抖未落盘 generation、迟到分析/回答、历史版本身份和 hidden 快捷键。"
+    risk: "不替代真实 Tauri/DeepSeek 人工验收。"
+
+  - path: "tests/writingFormalPath.test.mjs"
+    purpose: "写作正式与浏览器预览路径静态隔离检查。"
+    status: "active"
+    read_when:
+      - "调整 App 写作装配、fixture 动态加载或正式写作模块引用。"
+    notes: "阻止正式写作模块重新读取 localStorage、演示文章、硬编码问题/回答或 preview service，并确认 preview 只在非 Tauri 分支动态加载；同时静态守卫辅导 transcript 不退回“之前的问题”折叠区、提问框继续按 scrollHeight 自动增高并隐藏原生滚动条。"
+    risk: "静态隔离检查不替代运行时功能和真实窗口验收。"
+
+  - path: "tests/writingReviewState.test.mjs"
+    purpose: "写作历史版本检查状态、基线检查恢复与同目标问答乱序测试。"
+    status: "active"
+    read_when:
+      - "调整版本切换、issueStates、辅助回答目标或请求序号。"
+    notes: "使用纯状态边界验证 V1/V2 切换后问题和回答不串写、草稿仍可显示基线绑定检查、权威回答去重后保持完整顺序，以及较早问答 Promise 不能覆盖较新结果。"
+    risk: "纯状态测试不替代真实组件与 Tauri 窗口人工验收。"
 
   - path: "src/mainAppViewModel.ts"
     purpose: "主应用导航、Today 页面和最近对话的前端展示类型。"
@@ -503,8 +577,8 @@ source_areas:
     read_when:
       - "新增或排查 DeepSeek 请求链路。"
       - "调整共享请求、HTTP 状态或响应结构错误分类。"
-    notes: "ExplanationCard 与 Quick AI 共用该传输边界；默认模型仍为 deepseek-v4-flash，不记录或返回 API key。"
-    risk: "这里只负责 HTTP 传输，不放 ExplanationCard prompt、Quick AI system prompt 或业务存储。"
+    notes: "ExplanationCard、Quick AI 与写作分析/问答共用该传输边界；默认模型仍为 deepseek-v4-flash，不记录或返回 API key。"
+    risk: "这里只负责 HTTP 传输，不放 ExplanationCard、Quick AI 或写作业务 prompt 和存储。"
 
   - path: "src-tauri/src/conversations.rs"
     purpose: "Quick AI conversation/message SQLite 仓库和序列化协议。"
@@ -524,6 +598,15 @@ source_areas:
     notes: "独立于 ExplanationCard JSON 协议；send command 要求已创建的 conversationId 和 expectedUserSequence，先 prepare pending user，再从该 SQLite 快照装配多轮上下文并调用模型，成功后 complete assistant；已完成轮次不会再次请求模型。"
     risk: "不接学习记录检索、工具调用、联网搜索、长期记忆或通用 Agent 框架。"
 
+  - path: "src-tauri/src/writing.rs"
+    purpose: "阶段五写作 SQLite repository、结构化 DeepSeek 分析/问答和 Tauri commands。"
+    status: "active"
+    read_when:
+      - "调整写作文章 CRUD、搜索、revision、版本、分析或问答。"
+      - "排查写作保存/模型失败、过期结果拒绝或 schema validator。"
+    notes: "复用 readray.sqlite3 与 deepseek_client；文章、草稿、完成稿、不可变版本、对比基线、分析和问答均由数据库生成 ID/时间。分析保存会原子推进 revision；activeAnalysis 只读取当前 revision，baselineAnalysis 按 comparison_baseline_revision 独立恢复。完成与分析使用写事务串行化，同一 expectedRevision 只能有一方提交；完成版本在同一事务中固化 source revision，以及同一检查基线绑定的 analysis/baseline revision、问题和模式，检查后编辑时 source 可晚于二者。legacy comparison_baseline_revision 为 null 时，只读取与 expectedRevision 精确匹配的分析并保存其 analysisRevision，未知基线仍保持 null。当前草稿追问允许引用最近完成版本之后同一草稿会话的旧 revision 回答，并沿 parentAnswerId 向模型提供同一可见身份内最近 8 条有序问答；历史问答仍按 versionId 使用屏幕所见不可变正文，跨边界链路拒绝调用模型。分析提示词只允许从本文真实问题提炼最多 4 个高价值可迁移写作要点，不枚举好词好句；validator 只接受正文中可定位、source 与 targetText 可验证的原文。"
+    risk: "不得写入 learning_records/quick_ai 表、跨 await 持有 SQLite 事务、建立第二套模型客户端或让未校验 JSON 进入前端。"
+
   - path: "src-tauri/src/learning_records.rs"
     purpose: "阶段三 SQLite 学习事件迁移、Rust 存储边界和 Tauri 数据 commands。"
     status: "active"
@@ -531,8 +614,8 @@ source_areas:
       - "调整学习记录 schema、迁移或存储字段。"
       - "实现学习记录窗口、搜索、筛选、单条读取或删除。"
       - "排查自动保存或应用数据目录中的 SQLite 问题。"
-    notes: "使用 rusqlite bundled，在 Tauri 应用数据目录创建 readray.sqlite3；除分页/search/get/delete 外，提供按前端本机日期范围统计数量与最新记录的只读今日摘要 command。"
-    risk: "当前只做事件存储，不做去重、聚合、remembered/forgotten、趋势或历史 UI；新增 schema 必须追加 migration，不能改写已发布迁移。"
+    notes: "使用 rusqlite bundled，在 Tauri 应用数据目录创建 readray.sqlite3；v1 为学习记录、v2 为 Quick AI、v3 追加写作文章/分析/版本/回答表，v4 追加对比基线/分析 revision 元数据和回答 versionId。v3 升级时无法从既有数据可靠证明的基线 revision 与版本 analysis revision 均保持 null，不从 source_revision 伪造来源。除学习记录分页/search/get/delete 外，提供按前端本机日期范围统计数量与最新记录的只读今日摘要 command。"
+    risk: "学习记录仍只做事件存储，不做去重、聚合、remembered/forgotten、趋势或历史 UI；新增 schema 必须继续追加 migration，不能改写已发布迁移。"
 
   - path: "scripts/"
     purpose: "辅助脚本目录。"
@@ -567,7 +650,7 @@ app_scaffold:
     read_when:
       - "调整 npm/pnpm 脚本。"
       - "排查前端构建或 Tauri CLI 调用。"
-    notes: "包管理器使用 pnpm；当前脚本包含 dev、build、preview、tauri。"
+    notes: "包管理器使用 pnpm；当前脚本包含 dev、build、preview、test:conversation、test:writing 和 tauri。"
     risk: "不要无依据新增运行时依赖。"
 
   - path: "pnpm-lock.yaml"

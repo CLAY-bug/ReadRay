@@ -15,6 +15,7 @@ import {
   createTodayLoadingViewModel,
   type TodayService,
 } from "../todayService";
+import type { WritingService } from "../writingService";
 import ConversationPage from "./ConversationPage";
 import MainAppIcon from "./MainAppIcon";
 import MainSidebar from "./MainSidebar";
@@ -31,6 +32,7 @@ type MainAppShellProps = {
   learningRecordsRefreshToken: number;
   conversationRefreshToken: number;
   conversationService: ConversationService | null;
+  writingService: WritingService | null;
   onNewConversation?: () => void;
   onNavigate?: (id: MainAppNavigationId) => void;
   onRecentConversationSelect?: (id: string) => void;
@@ -55,6 +57,7 @@ function MainAppShell({
   learningRecordsRefreshToken,
   conversationRefreshToken,
   conversationService,
+  writingService,
   onNewConversation = noop,
   onNavigate = noop,
   onRecentConversationSelect = noop,
@@ -347,12 +350,7 @@ function MainAppShell({
             refreshToken={memoryRefreshToken}
             requestedRecordId={requestedMemoryRecordId}
           />
-        ) : activePageId === "writing" ? (
-          <WritingPage
-            libraryRequest={writingLibraryRequest}
-            onWindowTitleChange={setWritingWindowTitle}
-          />
-        ) : (
+        ) : activePageId === "writing" ? null : (
           <TodayPage
             viewModel={todayViewModel}
             status={todayStatus}
@@ -362,6 +360,12 @@ function MainAppShell({
             onSubmitPrompt={handleSubmitPrompt}
           />
         )}
+        <WritingPage
+          hidden={activePageId !== "writing"}
+          libraryRequest={writingLibraryRequest}
+          service={writingService}
+          onWindowTitleChange={setWritingWindowTitle}
+        />
       </div>
     </div>
   );

@@ -1,75 +1,173 @@
-import {
-  cloneWritingSnapshot,
-  writingDocumentFixtures,
-  type WritingDocumentRecord,
+import { invoke } from "@tauri-apps/api/core";
+import type {
+  WritingAgentAnswer,
+  WritingAnalysis,
+  WritingDocumentSummary,
+  WritingQuestionScope,
+  WritingSnapshot,
+  WritingVersion,
 } from "./writingViewModel";
 
-export type WritingRepository = {
-  list(): WritingDocumentRecord[];
-  save(record: WritingDocumentRecord): WritingDocumentRecord[];
+export type WritingQuestionCommand = {
+  documentId: number;
+  expectedRevision: number;
+  versionId?: number;
+  question: string;
+  scope: WritingQuestionScope;
+  selectionText?: string;
+  parentAnswerId?: number;
 };
 
-const DEMO_STORAGE_KEY = "readray:writing-demo:v1";
+export type WritingDocumentSummaryPayload = Omit<
+  WritingDocumentSummary,
+  | "lastOpenedAtUnixMs"
+  | "draftUpdatedAtUnixMs"
+  | "completedAtUnixMs"
+  | "draftSnapshot"
+  | "completedSnapshot"
+> & {
+  lastOpenedAtUnixMs?: number | null;
+  draftUpdatedAtUnixMs?: number | null;
+  completedAtUnixMs?: number | null;
+  draftSnapshot?: WritingSnapshot | null;
+  completedSnapshot?: WritingSnapshot | null;
+};
 
-function cloneRecord(record: WritingDocumentRecord): WritingDocumentRecord {
-  return {
-    ...record,
-    draftSnapshot: record.draftSnapshot ? cloneWritingSnapshot(record.draftSnapshot) : undefined,
-    completedSnapshot: record.completedSnapshot ? cloneWritingSnapshot(record.completedSnapshot) : undefined,
-    comparisonBaseline: cloneWritingSnapshot(record.comparisonBaseline),
-    versions: record.versions.map((version) => ({
-      ...version,
-      snapshot: cloneWritingSnapshot(version.snapshot),
-      comparisonBaseline: cloneWritingSnapshot(version.comparisonBaseline),
-    })),
-  };
+export type WritingVersionPayload = Omit<
+  WritingVersion,
+  "analysisRevision" | "comparisonBaselineRevision"
+> & {
+  analysisRevision?: number | null;
+  comparisonBaselineRevision?: number | null;
+};
+
+export type WritingAgentAnswerPayload = Omit<
+  WritingAgentAnswer,
+  "versionId" | "parentAnswerId" | "selectionText" | "map"
+> & {
+  versionId?: number | null;
+  parentAnswerId?: number | null;
+  selectionText?: string | null;
+  map?: WritingAgentAnswer["map"] | null;
+};
+
+export type WritingDocumentPayload = WritingDocumentSummaryPayload & {
+  comparisonBaseline: WritingSnapshot;
+  comparisonBaselineRevision?: number | null;
+  versions: WritingVersionPayload[];
+  activeAnalysis?: WritingAnalysis | null;
+  baselineAnalysis?: WritingAnalysis | null;
+  answers: WritingAgentAnswerPayload[];
+};
+
+export interface WritingRepository {
+  create(): Promise<WritingDocumentPayload>;
+  list(query?: string): Promise<WritingDocumentSummaryPayload[]>;
+  get(documentId: number): Promise<WritingDocumentPayload | null>;
+  saveDraft(
+    documentId: number,
+    expectedRevision: number,
+    snapshot: WritingSnapshot,
+  ): Promise<WritingDocumentPayload>;
+  delete(documentId: number, expectedRevision: number): Promise<boolean>;
+  analyze(
+    documentId: number,
+    expectedRevision: number,
+  ): Promise<WritingDocumentPayload>;
+  ask(request: WritingQuestionCommand): Promise<WritingAgentAnswerPayload>;
+  complete(
+    documentId: number,
+    expectedRevision: number,
+  ): Promise<WritingDocumentPayload>;
+  continueEditing(
+    documentId: number,
+    expectedRevision: number,
+    versionId?: number,
+  ): Promise<WritingDocumentPayload>;
 }
 
-function cloneRecords(records: WritingDocumentRecord[]) {
-  return records.map(cloneRecord);
-}
+export type WritingInvoke = <T>(
+  command: string,
+  args?: Record<string, unknown>,
+) => Promise<T>;
 
-/**
- * 仅用于本轮前端演示的可替换 repository。它不是 ReadRay 的正式 SQLite 方案；
- * 页面组件只依赖 WritingRepository，后续可在装配层替换为 Tauri commands。
- */
-class BrowserWritingDemoRepository implements WritingRepository {
-  private fallback = cloneRecords(writingDocumentFixtures);
+export class TauriWritingRepository implements WritingRepository {
+  private readonly invokeCommand: WritingInvoke;
 
-  list() {
-    try {
-      const raw = window.localStorage.getItem(DEMO_STORAGE_KEY);
-      if (!raw) {
-        window.localStorage.setItem(DEMO_STORAGE_KEY, JSON.stringify(this.fallback));
-        return cloneRecords(this.fallback);
-      }
-      const stored = JSON.parse(raw) as WritingDocumentRecord[];
-      if (!Array.isArray(stored)) {
-        return cloneRecords(this.fallback);
-      }
-      this.fallback = cloneRecords(stored);
-      return cloneRecords(stored);
-    } catch {
-      return cloneRecords(this.fallback);
-    }
+  constructor(invokeCommand: WritingInvoke = invoke) {
+    this.invokeCommand = invokeCommand;
   }
 
-  save(record: WritingDocumentRecord) {
-    const records = this.list();
-    const index = records.findIndex((candidate) => candidate.id === record.id);
-    if (index >= 0) {
-      records[index] = cloneRecord(record);
-    } else {
-      records.unshift(cloneRecord(record));
-    }
-    this.fallback = cloneRecords(records);
-    try {
-      window.localStorage.setItem(DEMO_STORAGE_KEY, JSON.stringify(records));
-    } catch {
-      // localStorage 不可用时保留当前会话内存副本。
-    }
-    return cloneRecords(records);
+  create() {
+    return this.invokeCommand<WritingDocumentPayload>(
+      "create_writing_document",
+    );
+  }
+
+  list(query?: string) {
+    return this.invokeCommand<WritingDocumentSummaryPayload[]>(
+      "list_writing_documents",
+      { query: query?.trim() || null },
+    );
+  }
+
+  get(documentId: number) {
+    return this.invokeCommand<WritingDocumentPayload | null>(
+      "get_writing_document",
+      { documentId },
+    );
+  }
+
+  saveDraft(
+    documentId: number,
+    expectedRevision: number,
+    snapshot: WritingSnapshot,
+  ) {
+    return this.invokeCommand<WritingDocumentPayload>(
+      "save_writing_draft",
+      { documentId, expectedRevision, snapshot },
+    );
+  }
+
+  delete(documentId: number, expectedRevision: number) {
+    return this.invokeCommand<boolean>("delete_writing_document", {
+      documentId,
+      expectedRevision,
+    });
+  }
+
+  analyze(documentId: number, expectedRevision: number) {
+    return this.invokeCommand<WritingDocumentPayload>(
+      "analyze_writing_document",
+      { documentId, expectedRevision },
+    );
+  }
+
+  ask(request: WritingQuestionCommand) {
+    return this.invokeCommand<WritingAgentAnswerPayload>("ask_writing_question", {
+      request,
+    });
+  }
+
+  complete(documentId: number, expectedRevision: number) {
+    return this.invokeCommand<WritingDocumentPayload>(
+      "complete_writing_document",
+      { documentId, expectedRevision },
+    );
+  }
+
+  continueEditing(
+    documentId: number,
+    expectedRevision: number,
+    versionId?: number,
+  ) {
+    return this.invokeCommand<WritingDocumentPayload>(
+      "continue_writing_document",
+      {
+        documentId,
+        expectedRevision,
+        versionId: versionId ?? null,
+      },
+    );
   }
 }
-
-export const writingDemoRepository: WritingRepository = new BrowserWritingDemoRepository();

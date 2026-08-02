@@ -7,9 +7,8 @@ import {
 } from "react";
 import {
   normalizeWritingText,
-  writingIssues,
-  writingPatterns,
-  type WritingIssueId,
+  type WritingIssue,
+  type WritingPattern,
   type WritingMode,
   type WritingSnapshot,
 } from "../writingViewModel";
@@ -22,20 +21,22 @@ export type WritingSelection = {
 
 export type WritingEditorHandle = {
   focusBody(atEnd?: boolean): void;
-  focusIssue(issueId: WritingIssueId): void;
+  focusIssue(issueId: string): void;
   getSnapshot(): WritingSnapshot;
 };
 
 type WritingEditorProps = {
   mode: Exclude<WritingMode, "compare" | "library">;
   snapshot: WritingSnapshot;
+  issues: WritingIssue[];
+  patterns: WritingPattern[];
   resetKey: number;
   kicker: string;
-  activeIssueId: WritingIssueId | null;
-  editingIssueId: WritingIssueId | null;
+  activeIssueId: string | null;
+  editingIssueId: string | null;
   onChange: (snapshot: WritingSnapshot) => void;
   onSelection: (selection: WritingSelection | null) => void;
-  onIssueSelect: (issueId: WritingIssueId) => void;
+  onIssueSelect: (issueId: string) => void;
   onStartAssist: () => void;
 };
 
@@ -55,12 +56,16 @@ function snapshotFromElements(
   };
 }
 
-function appendParagraphWithIssueTargets(container: HTMLElement, paragraphText: string) {
+function appendParagraphWithIssueTargets(
+  container: HTMLElement,
+  paragraphText: string,
+  issues: WritingIssue[],
+) {
   const paragraph = document.createElement("p");
   let cursor = 0;
 
   while (cursor < paragraphText.length) {
-    const nextIssue = writingIssues
+    const nextIssue = issues
       .map((issue) => ({ issue, index: paragraphText.indexOf(issue.targetText, cursor) }))
       .filter((candidate) => candidate.index >= 0)
       .sort((first, second) => first.index - second.index)[0];
@@ -92,6 +97,8 @@ const WritingEditor = forwardRef<WritingEditorHandle, WritingEditorProps>(functi
   {
     mode,
     snapshot,
+    issues,
+    patterns,
     resetKey,
     kicker,
     activeIssueId,
@@ -122,13 +129,15 @@ const WritingEditor = forwardRef<WritingEditorHandle, WritingEditorProps>(functi
     titleRef.current.textContent = snapshot.title;
     bodyRef.current.replaceChildren();
     const paragraphs = snapshot.paragraphs.length ? snapshot.paragraphs : [""];
-    paragraphs.forEach((paragraph) => appendParagraphWithIssueTargets(bodyRef.current!, paragraph));
+    paragraphs.forEach((paragraph) =>
+      appendParagraphWithIssueTargets(bodyRef.current!, paragraph, issues),
+    );
     columnRef.current?.scrollTo({ top: 0 });
   }, [resetKey]);
 
   useLayoutEffect(() => {
     bodyRef.current?.querySelectorAll<HTMLElement>(".rr-writing-issue-target").forEach((target) => {
-      const issueId = target.dataset.issue as WritingIssueId;
+      const issueId = target.dataset.issue!;
       target.classList.toggle("is-active", issueId === activeIssueId);
       target.classList.toggle("has-focus-anchor", issueId === editingIssueId && target.innerText.length <= 56);
     });
@@ -237,7 +246,7 @@ const WritingEditor = forwardRef<WritingEditorHandle, WritingEditorProps>(functi
             onClick={(event) => {
               const target = (event.target as HTMLElement).closest<HTMLElement>("[data-issue]");
               if (target?.dataset.issue) {
-                onIssueSelect(target.dataset.issue as WritingIssueId);
+                onIssueSelect(target.dataset.issue);
               }
             }}
           />
@@ -251,13 +260,18 @@ const WritingEditor = forwardRef<WritingEditorHandle, WritingEditorProps>(functi
 
         {mode === "completed" ? (
           <section className="rr-writing-completion-takeaways" aria-labelledby="rr-writing-takeaways-title">
-            <h2 id="rr-writing-takeaways-title">这次带走</h2>
-            {writingPatterns.map((pattern) => (
-              <article className="rr-writing-completion-pattern" key={pattern.id}>
-                <span>{pattern.id}</span>
-                <div><h3>{pattern.title}</h3><p>{pattern.description}</p></div>
-              </article>
-            ))}
+            <header>
+              <h2 id="rr-writing-takeaways-title">本次写作要点</h2>
+              <p>随本文版本保存，未加入复习</p>
+            </header>
+            <div>
+              {patterns.map((pattern) => (
+                <article className="rr-writing-completion-pattern" key={pattern.id}>
+                  <span>{pattern.id}</span>
+                  <div><h3>{pattern.title}</h3><p>{pattern.description}</p></div>
+                </article>
+              ))}
+            </div>
           </section>
         ) : null}
       </article>

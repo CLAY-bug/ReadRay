@@ -8,6 +8,7 @@
     "build": "tsc && vite build",
     "preview": "vite preview",
     "test:conversation": "node --test tests/conversationService.test.mjs",
+    "test:writing": "node --test tests/writing*.test.mjs",
     "tauri": "tauri"
   },
   "dependencies": {
