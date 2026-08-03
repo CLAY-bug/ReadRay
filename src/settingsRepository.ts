@@ -1,5 +1,10 @@
 import { invoke } from "@tauri-apps/api/core";
-import type { SettingsSnapshot } from "./settingsViewModel";
+import { save } from "@tauri-apps/plugin-dialog";
+import type {
+  DatabaseBackupResult,
+  DeepSeekBalance,
+  SettingsSnapshot,
+} from "./settingsViewModel";
 
 export type SettingsInvoke = <T>(
   command: string,
@@ -10,13 +15,28 @@ export interface SettingsRepository {
   get(): Promise<SettingsSnapshot>;
   validateAndSaveApiKey(apiKey: string): Promise<SettingsSnapshot>;
   clearApiKey(): Promise<SettingsSnapshot>;
+  getBalance(): Promise<DeepSeekBalance>;
+  openDataDirectory(): Promise<void>;
+  backupDatabase(suggestedFileName: string): Promise<DatabaseBackupResult | null>;
 }
+
+export type SettingsSaveDialog = (options: {
+  title: string;
+  defaultPath: string;
+  filters: { name: string; extensions: string[] }[];
+}) => Promise<string | null>;
 
 export class TauriSettingsRepository implements SettingsRepository {
   private readonly invokeCommand: SettingsInvoke;
 
-  constructor(invokeCommand: SettingsInvoke = invoke) {
+  private readonly saveDialog: SettingsSaveDialog;
+
+  constructor(
+    invokeCommand: SettingsInvoke = invoke,
+    saveDialog: SettingsSaveDialog = save,
+  ) {
     this.invokeCommand = invokeCommand;
+    this.saveDialog = saveDialog;
   }
 
   get() {
@@ -32,5 +52,27 @@ export class TauriSettingsRepository implements SettingsRepository {
 
   clearApiKey() {
     return this.invokeCommand<SettingsSnapshot>("clear_deepseek_api_key");
+  }
+
+  getBalance() {
+    return this.invokeCommand<DeepSeekBalance>("get_deepseek_balance");
+  }
+
+  openDataDirectory() {
+    return this.invokeCommand<void>("open_readray_data_directory");
+  }
+
+  async backupDatabase(suggestedFileName: string) {
+    const filePath = await this.saveDialog({
+      title: "备份 ReadRay 数据",
+      defaultPath: suggestedFileName,
+      filters: [{ name: "SQLite 数据库", extensions: ["sqlite3"] }],
+    });
+    if (!filePath) {
+      return null;
+    }
+    return this.invokeCommand<DatabaseBackupResult>("backup_readray_database", {
+      filePath,
+    });
   }
 }

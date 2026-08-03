@@ -443,7 +443,7 @@ pub fn get_today_learning_summary(
         .summarize_range(start_unix_ms, end_unix_ms)
 }
 
-fn database_path_for_app(app: &AppHandle) -> Result<PathBuf, String> {
+pub(crate) fn database_path_for_app(app: &AppHandle) -> Result<PathBuf, String> {
     let app_data_dir = app
         .path()
         .app_data_dir()

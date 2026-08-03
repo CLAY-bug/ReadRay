@@ -1,4 +1,5 @@
 use crate::{secret_store, DEEPSEEK_BASE_URL, DEFAULT_DEEPSEEK_MODEL};
+use reqwest::Response;
 use serde::de::DeserializeOwned;
 use serde_json::{json, Value};
 
@@ -36,6 +37,31 @@ where
         .await
         .map_err(|error| format!("{operation} 请求失败：{error}"))?;
 
+    decode_deepseek_response(operation, response).await
+}
+
+pub(crate) async fn get_deepseek_json<T>(operation: &str, path: &str) -> Result<T, String>
+where
+    T: DeserializeOwned,
+{
+    let api_key = secret_store::deepseek_api_key_state()?
+        .into_key()
+        .ok_or_else(|| format!("未配置 DeepSeek API Key，无法执行 {operation}。"))?;
+
+    let response = reqwest::Client::new()
+        .get(format!("{DEEPSEEK_BASE_URL}{path}"))
+        .bearer_auth(api_key)
+        .send()
+        .await
+        .map_err(|error| format!("{operation} 请求失败：{error}"))?;
+
+    decode_deepseek_response(operation, response).await
+}
+
+async fn decode_deepseek_response<T>(operation: &str, response: Response) -> Result<T, String>
+where
+    T: DeserializeOwned,
+{
     let status = response.status();
     if !status.is_success() {
         let status_code = status.as_u16();

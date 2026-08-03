@@ -9,6 +9,8 @@ import type { SettingsService } from "../settingsService";
 import {
   isSettingsOperationCurrent,
   validateApiKeyDraft,
+  type DatabaseBackupResult,
+  type DeepSeekBalance,
   type SettingsSnapshot,
 } from "../settingsViewModel";
 import geistLicense from "../assets/fonts/licenses/Geist-OFL.txt?raw";
@@ -18,6 +20,7 @@ import sourceHanSerifLicense from "../assets/fonts/licenses/Source-Han-Serif-OFL
 
 type SettingsSection = "general" | "appearance" | "ai" | "data" | "about";
 type OperationState = "idle" | "saving" | "clearing";
+type RequestStatus = "idle" | "loading" | "success" | "error";
 
 type SettingsPageProps = {
   service: SettingsService | null;
@@ -56,6 +59,20 @@ const licenseMaterials = [
 
 function errorMessage(error: unknown) {
   return error instanceof Error ? error.message : String(error);
+}
+
+function formatByteSize(byteSize: number) {
+  if (byteSize >= 1024 * 1024) {
+    return `${(byteSize / (1024 * 1024)).toFixed(1)} MB`;
+  }
+  if (byteSize >= 1024) {
+    return `${(byteSize / 1024).toFixed(1)} KB`;
+  }
+  return `${byteSize} B`;
+}
+
+function suggestedBackupFileName() {
+  return `ReadRay-backup-${new Date().toISOString().slice(0, 10)}.sqlite3`;
 }
 
 function InfoIcon() {
@@ -207,8 +224,19 @@ function SettingsPage({ service }: SettingsPageProps) {
   const [operationError, setOperationError] = useState<string>();
   const [confirmingClear, setConfirmingClear] = useState(false);
   const [showingLicenses, setShowingLicenses] = useState(false);
+  const [balanceStatus, setBalanceStatus] = useState<RequestStatus>("idle");
+  const [balance, setBalance] = useState<DeepSeekBalance>();
+  const [balanceError, setBalanceError] = useState<string>();
+  const [directoryStatus, setDirectoryStatus] = useState<RequestStatus>("idle");
+  const [directoryMessage, setDirectoryMessage] = useState<string>();
+  const [backupStatus, setBackupStatus] = useState<RequestStatus>("idle");
+  const [backupResult, setBackupResult] = useState<DatabaseBackupResult>();
+  const [backupMessage, setBackupMessage] = useState<string>();
   const mountedRef = useRef(false);
   const operationKeyRef = useRef(0);
+  const balanceKeyRef = useRef(0);
+  const directoryKeyRef = useRef(0);
+  const backupKeyRef = useRef(0);
   const scrollRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -216,6 +244,9 @@ function SettingsPage({ service }: SettingsPageProps) {
     return () => {
       mountedRef.current = false;
       operationKeyRef.current += 1;
+      balanceKeyRef.current += 1;
+      directoryKeyRef.current += 1;
+      backupKeyRef.current += 1;
     };
   }, []);
 
@@ -306,6 +337,10 @@ function SettingsPage({ service }: SettingsPageProps) {
       setSnapshot(nextSnapshot);
       setKeyDraft("");
       setEditingKey(false);
+      balanceKeyRef.current += 1;
+      setBalance(undefined);
+      setBalanceStatus("idle");
+      setBalanceError(undefined);
       setOperation("idle");
       setOperationMessage("验证成功，API Key 已安全保存。");
     } catch (error) {
@@ -344,6 +379,10 @@ function SettingsPage({ service }: SettingsPageProps) {
       setSnapshot(nextSnapshot);
       setKeyDraft("");
       setEditingKey(true);
+      balanceKeyRef.current += 1;
+      setBalance(undefined);
+      setBalanceStatus("idle");
+      setBalanceError(undefined);
       setConfirmingClear(false);
       setOperation("idle");
       setOperationMessage("API Key 已清除，AI 功能现已停用。");
@@ -359,6 +398,117 @@ function SettingsPage({ service }: SettingsPageProps) {
       }
       setOperation("idle");
       setOperationError(`清除失败：${errorMessage(error)}`);
+    }
+  }
+
+  async function refreshBalance() {
+    if (!service || !snapshot?.apiKeyConfigured || balanceStatus === "loading") {
+      return;
+    }
+    const requestKey = balanceKeyRef.current + 1;
+    balanceKeyRef.current = requestKey;
+    setBalanceStatus("loading");
+    setBalanceError(undefined);
+    try {
+      const nextBalance = await service.loadBalance();
+      if (
+        !isSettingsOperationCurrent(
+          mountedRef.current,
+          requestKey,
+          balanceKeyRef.current,
+        )
+      ) {
+        return;
+      }
+      setBalance(nextBalance);
+      setBalanceStatus("success");
+    } catch (error) {
+      if (
+        !isSettingsOperationCurrent(
+          mountedRef.current,
+          requestKey,
+          balanceKeyRef.current,
+        )
+      ) {
+        return;
+      }
+      setBalance(undefined);
+      setBalanceStatus("error");
+      setBalanceError(errorMessage(error));
+    }
+  }
+
+  async function openDataDirectory() {
+    if (!service || directoryStatus === "loading") return;
+    const requestKey = directoryKeyRef.current + 1;
+    directoryKeyRef.current = requestKey;
+    setDirectoryStatus("loading");
+    setDirectoryMessage(undefined);
+    try {
+      await service.openDataDirectory();
+      if (
+        !isSettingsOperationCurrent(
+          mountedRef.current,
+          requestKey,
+          directoryKeyRef.current,
+        )
+      ) {
+        return;
+      }
+      setDirectoryStatus("success");
+      setDirectoryMessage("已交给 Windows 打开数据目录。");
+    } catch (error) {
+      if (
+        !isSettingsOperationCurrent(
+          mountedRef.current,
+          requestKey,
+          directoryKeyRef.current,
+        )
+      ) {
+        return;
+      }
+      setDirectoryStatus("error");
+      setDirectoryMessage(`打开失败：${errorMessage(error)}`);
+    }
+  }
+
+  async function createDatabaseBackup() {
+    if (!service || backupStatus === "loading") return;
+    const requestKey = backupKeyRef.current + 1;
+    backupKeyRef.current = requestKey;
+    setBackupStatus("loading");
+    setBackupResult(undefined);
+    setBackupMessage(undefined);
+    try {
+      const result = await service.createDatabaseBackup(suggestedBackupFileName());
+      if (
+        !isSettingsOperationCurrent(
+          mountedRef.current,
+          requestKey,
+          backupKeyRef.current,
+        )
+      ) {
+        return;
+      }
+      if (!result) {
+        setBackupStatus("idle");
+        return;
+      }
+      setBackupResult(result);
+      setBackupStatus("success");
+      setBackupMessage(`备份完成：${result.fileName}（${formatByteSize(result.byteSize)}）`);
+    } catch (error) {
+      if (
+        !isSettingsOperationCurrent(
+          mountedRef.current,
+          requestKey,
+          backupKeyRef.current,
+        )
+      ) {
+        return;
+      }
+      setBackupStatus("error");
+      setBackupMessage(`备份失败：${errorMessage(error)}`);
     }
   }
 
@@ -730,10 +880,61 @@ function SettingsPage({ service }: SettingsPageProps) {
                 <div className="rr-settings-balance-card">
                   <div>
                     <div className="rr-settings-balance-label">DEEPSEEK 账户余额</div>
-                    <div className="rr-settings-balance-value">连接后显示实时余额</div>
-                    <div className="rr-settings-balance-meta">余额查询尚未接线</div>
+                    {balanceStatus === "success" && balance?.balances.length ? (
+                      <div className="rr-settings-balance-list">
+                        {balance.balances.map((item) => (
+                          <div className="rr-settings-balance-item" key={item.currency}>
+                            <div className="rr-settings-balance-value">
+                              {item.totalBalance}<span>{item.currency}</span>
+                            </div>
+                            <div className="rr-settings-balance-meta">
+                              赠送 {item.grantedBalance} · 充值 {item.toppedUpBalance}
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    ) : (
+                      <div className="rr-settings-balance-value">
+                        {!snapshot.apiKeyConfigured
+                          ? "配置 API Key 后可查询"
+                          : balanceStatus === "loading"
+                            ? "正在查询…"
+                            : balanceStatus === "error"
+                              ? "余额查询失败"
+                              : balanceStatus === "success"
+                                ? "未返回余额明细"
+                                : "尚未查询"}
+                      </div>
+                    )}
+                    <div
+                      className={`rr-settings-balance-meta${
+                        balanceStatus === "error" ? " is-error" : ""
+                      }`}
+                      role={balanceStatus === "error" ? "alert" : undefined}
+                    >
+                      {!snapshot.apiKeyConfigured
+                        ? "余额只在配置 Key 后查询，不会在本地持久化。"
+                        : balanceStatus === "error"
+                          ? balanceError
+                          : balanceStatus === "success"
+                            ? balance?.isAvailable
+                              ? "账户当前可用于 DeepSeek API 调用。"
+                              : "账户余额不足，当前不可用于 API 调用。"
+                            : "点击刷新查询官方实时余额；结果不会持久化。"}
+                    </div>
                   </div>
-                  <UnavailableButton>刷新余额</UnavailableButton>
+                  <button
+                    className="rr-settings-button"
+                    type="button"
+                    disabled={!snapshot.apiKeyConfigured || balanceStatus === "loading"}
+                    onClick={() => void refreshBalance()}
+                  >
+                    {balanceStatus === "loading"
+                      ? "正在刷新…"
+                      : balanceStatus === "error"
+                        ? "重试查询"
+                        : "刷新余额"}
+                  </button>
                 </div>
 
                 <div className="rr-settings-usage-card">
@@ -803,8 +1004,29 @@ function SettingsPage({ service }: SettingsPageProps) {
                           <span>{snapshot.appDataDirectory}</span>
                         </div>
                         <div className="rr-settings-control">
-                          <UnavailableButton>打开数据目录</UnavailableButton>
+                          <button
+                            className="rr-settings-button"
+                            type="button"
+                            disabled={directoryStatus === "loading"}
+                            onClick={() => void openDataDirectory()}
+                          >
+                            {directoryStatus === "loading"
+                              ? "正在打开…"
+                              : directoryStatus === "error"
+                                ? "重试打开"
+                                : "打开数据目录"}
+                          </button>
                         </div>
+                        {directoryMessage ? (
+                          <div
+                            className={`rr-settings-action-status ${
+                              directoryStatus === "error" ? "is-error" : "is-success"
+                            }`}
+                            role={directoryStatus === "error" ? "alert" : "status"}
+                          >
+                            {directoryMessage}
+                          </div>
+                        ) : null}
                       </div>
                     </div>
                     <div className="rr-settings-row">
@@ -828,10 +1050,34 @@ function SettingsPage({ service }: SettingsPageProps) {
                       <div className="rr-settings-backup-head">
                         <div>
                           <strong>备份全部 ReadRay 数据</strong>
-                          <p>创建可保存到本地的完整备份；本轮尚未形成可验证闭环。</p>
+                          <p>
+                            创建运行期间一致的 SQLite 快照，包含学习记录、对话、写作和数据库内的非敏感设置；不包含 API Key。
+                          </p>
                         </div>
-                        <UnavailableButton className="is-primary">开始备份</UnavailableButton>
+                        <button
+                          className="rr-settings-button is-primary"
+                          type="button"
+                          disabled={backupStatus === "loading"}
+                          onClick={() => void createDatabaseBackup()}
+                        >
+                          {backupStatus === "loading"
+                            ? "正在备份…"
+                            : backupStatus === "error"
+                              ? "重试备份"
+                              : "开始备份"}
+                        </button>
                       </div>
+                      {backupMessage ? (
+                        <div
+                          className={`rr-settings-action-status ${
+                            backupStatus === "error" ? "is-error" : "is-success"
+                          }`}
+                          role={backupStatus === "error" ? "alert" : "status"}
+                          title={backupResult?.filePath}
+                        >
+                          {backupMessage}
+                        </div>
+                      ) : null}
                     </div>
                   </div>
                 </div>

@@ -4,7 +4,7 @@ project:
   repo_root: "."
 
 meta:
-  version: "1.20"
+  version: "1.21"
   last_updated: "2026-08-03"
   updated_by: "Codex"
   source_of_truth: "docs/RESOURCE_MAP.yml"
@@ -238,20 +238,20 @@ source_areas:
     risk: "该 service 不持久化 thread、不读取真实历史，也不请求 DeepSeek；不得由正式 Tauri 装配读取或实例化。"
 
   - path: "src/components/SettingsPage.tsx"
-    purpose: "主应用设置页的真实加载、DeepSeek Key 配置和运行时信息状态。"
+    purpose: "主应用设置页的真实加载、DeepSeek 配置、余额、本地数据操作和运行时信息状态。"
     status: "active"
     read_when:
       - "调整设置页、DeepSeek Key 首次配置/更新/清除或失败重试。"
       - "排查设置页 loading、重启恢复或窄窗口布局。"
-    notes: "复用 MainAppShell、MainSidebar 和标题栏；页面只消费 SettingsService。按设计稿恢复通用、外观、AI 服务、数据、关于五类完整信息结构；Key 配置/清除、SQLite 概览和随包字体许可证弹窗形成真实闭环。当前主题、字体、语言和固定快捷键只读展示，尚未接线的编辑、余额、用量、目录打开、备份及桌面生命周期操作均明确禁用，不报告成功。"
+    notes: "复用 MainAppShell、MainSidebar 和标题栏；页面只消费 SettingsService。按设计稿保留通用、外观、AI 服务、数据、关于五类完整信息结构；Key 配置/清除、官方多币种余额查询、SQLite 概览、打开真实数据目录、原生保存对话框 SQLite 备份和随包字体许可证弹窗形成真实闭环。余额、目录和备份分别覆盖 loading/error/retry，余额不持久化；当前主题、字体、语言和固定快捷键只读展示，使用量及桌面生命周期操作仍明确禁用，不报告成功。"
     risk: "不得直接 invoke、读取 localStorage/sessionStorage、显示或返回已保存 Key 明文；不得用页面开关伪装未实现的托盘、单实例、开机启动和关闭策略。"
 
   - path: "src/settingsRepository.ts"
-    purpose: "设置页三个 Tauri commands 的有类型 repository。"
+    purpose: "设置页 Tauri commands 与原生备份保存对话框的有类型 repository。"
     status: "active"
     read_when:
       - "调整设置快照、Key 验证保存或清除 command 参数。"
-    notes: "只调用 get_settings_snapshot、validate_and_save_deepseek_api_key 和 clear_deepseek_api_key；Key 只作为用户本次输入提交，不做前端持久化。"
+    notes: "调用设置快照、Key 保存/清除、余额、打开数据目录和 SQLite 备份 commands；备份先用既有 dialog 选择 sqlite3 路径，取消时不调用 Rust。Key 只作为用户本次输入提交，不做前端持久化。"
     risk: "不得缓存 Key、记录 Key 或把原生存储实现移入前端。"
 
   - path: "src/settingsService.ts"
@@ -259,7 +259,7 @@ source_areas:
     status: "active"
     read_when:
       - "调整设置页面协议、数据计数或 Key 来源状态。"
-    notes: "校验 Key configured/source 一致性、模型/数据目录和三个非负 SQLite 计数；保存前规范化用户输入。"
+    notes: "校验 Key configured/source 一致性、模型/数据目录和三个非负 SQLite 计数；保存前规范化用户输入。余额再次校验可用状态、唯一三字符币种和非负十进制金额；备份结果校验文件名、路径、大小和时间。"
     risk: "不得让页面绕过 service 使用 Rust 原始响应，也不得从前端推算本地数据概览。"
 
   - path: "src/settingsViewModel.ts"
@@ -267,7 +267,7 @@ source_areas:
     status: "active"
     read_when:
       - "调整设置快照字段、Key 页面校验或迟到结果处理。"
-    notes: "快照只包含 configured/source、模型、数据目录、计数和版本，不包含 Key 明文或遮罩尾号。"
+    notes: "快照只包含 configured/source、模型、数据目录、计数和版本；另定义多币种余额和备份文件结果，不包含 Key 明文或遮罩尾号。"
     risk: "不得把敏感值加入长期页面模型或返回协议。"
 
   - path: "tests/settingsService.test.mjs"
@@ -275,7 +275,7 @@ source_areas:
     status: "active"
     read_when:
       - "修改设置前端协议、安全边界或桌面能力呈现。"
-    notes: "使用 Node 内置 test runner 覆盖 4 项：command/camelCase 参数、快照校验与输入规范化、迟到操作守卫，以及页面五类设计结构、无直接 invoke/Key 前端持久化、未接线操作明确禁用。"
+    notes: "使用 Node 内置 test runner 覆盖 6 项：六类 command/camelCase 参数与原生保存对话框、快照校验与输入规范化、多币种余额严格映射和失败重试、目录打开失败重试、备份取消不调用 Rust、迟到操作守卫，以及页面五类设计结构与正式路径隔离。"
     risk: "不触碰真实 Windows 凭据，也不替代真实 Tauri/DeepSeek 与重启人工验收。"
 
   - path: "src/components/MemoryPage.tsx"
@@ -652,7 +652,7 @@ source_areas:
     read_when:
       - "新增或排查 DeepSeek 请求链路。"
       - "调整共享请求、HTTP 状态或响应结构错误分类。"
-    notes: "ExplanationCard、Quick AI 与写作分析/问答共用该传输边界；默认模型仍为 deepseek-v4-flash。运行时优先使用 Windows 凭据管理器中的 Key，未形成持久化决定时才兼容开发期 DEEPSEEK_API_KEY；不记录或返回 API key。"
+    notes: "ExplanationCard、Quick AI、写作分析/问答和设置页官方余额 GET 共用该传输与 HTTP 错误边界；默认模型仍为 deepseek-v4-flash。运行时优先使用 Windows 凭据管理器中的 Key，未形成持久化决定时才兼容开发期 DEEPSEEK_API_KEY；不记录或返回 API key。"
     risk: "这里只负责 HTTP 传输，不放 ExplanationCard、Quick AI 或写作业务 prompt 和存储。"
 
   - path: "src-tauri/src/secret_store.rs"
@@ -665,12 +665,12 @@ source_areas:
     risk: "不得把 Key 写入 SQLite、localStorage、仓库、普通日志或返回前端；自动测试只覆盖纯决策，不操作用户真实凭据。"
 
   - path: "src-tauri/src/settings.rs"
-    purpose: "设置快照、DeepSeek Key 真实验证保存/清除和本地数据概览 commands。"
+    purpose: "设置快照、DeepSeek Key/余额、本地目录和 SQLite 备份 commands。"
     status: "active"
     read_when:
       - "调整设置 Rust 协议、Key 验证或 SQLite 数据概览。"
-    notes: "返回无明文的 Key configured/source、实际模型、Tauri 应用数据目录、三类 SQLite 计数和应用版本；候选 Key 先通过现有 chat/completions 边界真实验证，成功后才写安全存储。保存或清除前先取得完整非敏感快照，凭据成功变更后只在内存中更新 Key 状态，不会再因后续 SQLite 读取失败误报凭据操作失败。"
-    risk: "失败不得替换现有 Key 或报告保存成功；不得记录、序列化返回或在错误消息中拼接候选 Key。"
+    notes: "返回无明文的 Key configured/source、实际模型、Tauri 应用数据目录、三类 SQLite 计数和应用版本；候选 Key 先通过现有 chat/completions 边界真实验证，成功后才写安全存储。余额严格映射官方 is_available/balance_infos 多币种结构且不持久化；目录 command 在 Rust 内解析真实 app_data_dir 后调用既有 opener；备份在阻塞线程对权威 readray.sqlite3 执行 VACUUM INTO 同目录临时文件，quick_check 通过后才替换用户目标。"
+    risk: "失败不得替换现有 Key 或报告保存成功；不得记录、序列化返回或在错误消息中拼接候选 Key。备份失败必须清理临时数据库及 sidecar，不得覆盖源库或把残缺文件当成成功结果。"
 
   - path: "src-tauri/src/conversations.rs"
     purpose: "Quick AI conversation/message SQLite 仓库和序列化协议。"
@@ -778,7 +778,7 @@ app_scaffold:
     read_when:
       - "调整主窗口插件权限。"
       - "排查原生保存对话框权限。"
-    notes: "主窗口允许 dialog:allow-save；文件内容仍由受控 Rust command 写入用户选择的路径。"
+    notes: "主窗口允许 dialog:allow-save 和既有 opener 权限；备份内容仍由受控 Rust command 写入用户选择的路径，数据目录由 Rust 自行解析后打开。"
     risk: "只开放当前功能需要的权限，不使用 dialog:default 或无关文件系统权限扩大范围。"
 
 external_refs:

@@ -615,10 +615,49 @@
   line-height: 1;
 }
 
+.rr-settings-balance-value span {
+  margin-left: 7px;
+  color: var(--rr-main-muted);
+  font-family: var(--rr-main-font-mono);
+  font-size: 10px;
+  letter-spacing: 0.02em;
+}
+
+.rr-settings-balance-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px 24px;
+}
+
+.rr-settings-balance-item {
+  min-width: 128px;
+}
+
 .rr-settings-balance-meta {
   margin-top: 7px;
   color: var(--rr-main-muted);
   font-size: 10.5px;
+  line-height: 1.45;
+}
+
+.rr-settings-balance-meta.is-error,
+.rr-settings-action-status.is-error {
+  color: var(--rr-main-danger);
+}
+
+.rr-settings-action-status {
+  margin-top: 2px;
+  color: var(--rr-main-muted);
+  font-size: 10.5px;
+  line-height: 1.45;
+}
+
+.rr-settings-action-status.is-success {
+  color: var(--rr-settings-success);
+}
+
+.rr-settings-stack-control > .rr-settings-action-status {
+  text-align: right;
 }
 
 .rr-settings-usage-card {
@@ -891,6 +930,10 @@
   font-family: var(--rr-main-font-body);
   font-size: 12px;
   line-height: 1.5;
+}
+
+.rr-settings-backup-panel > .rr-settings-action-status {
+  margin-top: 10px;
 }
 
 .rr-settings-about {
@@ -1328,6 +1371,18 @@
 
   .rr-settings-validation {
     justify-content: flex-start;
+    text-align: left;
+  }
+
+  .rr-settings-balance-card {
+    grid-template-columns: 1fr;
+  }
+
+  .rr-settings-balance-card > .rr-settings-button {
+    justify-self: start;
+  }
+
+  .rr-settings-stack-control > .rr-settings-action-status {
     text-align: left;
   }
 

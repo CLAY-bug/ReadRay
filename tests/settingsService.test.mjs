@@ -4,6 +4,8 @@ import test from "node:test";
 import { TauriSettingsRepository } from "../src/settingsRepository.ts";
 import {
   RepositorySettingsService,
+  validateDatabaseBackupResult,
+  validateDeepSeekBalance,
   validateSettingsSnapshot,
 } from "../src/settingsService.ts";
 import {
@@ -25,19 +27,40 @@ function snapshot(overrides = {}) {
   };
 }
 
-test("Tauri 设置 repository 只通过三个有类型 command 传递 Key", async () => {
+test("Tauri 设置 repository 通过有类型 command 和原生保存对话框完成正式操作", async () => {
   const calls = [];
-  const repository = new TauriSettingsRepository(async (command, args) => {
-    calls.push({ command, args });
-    if (command === "validate_and_save_deepseek_api_key") {
-      return snapshot({ apiKeyConfigured: true, apiKeySource: "credential" });
-    }
-    return snapshot();
-  });
+  const dialogCalls = [];
+  const repository = new TauriSettingsRepository(
+    async (command, args) => {
+      calls.push({ command, args });
+      if (command === "validate_and_save_deepseek_api_key") {
+        return snapshot({ apiKeyConfigured: true, apiKeySource: "credential" });
+      }
+      if (command === "get_deepseek_balance") {
+        return { isAvailable: true, balances: [] };
+      }
+      if (command === "backup_readray_database") {
+        return {
+          fileName: "ReadRay.sqlite3",
+          filePath: "D:\\Backups\\ReadRay.sqlite3",
+          byteSize: 4096,
+          createdAtUnixMs: 1_700_000_000_000,
+        };
+      }
+      return snapshot();
+    },
+    async (options) => {
+      dialogCalls.push(options);
+      return "D:\\Backups\\ReadRay.sqlite3";
+    },
+  );
 
   await repository.get();
   await repository.validateAndSaveApiKey("candidate-secret");
   await repository.clearApiKey();
+  await repository.getBalance();
+  await repository.openDataDirectory();
+  await repository.backupDatabase("ReadRay-backup.sqlite3");
 
   assert.deepEqual(calls, [
     { command: "get_settings_snapshot", args: undefined },
@@ -46,6 +69,19 @@ test("Tauri 设置 repository 只通过三个有类型 command 传递 Key", asyn
       args: { apiKey: "candidate-secret" },
     },
     { command: "clear_deepseek_api_key", args: undefined },
+    { command: "get_deepseek_balance", args: undefined },
+    { command: "open_readray_data_directory", args: undefined },
+    {
+      command: "backup_readray_database",
+      args: { filePath: "D:\\Backups\\ReadRay.sqlite3" },
+    },
+  ]);
+  assert.deepEqual(dialogCalls, [
+    {
+      title: "备份 ReadRay 数据",
+      defaultPath: "ReadRay-backup.sqlite3",
+      filters: [{ name: "SQLite 数据库", extensions: ["sqlite3"] }],
+    },
   ]);
 });
 
@@ -58,6 +94,9 @@ test("service 规范化输入并拒绝不一致的运行时快照", async () => 
       return snapshot({ apiKeyConfigured: true, apiKeySource: "credential" });
     },
     clearApiKey: async () => snapshot(),
+    getBalance: async () => ({ isAvailable: true, balances: [] }),
+    openDataDirectory: async () => {},
+    backupDatabase: async () => null,
   });
 
   assert.equal((await service.loadSettings()).learningRecordCount, 3);
@@ -73,6 +112,113 @@ test("service 规范化输入并拒绝不一致的运行时快照", async () => 
   );
 });
 
+test("余额 service 严格映射多币种，并允许失败后重新请求", async () => {
+  let attempts = 0;
+  const service = new RepositorySettingsService({
+    get: async () => snapshot(),
+    validateAndSaveApiKey: async () => snapshot(),
+    clearApiKey: async () => snapshot(),
+    getBalance: async () => {
+      attempts += 1;
+      if (attempts === 1) throw new Error("temporary network failure");
+      return {
+        isAvailable: true,
+        balances: [
+          {
+            currency: "CNY",
+            totalBalance: "110.00",
+            grantedBalance: "10.00",
+            toppedUpBalance: "100.00",
+          },
+          {
+            currency: "USD",
+            totalBalance: "3.25",
+            grantedBalance: "0.25",
+            toppedUpBalance: "3.00",
+          },
+        ],
+      };
+    },
+    openDataDirectory: async () => {},
+    backupDatabase: async () => null,
+  });
+
+  await assert.rejects(() => service.loadBalance(), /temporary network failure/);
+  const balance = await service.loadBalance();
+  assert.equal(attempts, 2);
+  assert.deepEqual(balance.balances.map((item) => item.currency), ["CNY", "USD"]);
+  assert.throws(() =>
+    validateDeepSeekBalance({
+      isAvailable: true,
+      balances: [
+        {
+          currency: "CNY",
+          totalBalance: "-1.00",
+          grantedBalance: "0.00",
+          toppedUpBalance: "0.00",
+        },
+      ],
+    }),
+  );
+  assert.throws(() =>
+    validateDeepSeekBalance({
+      isAvailable: true,
+      balances: [
+        {
+          currency: "USD",
+          totalBalance: "1.00",
+          grantedBalance: "0.00",
+          toppedUpBalance: "1.00",
+        },
+        {
+          currency: "USD",
+          totalBalance: "2.00",
+          grantedBalance: "0.00",
+          toppedUpBalance: "2.00",
+        },
+      ],
+    }),
+  );
+});
+
+test("目录打开失败可重试，备份取消不会调用 Rust 或报告成功", async () => {
+  const invokeCalls = [];
+  const cancelledRepository = new TauriSettingsRepository(
+    async (command, args) => {
+      invokeCalls.push({ command, args });
+      return snapshot();
+    },
+    async () => null,
+  );
+  assert.equal(await cancelledRepository.backupDatabase("ReadRay.sqlite3"), null);
+  assert.deepEqual(invokeCalls, []);
+
+  let openAttempts = 0;
+  const service = new RepositorySettingsService({
+    get: async () => snapshot(),
+    validateAndSaveApiKey: async () => snapshot(),
+    clearApiKey: async () => snapshot(),
+    getBalance: async () => ({ isAvailable: true, balances: [] }),
+    openDataDirectory: async () => {
+      openAttempts += 1;
+      if (openAttempts === 1) throw new Error("Explorer unavailable");
+    },
+    backupDatabase: async () => null,
+  });
+  await assert.rejects(() => service.openDataDirectory(), /Explorer unavailable/);
+  await service.openDataDirectory();
+  assert.equal(openAttempts, 2);
+
+  assert.throws(() =>
+    validateDatabaseBackupResult({
+      fileName: "partial.sqlite3",
+      filePath: "D:\\partial.sqlite3",
+      byteSize: 0,
+      createdAtUnixMs: 1_700_000_000_000,
+    }),
+  );
+});
+
 test("API Key 页面校验与迟到操作守卫覆盖失败重试边界", () => {
   assert.match(validateApiKeyDraft(""), /请输入/);
   assert.match(validateApiKeyDraft("key with space"), /不能包含/);
@@ -82,7 +228,7 @@ test("API Key 页面校验与迟到操作守卫覆盖失败重试边界", () => 
   assert.equal(isSettingsOperationCurrent(true, 4, 5), false);
 });
 
-test("正式设置页保持五类设计结构，未接线操作明确禁用且不直接 invoke", async () => {
+test("正式设置页保持五类设计结构，确定性操作已接线且不直接 invoke", async () => {
   const page = await readFile("src/components/SettingsPage.tsx", "utf8");
   const styles = await readFile("src/styles/settings-page.css", "utf8");
   const repository = await readFile("src/settingsRepository.ts", "utf8");
@@ -92,6 +238,10 @@ test("正式设置页保持五类设计结构，未接线操作明确禁用且�
   assert.doesNotMatch(page, /\binvoke\s*\(|localStorage|sessionStorage/);
   assert.match(repository, /validate_and_save_deepseek_api_key/);
   assert.match(repository, /clear_deepseek_api_key/);
+  assert.match(repository, /get_deepseek_balance/);
+  assert.match(repository, /open_readray_data_directory/);
+  assert.match(repository, /backup_readray_database/);
+  assert.match(repository, /if \(!filePath\) \{[\s\S]*?return null/);
   assert.match(shell, /<SettingsPage service=\{settingsService\}/);
   assert.match(page, /\["general", "通用"\]/);
   assert.match(page, /\["appearance", "外观"\]/);
@@ -100,8 +250,14 @@ test("正式设置页保持五类设计结构，未接线操作明确禁用且�
   assert.match(page, /\["about", "关于"\]/);
   assert.match(page, /function UnavailableButton[\s\S]*?disabled/);
   assert.match(page, /<UnavailableButton>录制新快捷键<\/UnavailableButton>/);
-  assert.match(page, /<UnavailableButton>刷新余额<\/UnavailableButton>/);
-  assert.match(page, /<UnavailableButton className="is-primary">开始备份<\/UnavailableButton>/);
+  assert.match(page, /onClick=\{\(\) => void refreshBalance\(\)\}/);
+  assert.match(page, /onClick=\{\(\) => void openDataDirectory\(\)\}/);
+  assert.match(page, /onClick=\{\(\) => void createDatabaseBackup\(\)\}/);
+  assert.match(page, /重试查询/);
+  assert.match(page, /重试打开/);
+  assert.match(page, /重试备份/);
+  assert.match(page, /不包含 API Key/);
+  assert.doesNotMatch(page, /余额查询尚未接线|本轮尚未形成可验证闭环/);
   assert.match(page, /onClick=\{\(\) => setShowingLicenses\(true\)\}/);
   assert.match(page, /Geist-OFL\.txt\?raw/);
   assert.match(page, /Source-Han-Serif-OFL\.txt\?raw/);

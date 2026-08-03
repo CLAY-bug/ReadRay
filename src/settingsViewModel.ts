@@ -11,6 +11,25 @@ export type SettingsSnapshot = {
   appVersion: string;
 };
 
+export type DeepSeekCurrencyBalance = {
+  currency: string;
+  totalBalance: string;
+  grantedBalance: string;
+  toppedUpBalance: string;
+};
+
+export type DeepSeekBalance = {
+  isAvailable: boolean;
+  balances: DeepSeekCurrencyBalance[];
+};
+
+export type DatabaseBackupResult = {
+  fileName: string;
+  filePath: string;
+  byteSize: number;
+  createdAtUnixMs: number;
+};
+
 export function validateApiKeyDraft(value: string): string | undefined {
   const trimmed = value.trim();
   if (!trimmed) {
