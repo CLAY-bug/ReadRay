@@ -1,5 +1,6 @@
-use crate::deepseek_client::{configured_model, post_chat_completion};
+use crate::deepseek_client::{configured_model, post_tracked_chat_completion};
 use crate::learning_records::{open_database_for_app, unix_time_ms};
+use crate::model_usage::ModelUsageCategory;
 use rusqlite::{params, Connection, OptionalExtension, Transaction, TransactionBehavior};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
@@ -1417,6 +1418,7 @@ fn extract_model_content(
 }
 
 async fn request_writing_analysis(
+    app: AppHandle,
     snapshot: WritingSnapshot,
 ) -> Result<WritingAnalysisContent, String> {
     let request_body = json!({
@@ -1440,8 +1442,13 @@ async fn request_writing_analysis(
         "max_tokens": WRITING_MAX_TOKENS,
         "temperature": WRITING_TEMPERATURE
     });
-    let response: DeepSeekWritingResponse =
-        post_chat_completion("DeepSeek 写作检查", &request_body).await?;
+    let response: DeepSeekWritingResponse = post_tracked_chat_completion(
+        &app,
+        ModelUsageCategory::Writing,
+        "DeepSeek 写作检查",
+        &request_body,
+    )
+    .await?;
     let content = extract_model_content(response, "DeepSeek 写作检查")?;
     parse_writing_analysis_content(&snapshot, &content)
 }
@@ -1501,6 +1508,7 @@ struct WritingQuestionModelInput {
 }
 
 async fn request_writing_answer(
+    app: AppHandle,
     input: WritingQuestionModelInput,
 ) -> Result<WritingAnswerContent, String> {
     let context = json!({
@@ -1535,8 +1543,13 @@ async fn request_writing_answer(
         "max_tokens": WRITING_MAX_TOKENS,
         "temperature": WRITING_TEMPERATURE
     });
-    let response: DeepSeekWritingResponse =
-        post_chat_completion("DeepSeek 写作辅助", &request_body).await?;
+    let response: DeepSeekWritingResponse = post_tracked_chat_completion(
+        &app,
+        ModelUsageCategory::Writing,
+        "DeepSeek 写作辅助",
+        &request_body,
+    )
+    .await?;
     let content = extract_model_content(response, "DeepSeek 写作辅助")?;
     parse_writing_answer_content(&content)
 }
@@ -1729,11 +1742,12 @@ pub async fn analyze_writing_document(
     document_id: i64,
     expected_revision: i64,
 ) -> Result<WritingDocumentRecord, String> {
+    let usage_app = app.clone();
     analyze_writing_document_with(
         || WritingStore::open_for_app(&app),
         document_id,
         expected_revision,
-        request_writing_analysis,
+        move |snapshot| request_writing_analysis(usage_app, snapshot),
     )
     .await
 }
@@ -1743,10 +1757,11 @@ pub async fn ask_writing_question(
     app: AppHandle,
     request: WritingQuestionRequest,
 ) -> Result<WritingAgentAnswer, String> {
+    let usage_app = app.clone();
     ask_writing_question_with(
         || WritingStore::open_for_app(&app),
         request,
-        request_writing_answer,
+        move |input| request_writing_answer(usage_app, input),
     )
     .await
 }

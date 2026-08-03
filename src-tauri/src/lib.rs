@@ -12,6 +12,7 @@ pub mod deepseek_client;
 pub mod deepseek_explanation;
 pub mod explanation;
 pub mod learning_records;
+pub mod model_usage;
 pub mod quick_ai;
 pub mod secret_store;
 pub mod settings;
@@ -915,6 +916,7 @@ pub fn run() {
             settings::get_deepseek_balance,
             settings::open_readray_data_directory,
             settings::backup_readray_database,
+            model_usage::get_model_usage_summary,
             writing::create_writing_document,
             writing::list_writing_documents,
             writing::get_writing_document,

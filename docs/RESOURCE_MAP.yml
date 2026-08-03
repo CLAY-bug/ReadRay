@@ -4,7 +4,7 @@ project:
   repo_root: "."
 
 meta:
-  version: "1.21"
+  version: "1.22"
   last_updated: "2026-08-03"
   updated_by: "Codex"
   source_of_truth: "docs/RESOURCE_MAP.yml"
@@ -238,20 +238,28 @@ source_areas:
     risk: "该 service 不持久化 thread、不读取真实历史，也不请求 DeepSeek；不得由正式 Tauri 装配读取或实例化。"
 
   - path: "src/components/SettingsPage.tsx"
-    purpose: "主应用设置页的真实加载、DeepSeek 配置、余额、本地数据操作和运行时信息状态。"
+    purpose: "主应用设置页的真实加载、DeepSeek 配置、余额、本地 Token 使用量、本地数据操作和运行时信息状态。"
     status: "active"
     read_when:
       - "调整设置页、DeepSeek Key 首次配置/更新/清除或失败重试。"
       - "排查设置页 loading、重启恢复或窄窗口布局。"
-    notes: "复用 MainAppShell、MainSidebar 和标题栏；页面只消费 SettingsService。按设计稿保留通用、外观、AI 服务、数据、关于五类完整信息结构；Key 配置/清除、官方多币种余额查询、SQLite 概览、打开真实数据目录、原生保存对话框 SQLite 备份和随包字体许可证弹窗形成真实闭环。余额、目录和备份分别覆盖 loading/error/retry，余额不持久化；当前主题、字体、语言和固定快捷键只读展示，使用量及桌面生命周期操作仍明确禁用，不报告成功。"
+    notes: "复用 MainAppShell、MainSidebar 和标题栏；页面只消费 SettingsService。按设计稿保留通用、外观、AI 服务、数据、关于五类完整信息结构；Key 配置/清除、官方多币种余额、四档本地 Token 使用量、SQLite 概览、打开真实数据目录、原生保存对话框 SQLite 备份和随包字体许可证弹窗形成真实闭环。余额卡只展示总余额与币种；进入已配置 Key 的 AI 服务栏目立即查询，可见期间在上次请求完成 5 分钟后自动刷新，失败保留上次成功值，且不持久化。使用量只展示 ReadRay 自 v5 migration 后收到的真实 usage。当前主题、字体、语言和固定快捷键只读展示，桌面生命周期操作仍明确禁用。"
     risk: "不得直接 invoke、读取 localStorage/sessionStorage、显示或返回已保存 Key 明文；不得用页面开关伪装未实现的托盘、单实例、开机启动和关闭策略。"
+
+  - path: "src/settingsBalanceRefresh.ts"
+    purpose: "设置页余额自动刷新、可见性暂停、请求代次隔离和保留旧值的状态控制器。"
+    status: "active"
+    read_when:
+      - "调整 AI 服务栏目余额自动刷新、重试或迟到请求处理。"
+    notes: "只在栏目激活、窗口可见且 Key 已配置时请求；每次请求结束后单次计时 5 分钟，手动刷新重置计时。凭据首次配置、更新或清除通过显式 replaceCredential 立即清空旧余额并切换请求代次，不依赖 configured 布尔值变化；旧请求结束后才查询新 Key，避免重叠并拒绝旧结果。隐藏、离开或卸载同样使旧代次失效，刷新失败由 reducer 保留同一 Key 的上次成功余额。"
+    risk: "不得把余额写入 SQLite/localStorage，也不得让迟到请求覆盖当前页面状态。"
 
   - path: "src/settingsRepository.ts"
     purpose: "设置页 Tauri commands 与原生备份保存对话框的有类型 repository。"
     status: "active"
     read_when:
       - "调整设置快照、Key 验证保存或清除 command 参数。"
-    notes: "调用设置快照、Key 保存/清除、余额、打开数据目录和 SQLite 备份 commands；备份先用既有 dialog 选择 sqlite3 路径，取消时不调用 Rust。Key 只作为用户本次输入提交，不做前端持久化。"
+    notes: "调用设置快照、Key 保存/清除、余额、按显式本机日历边界聚合使用量、打开数据目录和 SQLite 备份 commands；备份先用既有 dialog 选择 sqlite3 路径，取消时不调用 Rust。Key 只作为用户本次输入提交，不做前端持久化。"
     risk: "不得缓存 Key、记录 Key 或把原生存储实现移入前端。"
 
   - path: "src/settingsService.ts"
@@ -259,15 +267,15 @@ source_areas:
     status: "active"
     read_when:
       - "调整设置页面协议、数据计数或 Key 来源状态。"
-    notes: "校验 Key configured/source 一致性、模型/数据目录和三个非负 SQLite 计数；保存前规范化用户输入。余额再次校验可用状态、唯一三字符币种和非负十进制金额；备份结果校验文件名、路径、大小和时间。"
+    notes: "校验 Key configured/source 一致性、模型/数据目录和三个非负 SQLite 计数；保存前规范化用户输入。余额再次校验可用状态、唯一三字符币种和非负十进制金额；使用量按今天/近 7 天/近 30 天/全部生成本机半开日历区间，并校验三类明细唯一、非负安全整数及总览一致性；备份结果校验文件名、路径、大小和时间。"
     risk: "不得让页面绕过 service 使用 Rust 原始响应，也不得从前端推算本地数据概览。"
 
   - path: "src/settingsViewModel.ts"
-    purpose: "设置页面快照类型、Key 输入校验和异步操作身份守卫。"
+    purpose: "设置页面快照/使用量类型、Key 输入校验、本机日历工具和异步操作身份守卫。"
     status: "active"
     read_when:
       - "调整设置快照字段、Key 页面校验或迟到结果处理。"
-    notes: "快照只包含 configured/source、模型、数据目录、计数和版本；另定义多币种余额和备份文件结果，不包含 Key 明文或遮罩尾号。"
+    notes: "快照只包含 configured/source、模型、数据目录、计数和版本；另定义多币种余额、三类 Token 使用量和备份文件结果，不包含 Key 明文或遮罩尾号。本地日期格式化不使用 toISOString；显式 UTC+8 测试覆盖中国时区零点跨日。"
     risk: "不得把敏感值加入长期页面模型或返回协议。"
 
   - path: "tests/settingsService.test.mjs"
@@ -275,7 +283,7 @@ source_areas:
     status: "active"
     read_when:
       - "修改设置前端协议、安全边界或桌面能力呈现。"
-    notes: "使用 Node 内置 test runner 覆盖 6 项：六类 command/camelCase 参数与原生保存对话框、快照校验与输入规范化、多币种余额严格映射和失败重试、目录打开失败重试、备份取消不调用 Rust、迟到操作守卫，以及页面五类设计结构与正式路径隔离。"
+    notes: "使用 Node 内置 test runner 覆盖 11 项：设置 commands/camelCase 参数与原生保存对话框、快照校验与输入规范化、多币种余额和三类使用量严格映射/失败重试、余额进入栏目自动查询/五分钟与手动刷新/未配置 Key/已有 Key 更新后立即查询与旧结果隔离/隐藏卸载清理/失败保留旧值、四档本机范围、UTC+8 零点备份名、目录打开失败、备份取消、迟到操作守卫，以及页面五类设计结构与正式路径隔离。"
     risk: "不触碰真实 Windows 凭据，也不替代真实 Tauri/DeepSeek 与重启人工验收。"
 
   - path: "src/components/MemoryPage.tsx"
@@ -507,7 +515,7 @@ source_areas:
     status: "active"
     read_when:
       - "调整设置页视觉、1440×900/840×600 或两档侧栏布局。"
-    notes: "全部使用 rr-settings-* 作用域并复用 main-app.css 变量；应用容器不超过 1100px 时分类导航改为顶部横向，不超过 900px 时表单与数据行纵向排列。"
+    notes: "全部使用 rr-settings-* 作用域并复用 main-app.css 变量；包含余额、使用量 loading/error/retry、数据操作和确认框状态。应用容器不超过 1100px 时分类导航改为顶部横向，不超过 900px 时表单与数据行纵向排列。"
     risk: "不要复制 App Shell、重定义全局 token 或影响今天、写作、记忆、对话、overlay 和 UIA。"
 
   - path: "src/assets/fonts/"
@@ -643,17 +651,26 @@ source_areas:
       - "调整 create_explanation_card command。"
       - "排查 DeepSeek 结构化 JSON 输出、serde 解析或 validator 失败。"
       - "将 ExplanationCard 接入 compact UI 前的 Rust 层查询链路。"
-    notes: "command 输入为 CaptureInput，先在本地判断 word/phrase/sentence/paragraph，再使用对应 JSON schema prompt；请求使用 response_format=json_object，解析前以捕获输入覆盖 sourceText，随后 serde 解析并调用 validate_explanation_card。校验成功后统一调用 learning_records 自动保存；manual 无选区输入和 windows_uia 划词解释卡共用该链路。"
+    notes: "command 输入为 CaptureInput，先在本地判断 word/phrase/sentence/paragraph，再使用对应 JSON schema prompt；请求使用 response_format=json_object，解析前以捕获输入覆盖 sourceText，随后 serde 解析并调用 validate_explanation_card。正式请求通过 deepseek_client 标记 explanation_query usage；校验成功后统一调用 learning_records 自动保存。manual 无选区输入和 windows_uia 划词解释卡共用该链路。"
     risk: "不要在日志、文档或提交文件中写入真实 DEEPSEEK_API_KEY；保存失败必须返回清晰错误，不能伪装为查询成功。"
 
   - path: "src-tauri/src/deepseek_client.rs"
-    purpose: "DeepSeek API key、模型选择和 chat/completions HTTP 错误边界。"
+    purpose: "DeepSeek API key、模型选择、chat/completions HTTP 错误边界和共享 usage 采集。"
     status: "active"
     read_when:
       - "新增或排查 DeepSeek 请求链路。"
       - "调整共享请求、HTTP 状态或响应结构错误分类。"
-    notes: "ExplanationCard、Quick AI、写作分析/问答和设置页官方余额 GET 共用该传输与 HTTP 错误边界；默认模型仍为 deepseek-v4-flash。运行时优先使用 Windows 凭据管理器中的 Key，未形成持久化决定时才兼容开发期 DEEPSEEK_API_KEY；不记录或返回 API key。"
-    risk: "这里只负责 HTTP 传输，不放 ExplanationCard、Quick AI 或写作业务 prompt 和存储。"
+    notes: "ExplanationCard、Quick AI、写作分析/问答和设置页官方余额 GET 共用该传输与 HTTP 错误边界；默认模型仍为 deepseek-v4-flash。三类正式 chat/completions 成功响应先严格校验 prompt/completion/total usage，再尽力写入 SQLite，随后才反序列化业务结构；因此合法 usage 在后续业务 JSON 失败时仍计数，统计写入失败不改变模型结果。候选 Key 验证使用无统计的显式 Key 边界，余额 GET 也不进入统计。运行时优先使用 Windows 凭据管理器中的 Key；不记录或返回 API key。"
+    risk: "这里只放共享传输和 usage 响应边界，不放 ExplanationCard、Quick AI 或写作业务 prompt；不得因统计写入失败改写模型调用结果。"
+
+  - path: "src-tauri/src/model_usage.rs"
+    purpose: "ReadRay 三类模型使用量的 SQLite 写入、范围聚合和 Tauri command。"
+    status: "active"
+    read_when:
+      - "调整 Token 使用量分类、写入或设置页聚合协议。"
+      - "排查今天/近 7 天/近 30 天/全部的统计结果。"
+    notes: "只接受 explanation_query、quick_ai、writing 三类和经过 deepseek_client 校验的真实 prompt/completion/total Token；使用数据库写入时刻，不保存提示词、回答、Key 或费用。查询使用前端 Service 生成的本机半开日历边界；任意范围的统计开始时间均为该范围内第一条真实 usage 的 created_at，空范围返回 null，不用筛选范围起点代替。"
+    risk: "不得补造 migration 前历史、估算 Token/费用或统计 API Key 验证、余额和其他应用调用。"
 
   - path: "src-tauri/src/secret_store.rs"
     purpose: "DeepSeek API Key 的 Windows 凭据管理器存取与环境回退决策。"
@@ -687,7 +704,7 @@ source_areas:
     read_when:
       - "调整 Quick AI system prompt、上下文窗口或发送流程。"
       - "排查 create/get/send/list_recent/list_all/rename/delete/export Quick AI commands。"
-    notes: "独立于 ExplanationCard JSON 协议；管理和导出 commands 始终携带数据库 conversationId，export 在用户选定路径后重新读取权威快照再写文件。send command 要求已创建的 conversationId 和 expectedUserSequence，先 prepare pending user，再从该 SQLite 快照装配多轮上下文并调用模型，成功后 complete assistant；已完成轮次不会再次请求模型。"
+    notes: "独立于 ExplanationCard JSON 协议；管理和导出 commands 始终携带数据库 conversationId，export 在用户选定路径后重新读取权威快照再写文件。send command 要求已创建的 conversationId 和 expectedUserSequence，先 prepare pending user，再从该 SQLite 快照装配多轮上下文并以 quick_ai 分类调用共享模型边界，成功后 complete assistant；已完成轮次不会再次请求模型或重复统计。"
     risk: "不接学习记录检索、工具调用、联网搜索、长期记忆或通用 Agent 框架。"
 
   - path: "src-tauri/src/writing.rs"
@@ -706,7 +723,7 @@ source_areas:
       - "调整学习记录 schema、迁移或存储字段。"
       - "实现学习记录窗口、搜索、筛选、单条读取或删除。"
       - "排查自动保存或应用数据目录中的 SQLite 问题。"
-    notes: "使用 rusqlite bundled，在 Tauri 应用数据目录创建 readray.sqlite3；v1 为学习记录、v2 为 Quick AI、v3 追加写作文章/分析/版本/回答表，v4 追加对比基线/分析 revision 元数据和回答 versionId。v3 升级时无法从既有数据可靠证明的基线 revision 与版本 analysis revision 均保持 null，不从 source_revision 伪造来源。除学习记录分页/search/get/delete 外，提供按前端本机日期范围统计数量与最新记录的只读今日摘要 command。"
+    notes: "使用 rusqlite bundled，在 Tauri 应用数据目录创建 readray.sqlite3；v1 为学习记录、v2 为 Quick AI、v3 追加写作文章/分析/版本/回答表，v4 追加对比基线/分析 revision 元数据和回答 versionId，v5 追加只含三类真实 Token 与数据库时间的 model_usage_records 及范围索引。旧数据库升级到 v5 不回填历史。除学习记录分页/search/get/delete 外，提供按前端本机日期范围统计数量与最新记录的只读今日摘要 command。"
     risk: "学习记录仍只做事件存储，不做去重、聚合、remembered/forgotten、趋势或历史 UI；新增 schema 必须继续追加 migration，不能改写已发布迁移。"
 
   - path: "scripts/"

@@ -1,8 +1,13 @@
 import type { SettingsRepository } from "./settingsRepository";
+import { modelUsageRangeBounds } from "./settingsViewModel.ts";
 import type {
   DatabaseBackupResult,
   DeepSeekBalance,
   DeepSeekCurrencyBalance,
+  ModelUsageCategory,
+  ModelUsageCategorySummary,
+  ModelUsageRange,
+  ModelUsageSummary,
   SettingsSnapshot,
 } from "./settingsViewModel";
 
@@ -11,6 +16,7 @@ export interface SettingsService {
   validateAndSaveApiKey(apiKey: string): Promise<SettingsSnapshot>;
   clearApiKey(): Promise<SettingsSnapshot>;
   loadBalance(): Promise<DeepSeekBalance>;
+  loadUsage(range: ModelUsageRange): Promise<ModelUsageSummary>;
   openDataDirectory(): Promise<void>;
   createDatabaseBackup(
     suggestedFileName: string,
@@ -84,6 +90,70 @@ export function validateDatabaseBackupResult(
   return result;
 }
 
+const usageCategoryOrder: ModelUsageCategory[] = [
+  "explanation_query",
+  "quick_ai",
+  "writing",
+];
+
+function validateUsageCounts(
+  value: Pick<
+    ModelUsageCategorySummary,
+    "promptTokens" | "completionTokens" | "totalTokens" | "requestCount"
+  >,
+  label: string,
+) {
+  assertCount(value.promptTokens, `${label}输入 Token`);
+  assertCount(value.completionTokens, `${label}输出 Token`);
+  assertCount(value.totalTokens, `${label}总 Token`);
+  assertCount(value.requestCount, `${label}请求次数`);
+  if (value.promptTokens + value.completionTokens !== value.totalTokens) {
+    throw new Error(`${label}Token 合计不一致。`);
+  }
+}
+
+export function validateModelUsageSummary(summary: ModelUsageSummary): ModelUsageSummary {
+  validateUsageCounts(summary, "ReadRay 使用量");
+  if (
+    summary.statisticsStartUnixMs !== null &&
+    (!Number.isSafeInteger(summary.statisticsStartUnixMs) ||
+      summary.statisticsStartUnixMs < 0)
+  ) {
+    throw new Error("ReadRay 使用量统计开始时间无效。");
+  }
+  if (!Array.isArray(summary.categories) || summary.categories.length !== 3) {
+    throw new Error("ReadRay 使用量必须包含三类业务明细。");
+  }
+
+  const categories = new Map<ModelUsageCategory, ModelUsageCategorySummary>();
+  for (const item of summary.categories) {
+    if (!usageCategoryOrder.includes(item.category) || categories.has(item.category)) {
+      throw new Error("ReadRay 使用量包含未知或重复的业务分类。");
+    }
+    validateUsageCounts(item, `${item.category} `);
+    categories.set(item.category, { ...item });
+  }
+  const ordered = usageCategoryOrder.map((category) => categories.get(category)!);
+  const categoryTotals = ordered.reduce(
+    (totals, item) => ({
+      promptTokens: totals.promptTokens + item.promptTokens,
+      completionTokens: totals.completionTokens + item.completionTokens,
+      totalTokens: totals.totalTokens + item.totalTokens,
+      requestCount: totals.requestCount + item.requestCount,
+    }),
+    { promptTokens: 0, completionTokens: 0, totalTokens: 0, requestCount: 0 },
+  );
+  if (
+    categoryTotals.promptTokens !== summary.promptTokens ||
+    categoryTotals.completionTokens !== summary.completionTokens ||
+    categoryTotals.totalTokens !== summary.totalTokens ||
+    categoryTotals.requestCount !== summary.requestCount
+  ) {
+    throw new Error("ReadRay 使用量总览与分类明细不一致。");
+  }
+  return { ...summary, categories: ordered };
+}
+
 export class RepositorySettingsService implements SettingsService {
   private readonly repository: SettingsRepository;
 
@@ -107,6 +177,13 @@ export class RepositorySettingsService implements SettingsService {
 
   async loadBalance() {
     return validateDeepSeekBalance(await this.repository.getBalance());
+  }
+
+  async loadUsage(range: ModelUsageRange) {
+    const bounds = modelUsageRangeBounds(range);
+    return validateModelUsageSummary(
+      await this.repository.getUsage(bounds.startUnixMs, bounds.endUnixMs),
+    );
   }
 
   async openDataDirectory() {

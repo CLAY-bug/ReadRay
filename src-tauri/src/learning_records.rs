@@ -9,7 +9,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use tauri::{AppHandle, Manager};
 
 const DATABASE_FILE_NAME: &str = "readray.sqlite3";
-const DATABASE_SCHEMA_VERSION: i64 = 4;
+const DATABASE_SCHEMA_VERSION: i64 = 5;
 pub const EXPLANATION_CARD_SCHEMA_VERSION: i64 = 1;
 const DEFAULT_PAGE: u32 = 1;
 const DEFAULT_PAGE_SIZE: u32 = 20;
@@ -152,11 +152,26 @@ CREATE INDEX idx_writing_answers_version_created
   ON writing_assistant_answers(version_id, created_at_unix_ms, id);
 "#;
 
+const MIGRATION_5: &str = r#"
+CREATE TABLE model_usage_records (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  category TEXT NOT NULL CHECK (category IN ('explanation_query', 'quick_ai', 'writing')),
+  prompt_tokens INTEGER NOT NULL CHECK (prompt_tokens >= 0),
+  completion_tokens INTEGER NOT NULL CHECK (completion_tokens >= 0),
+  total_tokens INTEGER NOT NULL CHECK (total_tokens >= 0 AND total_tokens = prompt_tokens + completion_tokens),
+  created_at_unix_ms INTEGER NOT NULL
+);
+
+CREATE INDEX idx_model_usage_records_created_category
+  ON model_usage_records(created_at_unix_ms, category);
+"#;
+
 const MIGRATIONS: &[(i64, &str)] = &[
     (1, MIGRATION_1),
     (2, MIGRATION_2),
     (3, MIGRATION_3),
-    (DATABASE_SCHEMA_VERSION, MIGRATION_4),
+    (4, MIGRATION_4),
+    (DATABASE_SCHEMA_VERSION, MIGRATION_5),
 ];
 
 #[derive(Clone, Debug, Serialize)]
@@ -923,7 +938,7 @@ mod tests {
             )
             .unwrap();
 
-        assert_eq!(version, 4);
+        assert_eq!(version, DATABASE_SCHEMA_VERSION);
         assert_eq!(document_metadata_columns, 1);
         assert_eq!(answer_target_columns, 1);
         assert_eq!(preserved, ("保留草稿".to_string(), 5));
@@ -934,6 +949,75 @@ mod tests {
             "{\"issues\":[],\"patterns\":[]}"
         );
         assert_eq!(preserved_legacy_version.2, None);
+        drop(upgraded);
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn version_four_database_adds_usage_table_without_losing_existing_data() {
+        let (root, path) = test_database_path();
+        fs::create_dir_all(&root).unwrap();
+        let connection = Connection::open(&path).unwrap();
+        connection
+            .execute_batch(
+                "CREATE TABLE schema_migrations (
+                    version INTEGER PRIMARY KEY,
+                    applied_at_unix_ms INTEGER NOT NULL
+                 );",
+            )
+            .unwrap();
+        connection.execute_batch(MIGRATION_1).unwrap();
+        connection.execute_batch(MIGRATION_2).unwrap();
+        connection.execute_batch(MIGRATION_3).unwrap();
+        connection.execute_batch(MIGRATION_4).unwrap();
+        connection
+            .execute(
+                "INSERT INTO schema_migrations (version, applied_at_unix_ms)
+                 VALUES (1, 100), (2, 200), (3, 300), (4, 400)",
+                [],
+            )
+            .unwrap();
+        connection
+            .execute(
+                "INSERT INTO quick_ai_conversations (
+                    id, title, model, created_at_unix_ms, updated_at_unix_ms
+                 ) VALUES (45, '升级后保留', 'deepseek-v4-flash', 500, 500)",
+                [],
+            )
+            .unwrap();
+        drop(connection);
+
+        let upgraded = open_database(&path).unwrap();
+        let version: i64 = upgraded
+            .query_row("SELECT MAX(version) FROM schema_migrations", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        let usage_table_count: i64 = upgraded
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master
+                 WHERE type = 'table' AND name = 'model_usage_records'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        let preserved_title: String = upgraded
+            .query_row(
+                "SELECT title FROM quick_ai_conversations WHERE id = 45",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        let usage_count: i64 = upgraded
+            .query_row("SELECT COUNT(*) FROM model_usage_records", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+
+        assert_eq!(version, DATABASE_SCHEMA_VERSION);
+        assert_eq!(usage_table_count, 1);
+        assert_eq!(preserved_title, "升级后保留");
+        assert_eq!(usage_count, 0);
         drop(upgraded);
         let _ = fs::remove_dir_all(root);
     }

@@ -7,10 +7,19 @@ import {
 } from "react";
 import type { SettingsService } from "../settingsService";
 import {
+  BalanceRefreshController,
+  reduceBalanceRefreshState,
+  type BalanceRefreshState,
+} from "../settingsBalanceRefresh";
+import {
   isSettingsOperationCurrent,
+  suggestedBackupFileName,
   validateApiKeyDraft,
   type DatabaseBackupResult,
   type DeepSeekBalance,
+  type ModelUsageCategory,
+  type ModelUsageRange,
+  type ModelUsageSummary,
   type SettingsSnapshot,
 } from "../settingsViewModel";
 import geistLicense from "../assets/fonts/licenses/Geist-OFL.txt?raw";
@@ -32,6 +41,13 @@ const settingsSections: ReadonlyArray<readonly [SettingsSection, string]> = [
   ["ai", "AI 服务"],
   ["data", "数据"],
   ["about", "关于"],
+];
+
+const usageRanges: ReadonlyArray<readonly [ModelUsageRange, string]> = [
+  ["today", "今天"],
+  ["last7Days", "近 7 天"],
+  ["last30Days", "近 30 天"],
+  ["all", "全部"],
 ];
 
 const licenseMaterials = [
@@ -71,8 +87,23 @@ function formatByteSize(byteSize: number) {
   return `${byteSize} B`;
 }
 
-function suggestedBackupFileName() {
-  return `ReadRay-backup-${new Date().toISOString().slice(0, 10)}.sqlite3`;
+function formatUsageNumber(value: number) {
+  return new Intl.NumberFormat("zh-CN").format(value);
+}
+
+function formatUsageDate(value: number | null) {
+  if (value === null) return "暂无记录";
+  const date = new Date(value);
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(
+    date.getDate(),
+  ).padStart(2, "0")}`;
+}
+
+function usageCategory(
+  summary: ModelUsageSummary,
+  category: ModelUsageCategory,
+) {
+  return summary.categories.find((item) => item.category === category)!;
 }
 
 function InfoIcon() {
@@ -224,9 +255,17 @@ function SettingsPage({ service }: SettingsPageProps) {
   const [operationError, setOperationError] = useState<string>();
   const [confirmingClear, setConfirmingClear] = useState(false);
   const [showingLicenses, setShowingLicenses] = useState(false);
-  const [balanceStatus, setBalanceStatus] = useState<RequestStatus>("idle");
-  const [balance, setBalance] = useState<DeepSeekBalance>();
-  const [balanceError, setBalanceError] = useState<string>();
+  const [balanceState, setBalanceState] = useState<
+    BalanceRefreshState<DeepSeekBalance>
+  >({ status: "idle" });
+  const [documentVisible, setDocumentVisible] = useState(
+    () => typeof document === "undefined" || document.visibilityState === "visible",
+  );
+  const [usageRange, setUsageRange] = useState<ModelUsageRange>("last7Days");
+  const [usageStatus, setUsageStatus] = useState<RequestStatus>("idle");
+  const [usageSummary, setUsageSummary] = useState<ModelUsageSummary>();
+  const [usageError, setUsageError] = useState<string>();
+  const [usageRetryToken, setUsageRetryToken] = useState(0);
   const [directoryStatus, setDirectoryStatus] = useState<RequestStatus>("idle");
   const [directoryMessage, setDirectoryMessage] = useState<string>();
   const [backupStatus, setBackupStatus] = useState<RequestStatus>("idle");
@@ -234,7 +273,12 @@ function SettingsPage({ service }: SettingsPageProps) {
   const [backupMessage, setBackupMessage] = useState<string>();
   const mountedRef = useRef(false);
   const operationKeyRef = useRef(0);
-  const balanceKeyRef = useRef(0);
+  const balanceControllerRef = useRef<{
+    service: SettingsService;
+    controller: BalanceRefreshController<DeepSeekBalance>;
+  } | null>(null);
+  const balanceCleanupGenerationRef = useRef(0);
+  const usageKeyRef = useRef(0);
   const directoryKeyRef = useRef(0);
   const backupKeyRef = useRef(0);
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -244,11 +288,66 @@ function SettingsPage({ service }: SettingsPageProps) {
     return () => {
       mountedRef.current = false;
       operationKeyRef.current += 1;
-      balanceKeyRef.current += 1;
+      usageKeyRef.current += 1;
       directoryKeyRef.current += 1;
       backupKeyRef.current += 1;
     };
   }, []);
+
+  useEffect(() => {
+    function syncDocumentVisibility() {
+      setDocumentVisible(document.visibilityState === "visible");
+    }
+
+    syncDocumentVisibility();
+    document.addEventListener("visibilitychange", syncDocumentVisibility);
+    return () => {
+      document.removeEventListener("visibilitychange", syncDocumentVisibility);
+    };
+  }, []);
+
+  useEffect(() => {
+    const setupGeneration = balanceCleanupGenerationRef.current + 1;
+    balanceCleanupGenerationRef.current = setupGeneration;
+
+    if (!service) return;
+    if (balanceControllerRef.current?.service !== service) {
+      balanceControllerRef.current?.controller.dispose();
+      balanceControllerRef.current = {
+        service,
+        controller: new BalanceRefreshController(
+          () => service.loadBalance(),
+          (event) => {
+            if (!mountedRef.current) return;
+            setBalanceState((state) => reduceBalanceRefreshState(state, event));
+          },
+        ),
+      };
+    }
+
+    const entry = balanceControllerRef.current;
+    return () => {
+      const cleanupGeneration = balanceCleanupGenerationRef.current + 1;
+      balanceCleanupGenerationRef.current = cleanupGeneration;
+      queueMicrotask(() => {
+        if (
+          balanceCleanupGenerationRef.current === cleanupGeneration &&
+          balanceControllerRef.current === entry
+        ) {
+          entry.controller.dispose();
+          balanceControllerRef.current = null;
+        }
+      });
+    };
+  }, [service]);
+
+  useEffect(() => {
+    balanceControllerRef.current?.controller.updateContext({
+      active: activeSection === "ai",
+      visible: documentVisible,
+      apiKeyConfigured: snapshot?.apiKeyConfigured === true,
+    });
+  }, [activeSection, documentVisible, service, snapshot?.apiKeyConfigured]);
 
   useEffect(() => {
     let ignore = false;
@@ -278,6 +377,46 @@ function SettingsPage({ service }: SettingsPageProps) {
       ignore = true;
     };
   }, [retryToken, service]);
+
+  useEffect(() => {
+    if (!service) {
+      setUsageStatus("idle");
+      return;
+    }
+    const requestKey = usageKeyRef.current + 1;
+    usageKeyRef.current = requestKey;
+    setUsageStatus("loading");
+    setUsageSummary(undefined);
+    setUsageError(undefined);
+    void service.loadUsage(usageRange).then(
+      (summary) => {
+        if (
+          !isSettingsOperationCurrent(
+            mountedRef.current,
+            requestKey,
+            usageKeyRef.current,
+          )
+        ) {
+          return;
+        }
+        setUsageSummary(summary);
+        setUsageStatus("success");
+      },
+      (error) => {
+        if (
+          !isSettingsOperationCurrent(
+            mountedRef.current,
+            requestKey,
+            usageKeyRef.current,
+          )
+        ) {
+          return;
+        }
+        setUsageStatus("error");
+        setUsageError(errorMessage(error));
+      },
+    );
+  }, [service, usageRange, usageRetryToken]);
 
   useEffect(() => {
     if (!confirmingClear) return;
@@ -337,10 +476,11 @@ function SettingsPage({ service }: SettingsPageProps) {
       setSnapshot(nextSnapshot);
       setKeyDraft("");
       setEditingKey(false);
-      balanceKeyRef.current += 1;
-      setBalance(undefined);
-      setBalanceStatus("idle");
-      setBalanceError(undefined);
+      balanceControllerRef.current?.controller.replaceCredential({
+        active: activeSection === "ai",
+        visible: documentVisible,
+        apiKeyConfigured: nextSnapshot.apiKeyConfigured,
+      });
       setOperation("idle");
       setOperationMessage("验证成功，API Key 已安全保存。");
     } catch (error) {
@@ -379,10 +519,11 @@ function SettingsPage({ service }: SettingsPageProps) {
       setSnapshot(nextSnapshot);
       setKeyDraft("");
       setEditingKey(true);
-      balanceKeyRef.current += 1;
-      setBalance(undefined);
-      setBalanceStatus("idle");
-      setBalanceError(undefined);
+      balanceControllerRef.current?.controller.replaceCredential({
+        active: activeSection === "ai",
+        visible: documentVisible,
+        apiKeyConfigured: nextSnapshot.apiKeyConfigured,
+      });
       setConfirmingClear(false);
       setOperation("idle");
       setOperationMessage("API Key 已清除，AI 功能现已停用。");
@@ -401,41 +542,8 @@ function SettingsPage({ service }: SettingsPageProps) {
     }
   }
 
-  async function refreshBalance() {
-    if (!service || !snapshot?.apiKeyConfigured || balanceStatus === "loading") {
-      return;
-    }
-    const requestKey = balanceKeyRef.current + 1;
-    balanceKeyRef.current = requestKey;
-    setBalanceStatus("loading");
-    setBalanceError(undefined);
-    try {
-      const nextBalance = await service.loadBalance();
-      if (
-        !isSettingsOperationCurrent(
-          mountedRef.current,
-          requestKey,
-          balanceKeyRef.current,
-        )
-      ) {
-        return;
-      }
-      setBalance(nextBalance);
-      setBalanceStatus("success");
-    } catch (error) {
-      if (
-        !isSettingsOperationCurrent(
-          mountedRef.current,
-          requestKey,
-          balanceKeyRef.current,
-        )
-      ) {
-        return;
-      }
-      setBalance(undefined);
-      setBalanceStatus("error");
-      setBalanceError(errorMessage(error));
-    }
+  function refreshBalance() {
+    balanceControllerRef.current?.controller.refreshNow();
   }
 
   async function openDataDirectory() {
@@ -512,6 +620,14 @@ function SettingsPage({ service }: SettingsPageProps) {
     }
   }
 
+  function selectUsageRange(nextRange: ModelUsageRange) {
+    if (nextRange === usageRange) {
+      setUsageRetryToken((token) => token + 1);
+      return;
+    }
+    setUsageRange(nextRange);
+  }
+
   if (!service) {
     return (
       <main className="rr-main-panel rr-settings-page" aria-label="ReadRay 设置">
@@ -551,6 +667,9 @@ function SettingsPage({ service }: SettingsPageProps) {
       : snapshot.apiKeySource === "environment"
         ? "当前由开发环境配置提供；更新后会改用 Windows 凭据管理器。"
         : "未配置时仍可查看本地内容，AI 功能会引导回到这里。";
+  const balanceStatus = balanceState.status;
+  const balance = balanceState.value;
+  const balanceError = balanceState.error;
 
   return (
     <main className="rr-main-panel rr-settings-page" aria-label="ReadRay 设置">
@@ -880,15 +999,12 @@ function SettingsPage({ service }: SettingsPageProps) {
                 <div className="rr-settings-balance-card">
                   <div>
                     <div className="rr-settings-balance-label">DEEPSEEK 账户余额</div>
-                    {balanceStatus === "success" && balance?.balances.length ? (
+                    {balance?.balances.length ? (
                       <div className="rr-settings-balance-list">
                         {balance.balances.map((item) => (
                           <div className="rr-settings-balance-item" key={item.currency}>
                             <div className="rr-settings-balance-value">
                               {item.totalBalance}<span>{item.currency}</span>
-                            </div>
-                            <div className="rr-settings-balance-meta">
-                              赠送 {item.grantedBalance} · 充值 {item.toppedUpBalance}
                             </div>
                           </div>
                         ))}
@@ -902,8 +1018,8 @@ function SettingsPage({ service }: SettingsPageProps) {
                             : balanceStatus === "error"
                               ? "余额查询失败"
                               : balanceStatus === "success"
-                                ? "未返回余额明细"
-                                : "尚未查询"}
+                                ? "未返回余额"
+                                : "正在准备查询…"}
                       </div>
                     )}
                     <div
@@ -915,19 +1031,25 @@ function SettingsPage({ service }: SettingsPageProps) {
                       {!snapshot.apiKeyConfigured
                         ? "余额只在配置 Key 后查询，不会在本地持久化。"
                         : balanceStatus === "error"
-                          ? balanceError
+                          ? balance
+                            ? `更新失败：${errorMessage(balanceError)}；已保留上次成功余额。`
+                            : `查询失败：${errorMessage(balanceError)}`
+                          : balanceStatus === "loading"
+                            ? balance
+                              ? "正在更新官方实时余额；上次结果暂时保留。"
+                              : "正在查询官方实时余额…"
                           : balanceStatus === "success"
                             ? balance?.isAvailable
                               ? "账户当前可用于 DeepSeek API 调用。"
                               : "账户余额不足，当前不可用于 API 调用。"
-                            : "点击刷新查询官方实时余额；结果不会持久化。"}
+                            : "进入 AI 服务后会自动查询；结果不会持久化。"}
                     </div>
                   </div>
                   <button
                     className="rr-settings-button"
                     type="button"
                     disabled={!snapshot.apiKeyConfigured || balanceStatus === "loading"}
-                    onClick={() => void refreshBalance()}
+                    onClick={refreshBalance}
                   >
                     {balanceStatus === "loading"
                       ? "正在刷新…"
@@ -941,36 +1063,93 @@ function SettingsPage({ service }: SettingsPageProps) {
                   <div className="rr-settings-usage-head">
                     <div>
                       <strong>ReadRay 使用量</strong>
-                      <span>尚未接入真实 usage 持久化</span>
+                      <span>仅统计 ReadRay 收到的真实 DeepSeek usage</span>
                     </div>
                     <div className="rr-settings-segmented" aria-label="使用量时间范围">
-                      <button type="button" disabled>今天</button>
-                      <button className="is-active" type="button" disabled>近 7 天</button>
-                      <button type="button" disabled>近 30 天</button>
-                      <button type="button" disabled>全部</button>
+                      {usageRanges.map(([range, label]) => (
+                        <button
+                          className={range === usageRange ? "is-active" : undefined}
+                          type="button"
+                          aria-pressed={range === usageRange}
+                          onClick={() => selectUsageRange(range)}
+                          key={range}
+                        >
+                          {label}
+                        </button>
+                      ))}
                     </div>
                   </div>
                   <div className="rr-settings-usage-body">
                     <div className="rr-settings-usage-total-label">READRAY 使用 TOKEN</div>
                     <div className="rr-settings-usage-total">
-                      —<span className="rr-settings-usage-unit">Token</span>
+                      {usageSummary ? formatUsageNumber(usageSummary.totalTokens) : "—"}
+                      <span className="rr-settings-usage-unit">Token</span>
                     </div>
                     <div className="rr-settings-usage-meta-grid">
                       <div className="rr-settings-usage-meta-item">
-                        <span>AI 请求次数</span><strong>—</strong>
+                        <span>AI 请求次数</span>
+                        <strong>
+                          {usageSummary ? formatUsageNumber(usageSummary.requestCount) : "—"}
+                        </strong>
                       </div>
                       <div className="rr-settings-usage-meta-item">
-                        <span>统计开始日期</span><strong>—</strong>
+                        <span>统计开始日期</span>
+                        <strong>
+                          {usageSummary
+                            ? formatUsageDate(usageSummary.statisticsStartUnixMs)
+                            : "—"}
+                        </strong>
                       </div>
                     </div>
                     <div className="rr-settings-usage-breakdown">
-                      <div><span>解释查询</span><strong>—</strong></div>
-                      <div><span>Quick AI</span><strong>—</strong></div>
-                      <div><span>写作</span><strong>—</strong></div>
+                      {(
+                        [
+                          ["explanation_query", "解释查询"],
+                          ["quick_ai", "Quick AI"],
+                          ["writing", "写作"],
+                        ] as const
+                      ).map(([category, label]) => {
+                        const item = usageSummary
+                          ? usageCategory(usageSummary, category)
+                          : undefined;
+                        return (
+                          <div key={category}>
+                            <span>{label}</span>
+                            <strong>
+                              {item ? formatUsageNumber(item.totalTokens) : "—"}
+                            </strong>
+                            <small>
+                              {item
+                                ? `${formatUsageNumber(item.requestCount)} 次 · 输入 ${formatUsageNumber(
+                                    item.promptTokens,
+                                  )} / 输出 ${formatUsageNumber(item.completionTokens)}`
+                                : "—"}
+                            </small>
+                          </div>
+                        );
+                      })}
                     </div>
+                    {usageStatus === "loading" ? (
+                      <div className="rr-settings-usage-status" role="status">
+                        正在读取本地使用量…
+                      </div>
+                    ) : null}
+                    {usageStatus === "error" ? (
+                      <div className="rr-settings-usage-status is-error" role="alert">
+                        <span>读取失败：{usageError}</span>
+                        <button
+                          className="rr-settings-button"
+                          type="button"
+                          onClick={() => setUsageRetryToken((token) => token + 1)}
+                        >
+                          重试读取
+                        </button>
+                      </div>
+                    ) : null}
                     <p className="rr-settings-usage-note">
-                      使用量持久化尚未开放；这里不展示推算值，也不统计同一 API Key
-                      在其他应用中的使用。
+                      仅统计本机 ReadRay 自本功能启用后收到合法 usage 的解释查询、Quick
+                      AI 与写作请求；不补造历史、不估算费用，也不统计同一 API Key
+                      在其他应用中的调用。
                     </p>
                   </div>
                 </div>

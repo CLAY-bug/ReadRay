@@ -2,7 +2,8 @@ use crate::conversations::{
     export_snapshot_to_path, ConversationExportSummary, ConversationMessage, ConversationRole,
     ConversationSnapshot, ConversationStore, PreparedTurn, RecentConversationSummary,
 };
-use crate::deepseek_client::{configured_model, post_chat_completion};
+use crate::deepseek_client::{configured_model, post_tracked_chat_completion};
+use crate::model_usage::ModelUsageCategory;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::{future::Future, path::PathBuf};
@@ -111,15 +112,20 @@ pub async fn send_quick_ai_message(
     expected_user_sequence: i64,
     content: String,
 ) -> Result<ConversationSnapshot, String> {
-    send_with_store_factory(
+    let usage_app = app.clone();
+    send_with_reply_provider(
         || ConversationStore::open_for_app(&app),
         conversation_id,
         expected_user_sequence,
         &content,
+        move |model, history| async move {
+            request_quick_ai_reply(&usage_app, &model, &history).await
+        },
     )
     .await
 }
 
+#[cfg(test)]
 async fn send_with_store_factory<F>(
     open_store: F,
     conversation_id: i64,
@@ -134,7 +140,7 @@ where
         conversation_id,
         expected_user_sequence,
         content,
-        |model, history| async move { request_quick_ai_reply(&model, &history).await },
+        |model, history| async move { request_quick_ai_reply_for_test(&model, &history).await },
     )
     .await
 }
@@ -178,21 +184,43 @@ where
 }
 
 async fn request_quick_ai_reply(
+    app: &AppHandle,
     model: &str,
     history: &[ConversationMessage],
 ) -> Result<String, String> {
+    let request_body = build_quick_ai_request_body(model, history);
+    let response: QuickAiChatResponse = post_tracked_chat_completion(
+        app,
+        ModelUsageCategory::QuickAi,
+        "DeepSeek Quick AI",
+        &request_body,
+    )
+    .await?;
+
+    extract_reply(response)
+}
+
+#[cfg(test)]
+async fn request_quick_ai_reply_for_test(
+    model: &str,
+    history: &[ConversationMessage],
+) -> Result<String, String> {
+    let request_body = build_quick_ai_request_body(model, history);
+    let response: QuickAiChatResponse =
+        crate::deepseek_client::post_chat_completion_for_test("DeepSeek Quick AI", &request_body)
+            .await?;
+    extract_reply(response)
+}
+
+fn build_quick_ai_request_body(model: &str, history: &[ConversationMessage]) -> serde_json::Value {
     let messages = build_request_messages(history);
-    let request_body = json!({
+    json!({
         "model": model,
         "messages": messages,
         "stream": false,
         "max_tokens": QUICK_AI_MAX_TOKENS,
         "temperature": QUICK_AI_TEMPERATURE
-    });
-    let response: QuickAiChatResponse =
-        post_chat_completion("DeepSeek Quick AI", &request_body).await?;
-
-    extract_reply(response)
+    })
 }
 
 fn build_request_messages(history: &[ConversationMessage]) -> Vec<DeepSeekRequestMessage> {

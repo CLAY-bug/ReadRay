@@ -1,8 +1,9 @@
-use crate::deepseek_client::{configured_model, post_chat_completion};
+use crate::deepseek_client::{configured_model, post_tracked_chat_completion};
 use crate::explanation::{
     classify_query_type, validate_explanation_card, CaptureInput, ExplanationCard, QueryType,
 };
 use crate::learning_records;
+use crate::model_usage::ModelUsageCategory;
 use serde::Deserialize;
 use serde_json::json;
 
@@ -30,7 +31,7 @@ pub async fn create_explanation_card(
     app: tauri::AppHandle,
     input: CaptureInput,
 ) -> Result<ExplanationCard, String> {
-    let card = create_explanation_card_for_input(&input).await?;
+    let card = create_explanation_card_for_input(&app, &input).await?;
     learning_records::save_for_app(&app, &input, &card)
         .map_err(|error| format!("ExplanationCard 已生成，但学习记录保存失败：{error}"))?;
 
@@ -38,13 +39,26 @@ pub async fn create_explanation_card(
 }
 
 pub(crate) async fn create_explanation_card_for_input(
+    app: &tauri::AppHandle,
     input: &CaptureInput,
 ) -> Result<ExplanationCard, String> {
+    let request_body = build_request_body(input)?;
+    let response: DeepSeekChatResponse = post_tracked_chat_completion(
+        app,
+        ModelUsageCategory::ExplanationQuery,
+        "DeepSeek ExplanationCard",
+        &request_body,
+    )
+    .await?;
+    finish_explanation_response(input, response)
+}
+
+fn build_request_body(input: &CaptureInput) -> Result<serde_json::Value, String> {
     let query_type = classify_query_type(&input.query_text)?;
     let model = configured_model();
 
     let user_prompt = build_user_prompt(&input, query_type)?;
-    let request_body = json!({
+    Ok(json!({
         "model": model,
         "messages": [
             {
@@ -62,11 +76,14 @@ pub(crate) async fn create_explanation_card_for_input(
         "stream": false,
         "max_tokens": EXPLANATION_CARD_MAX_TOKENS,
         "temperature": EXPLANATION_CARD_TEMPERATURE
-    });
+    }))
+}
 
-    let value: DeepSeekChatResponse =
-        post_chat_completion("DeepSeek ExplanationCard", &request_body).await?;
-    let content = extract_content(value)?;
+fn finish_explanation_response(
+    input: &CaptureInput,
+    response: DeepSeekChatResponse,
+) -> Result<ExplanationCard, String> {
+    let content = extract_content(response)?;
 
     parse_explanation_card_content(input, &content)
 }
@@ -255,6 +272,7 @@ fn summarize_validation_errors(errors: &[String]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::deepseek_client::post_chat_completion_for_test;
     use crate::explanation::SourceType;
     use std::path::PathBuf;
 
@@ -275,6 +293,15 @@ mod tests {
         if let Some(env_path) = env_path {
             let _ = dotenvy::from_path_override(env_path);
         }
+    }
+
+    async fn create_explanation_card_for_live_test(
+        input: &CaptureInput,
+    ) -> Result<ExplanationCard, String> {
+        let request_body = build_request_body(input)?;
+        let response: DeepSeekChatResponse =
+            post_chat_completion_for_test("DeepSeek ExplanationCard", &request_body).await?;
+        finish_explanation_response(input, response)
     }
 
     #[test]
@@ -378,9 +405,9 @@ mod tests {
         ];
 
         for (query_text, expected_type) in cases {
-            let card = tauri::async_runtime::block_on(create_explanation_card_for_input(&input(
-                query_text, None,
-            )))
+            let card = tauri::async_runtime::block_on(create_explanation_card_for_live_test(
+                &input(query_text, None),
+            ))
             .expect("live DeepSeek ExplanationCard request should succeed");
 
             assert_eq!(card.query_type(), expected_type);

@@ -801,6 +801,33 @@
   line-height: 1;
 }
 
+.rr-settings-usage-breakdown small {
+  display: block;
+  margin-top: 6px;
+  color: var(--rr-main-meta);
+  font-size: 8.5px;
+  line-height: 1.45;
+}
+
+.rr-settings-usage-status {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-top: 14px;
+  color: var(--rr-main-muted);
+  font-size: 10.5px;
+  line-height: 1.45;
+}
+
+.rr-settings-usage-status.is-error {
+  color: var(--rr-main-danger);
+}
+
+.rr-settings-usage-status .rr-settings-button {
+  flex: 0 0 auto;
+}
+
 .rr-settings-usage-note {
   margin: 14px 0 0;
   color: var(--rr-main-muted);

@@ -3,6 +3,7 @@ import { save } from "@tauri-apps/plugin-dialog";
 import type {
   DatabaseBackupResult,
   DeepSeekBalance,
+  ModelUsageSummary,
   SettingsSnapshot,
 } from "./settingsViewModel";
 
@@ -16,6 +17,10 @@ export interface SettingsRepository {
   validateAndSaveApiKey(apiKey: string): Promise<SettingsSnapshot>;
   clearApiKey(): Promise<SettingsSnapshot>;
   getBalance(): Promise<DeepSeekBalance>;
+  getUsage(
+    startUnixMs: number | null,
+    endUnixMs: number | null,
+  ): Promise<ModelUsageSummary>;
   openDataDirectory(): Promise<void>;
   backupDatabase(suggestedFileName: string): Promise<DatabaseBackupResult | null>;
 }
@@ -56,6 +61,13 @@ export class TauriSettingsRepository implements SettingsRepository {
 
   getBalance() {
     return this.invokeCommand<DeepSeekBalance>("get_deepseek_balance");
+  }
+
+  getUsage(startUnixMs: number | null, endUnixMs: number | null) {
+    return this.invokeCommand<ModelUsageSummary>("get_model_usage_summary", {
+      startUnixMs,
+      endUnixMs,
+    });
   }
 
   openDataDirectory() {
