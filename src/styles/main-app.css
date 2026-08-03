@@ -274,13 +274,15 @@
   background: var(--rr-main-border-soft) !important;
 }
 
-.rr-main-nav-item.is-active {
+.rr-main-nav-item.is-active,
+.rr-main-settings.is-active {
   color: var(--rr-main-fg) !important;
   background: color-mix(in oklab, var(--rr-main-bg), transparent 28%) !important;
   font-weight: 610;
 }
 
-.rr-main-nav-item.is-active::before {
+.rr-main-nav-item.is-active::before,
+.rr-main-settings.is-active::before {
   content: "";
   position: absolute;
   top: calc(9px * var(--rr-main-design-scale));

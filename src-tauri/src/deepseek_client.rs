@@ -1,4 +1,4 @@
-use crate::{DEEPSEEK_BASE_URL, DEFAULT_DEEPSEEK_MODEL};
+use crate::{secret_store, DEEPSEEK_BASE_URL, DEFAULT_DEEPSEEK_MODEL};
 use serde::de::DeserializeOwned;
 use serde_json::{json, Value};
 
@@ -13,11 +13,21 @@ pub(crate) async fn post_chat_completion<T>(
 where
     T: DeserializeOwned,
 {
-    let api_key = match std::env::var("DEEPSEEK_API_KEY") {
-        Ok(value) if !value.trim().is_empty() => value,
-        _ => return Err(format!("未设置 DEEPSEEK_API_KEY，无法执行 {operation}。")),
-    };
+    let api_key = secret_store::deepseek_api_key_state()?
+        .into_key()
+        .ok_or_else(|| format!("未配置 DeepSeek API Key，无法执行 {operation}。"))?;
 
+    post_chat_completion_with_api_key(operation, request_body, &api_key).await
+}
+
+pub(crate) async fn post_chat_completion_with_api_key<T>(
+    operation: &str,
+    request_body: &Value,
+    api_key: &str,
+) -> Result<T, String>
+where
+    T: DeserializeOwned,
+{
     let response = reqwest::Client::new()
         .post(format!("{DEEPSEEK_BASE_URL}/chat/completions"))
         .bearer_auth(api_key)

@@ -21,6 +21,7 @@ import {
   type TodayService,
 } from "../todayService";
 import type { WritingService } from "../writingService";
+import type { SettingsService } from "../settingsService";
 import ConversationPage from "./ConversationPage";
 import ConversationHistoryPage from "./ConversationHistoryPage";
 import ConversationManagementMenu, {
@@ -29,6 +30,7 @@ import ConversationManagementMenu, {
 import MainAppIcon from "./MainAppIcon";
 import MainSidebar from "./MainSidebar";
 import MemoryPage from "./MemoryPage";
+import SettingsPage from "./SettingsPage";
 import TodayPage from "./TodayPage";
 import WritingPage from "./WritingPage";
 
@@ -42,6 +44,7 @@ type MainAppShellProps = {
   conversationRefreshToken: number;
   conversationService: ConversationService | null;
   writingService: WritingService | null;
+  settingsService: SettingsService | null;
   onNewConversation?: () => void;
   onNavigate?: (id: MainAppNavigationId) => void;
   onRecentConversationSelect?: (id: string) => void;
@@ -67,6 +70,7 @@ function MainAppShell({
   conversationRefreshToken,
   conversationService,
   writingService,
+  settingsService,
   onNewConversation = noop,
   onNavigate = noop,
   onRecentConversationSelect = noop,
@@ -227,7 +231,12 @@ function MainAppShell({
   }
 
   function handleNavigate(id: MainAppNavigationId) {
-    if (id === "today" || id === "memory" || id === "writing") {
+    if (
+      id === "today" ||
+      id === "memory" ||
+      id === "writing" ||
+      id === "settings"
+    ) {
       updateActivePage(id);
     }
     if (id === "memory") {
@@ -416,7 +425,11 @@ function MainAppShell({
             ? "全部对话"
             : activePageId === "memory"
             ? "记忆"
-            : activePageId === "writing" ? writingWindowTitle : "今天"}
+            : activePageId === "writing"
+              ? writingWindowTitle
+              : activePageId === "settings"
+                ? "设置"
+                : "今天"}
         </div>
         <div className="rr-main-window-controls" aria-label="窗口控制">
           <button className="rr-main-window-control" type="button" aria-label="最小化" onClick={onMinimize}>
@@ -505,6 +518,8 @@ function MainAppShell({
             refreshToken={memoryRefreshToken}
             requestedRecordId={requestedMemoryRecordId}
           />
+        ) : activePageId === "settings" ? (
+          <SettingsPage service={settingsService} />
         ) : activePageId === "writing" ? null : (
           <TodayPage
             viewModel={todayViewModel}

@@ -80,6 +80,8 @@ function MainSidebar({
   onViewAllConversations,
   onRecentRetry,
 }: MainSidebarProps) {
+  const settingsActive = activeNavigationId === "settings";
+
   return (
     <aside className="rr-main-sidebar" aria-label="全局导航">
       <button
@@ -157,9 +159,10 @@ function MainSidebar({
       </section>
 
       <button
-        className="rr-main-settings"
+        className={`rr-main-settings${settingsActive ? " is-active" : ""}`}
         type="button"
         title="设置"
+        aria-current={settingsActive ? "page" : undefined}
         aria-label={collapsed ? "设置" : undefined}
         onClick={() => onNavigate("settings")}
       >

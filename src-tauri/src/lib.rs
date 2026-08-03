@@ -13,6 +13,8 @@ pub mod deepseek_explanation;
 pub mod explanation;
 pub mod learning_records;
 pub mod quick_ai;
+pub mod secret_store;
+pub mod settings;
 #[cfg(target_os = "windows")]
 pub mod windows_uia;
 pub mod writing;
@@ -607,15 +609,15 @@ fn finish_overlay_window_drag(window: WebviewWindow) -> Result<(), String> {
 async fn deepseek_smoke_test(prompt: Option<String>) -> Result<DeepSeekSmokeResult, String> {
     let model =
         std::env::var("DEEPSEEK_MODEL").unwrap_or_else(|_| DEFAULT_DEEPSEEK_MODEL.to_string());
-    let api_key = match std::env::var("DEEPSEEK_API_KEY") {
-        Ok(value) if !value.trim().is_empty() => value,
-        _ => {
+    let api_key = match secret_store::deepseek_api_key_state()?.into_key() {
+        Some(value) => value,
+        None => {
             return Ok(DeepSeekSmokeResult {
                 configured: false,
                 ok: false,
                 model,
                 status: None,
-                message: "未设置 DEEPSEEK_API_KEY，已跳过真实 API 调用。".to_string(),
+                message: "未配置 DeepSeek API Key，已跳过真实 API 调用。".to_string(),
                 content_preview: None,
             });
         }
@@ -907,6 +909,9 @@ pub fn run() {
             quick_ai::delete_quick_ai_conversation,
             quick_ai::export_quick_ai_conversation,
             quick_ai::send_quick_ai_message,
+            settings::get_settings_snapshot,
+            settings::validate_and_save_deepseek_api_key,
+            settings::clear_deepseek_api_key,
             writing::create_writing_document,
             writing::list_writing_documents,
             writing::get_writing_document,

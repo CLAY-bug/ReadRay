@@ -46,10 +46,16 @@ import {
   RepositoryWritingService,
   type WritingService,
 } from "./writingService";
+import { TauriSettingsRepository } from "./settingsRepository";
+import {
+  RepositorySettingsService,
+  type SettingsService,
+} from "./settingsService";
 import "./App.css";
 import "./styles/main-app.css";
 import "./styles/conversation-page.css";
 import "./styles/writing-page.css";
+import "./styles/settings-page.css";
 
 type CheckState = "idle" | "running" | "ok" | "warn" | "error";
 
@@ -1008,6 +1014,11 @@ function MainAppWindow() {
         ? new RepositoryWritingService(new TauriWritingRepository())
         : null,
     );
+  const [settingsService] = useState<SettingsService | null>(() =>
+    isTauriRuntime
+      ? new RepositorySettingsService(new TauriSettingsRepository())
+      : null,
+  );
 
   useEffect(() => {
     if (!isTauriRuntime) {
@@ -1195,6 +1206,7 @@ function MainAppWindow() {
       conversationRefreshToken={conversationRefreshToken}
       conversationService={conversationService}
       writingService={writingService}
+      settingsService={settingsService}
       isMaximized={isMaximized}
       onStartDragging={() => {
         void runMainWindowCommand("start_main_window_drag");
