@@ -25,7 +25,8 @@
         "alwaysOnTop": false,
         "resizable": true,
         "skipTaskbar": false,
-        "shadow": false
+        "shadow": false,
+        "visible": false
       },
       {
         "label": "overlay",

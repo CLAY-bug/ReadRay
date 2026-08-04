@@ -1,6 +1,7 @@
 export type UiFont = "geistSourceHanSans" | "sourceHanSans";
 export type LearningFont = "newsreaderSourceHanSerif" | "sourceHanSerif";
 export type SendShortcut = "enter" | "ctrlEnter";
+export type CloseBehavior = "hideToTray" | "exit";
 
 export type AppPreferences = {
   revision: number;
@@ -9,6 +10,9 @@ export type AppPreferences = {
   learningFont: LearningFont;
   learningFontSize: number;
   sendShortcut: SendShortcut;
+  closeBehavior: CloseBehavior;
+  quickQueryShortcut: string;
+  selectionExplanationShortcut: string;
 };
 
 export const UI_FONT_SIZE_MIN = 12;
@@ -37,6 +41,9 @@ export const DEFAULT_APP_PREFERENCES: AppPreferences = {
   learningFont: "newsreaderSourceHanSerif",
   learningFontSize: 17,
   sendShortcut: "enter",
+  closeBehavior: "hideToTray",
+  quickQueryShortcut: "Ctrl+Alt+R",
+  selectionExplanationShortcut: "Ctrl+Alt+U",
 };
 
 const uiFonts: UiFont[] = ["geistSourceHanSans", "sourceHanSans"];
@@ -45,6 +52,7 @@ const learningFonts: LearningFont[] = [
   "sourceHanSerif",
 ];
 const sendShortcuts: SendShortcut[] = ["enter", "ctrlEnter"];
+const closeBehaviors: CloseBehavior[] = ["hideToTray", "exit"];
 
 function assertIntegerInRange(
   value: number,
@@ -74,6 +82,18 @@ export function validateAppPreferences(
   }
   if (!sendShortcuts.includes(preferences.sendShortcut)) {
     throw new Error("设置返回了未知的发送快捷键。");
+  }
+  if (!closeBehaviors.includes(preferences.closeBehavior)) {
+    throw new Error("设置返回了未知的主窗口关闭策略。");
+  }
+  if (
+    !preferences.quickQueryShortcut?.trim() ||
+    !preferences.selectionExplanationShortcut?.trim()
+  ) {
+    throw new Error("设置返回的全局快捷键不完整。");
+  }
+  if (preferences.quickQueryShortcut === preferences.selectionExplanationShortcut) {
+    throw new Error("快速查询和选区解释不能使用同一个快捷键。");
   }
   assertIntegerInRange(
     preferences.uiFontSize,

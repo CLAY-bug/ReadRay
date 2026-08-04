@@ -19,6 +19,8 @@ export interface SettingsService {
   loadSettings(): Promise<SettingsSnapshot>;
   loadPreferences(): Promise<AppPreferences>;
   savePreferences(preferences: AppPreferences): Promise<AppPreferences>;
+  loadAutostartEnabled(): Promise<boolean>;
+  setAutostartEnabled(enabled: boolean): Promise<boolean>;
   validateAndSaveApiKey(apiKey: string): Promise<SettingsSnapshot>;
   clearApiKey(): Promise<SettingsSnapshot>;
   loadBalance(): Promise<DeepSeekBalance>;
@@ -53,6 +55,15 @@ export function validateSettingsSnapshot(
   assertCount(snapshot.conversationCount, "对话数");
   assertCount(snapshot.writingDocumentCount, "写作文档数");
   validateAppPreferences(snapshot.preferences);
+  if (typeof snapshot.autostartEnabled !== "boolean") {
+    throw new Error("设置返回了无效的开机启动状态。");
+  }
+  if (
+    snapshot.shortcutRegistrationError !== null &&
+    typeof snapshot.shortcutRegistrationError !== "string"
+  ) {
+    throw new Error("设置返回了无效的全局快捷键注册状态。");
+  }
   return snapshot;
 }
 
@@ -180,6 +191,22 @@ export class RepositorySettingsService implements SettingsService {
     return validateAppPreferences(
       await this.repository.updatePreferences(validateAppPreferences(preferences)),
     );
+  }
+
+  async loadAutostartEnabled() {
+    const enabled = await this.repository.getAutostartEnabled();
+    if (typeof enabled !== "boolean") {
+      throw new Error("Windows 返回了无效的开机启动状态。");
+    }
+    return enabled;
+  }
+
+  async setAutostartEnabled(enabled: boolean) {
+    const authoritative = await this.repository.setAutostartEnabled(enabled);
+    if (typeof authoritative !== "boolean" || authoritative !== enabled) {
+      throw new Error("Windows 开机启动状态与请求不一致。");
+    }
+    return authoritative;
   }
 
   async validateAndSaveApiKey(apiKey: string) {

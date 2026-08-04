@@ -12,6 +12,8 @@ export type SettingsSnapshot = {
   writingDocumentCount: number;
   appVersion: string;
   preferences: AppPreferences;
+  autostartEnabled: boolean;
+  shortcutRegistrationError: string | null;
 };
 
 export type DeepSeekCurrencyBalance = {

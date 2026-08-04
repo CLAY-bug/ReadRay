@@ -4,7 +4,7 @@ project:
   repo_root: "."
 
 meta:
-  version: "1.24"
+  version: "1.27"
   last_updated: "2026-08-04"
   updated_by: "Codex"
   source_of_truth: "docs/RESOURCE_MAP.yml"
@@ -243,8 +243,8 @@ source_areas:
     read_when:
       - "调整设置页、DeepSeek Key 首次配置/更新/清除或失败重试。"
       - "排查设置页 loading、重启恢复或窄窗口布局。"
-    notes: "复用 MainAppShell、MainSidebar 和标题栏；页面只消费 SettingsService。按设计稿保留通用、外观、AI 服务、数据、关于五类完整信息结构；Key、余额、Token 使用量、SQLite 概览/目录/备份、随包字体许可证、两组字体字号和两种发送快捷键均形成真实闭环。字号候选先校验整数和范围再乐观应用；保存或应用失败会重新读取 SQLite 权威值、恢复界面、释放保存状态并提供重试。主题和语言仍只读，固定全局快捷键只展示，桌面生命周期操作仍明确禁用。"
-    risk: "不得直接 invoke、读取 localStorage/sessionStorage、显示或返回已保存 Key 明文；不得用页面开关伪装未实现的托盘、单实例、开机启动和关闭策略。"
+    notes: "复用 MainAppShell、MainSidebar 和标题栏；页面只消费 SettingsService。除既有 Key、余额、Token、数据、字体字号和发送快捷键外，现已接通两组可录制全局快捷键、恢复默认、Windows 实际开机启动状态和主窗口关闭策略。快捷键、关闭策略继续走 SQLite revision 偏好；开机启动不写 SQLite。Key 保存/清除和开机启动写入只把 promise 提交给持续存活的应用级协调器，页面卸载后不再持有等待状态或更新旧组件。快捷键保存成功后重读运行时注册错误，因此双冲突可逐项恢复且未恢复项继续明确显示。"
+    risk: "不得直接 invoke、读取 localStorage/sessionStorage、显示或返回已保存 Key 明文；开机启动状态不得用页面缓存或 SQLite 值冒充 Windows 权威状态。"
 
   - path: "src/settingsBalanceRefresh.ts"
     purpose: "设置页余额自动刷新、可见性暂停、请求代次隔离和保留旧值的状态控制器。"
@@ -259,7 +259,7 @@ source_areas:
     status: "active"
     read_when:
       - "调整设置快照、Key 验证保存或清除 command 参数。"
-    notes: "调用设置快照、SQLite 偏好读取/更新、Key 保存/清除、余额、按显式本机日历边界聚合使用量、打开数据目录和 SQLite 备份 commands；备份先用既有 dialog 选择 sqlite3 路径，取消时不调用 Rust。Key 只作为用户本次输入提交，不做前端持久化。"
+    notes: "调用设置快照、SQLite 偏好读取/更新、Windows 开机启动读取/切换、Key 保存/清除、余额、按显式本机日历边界聚合使用量、打开数据目录和 SQLite 备份 commands；备份取消时不调用 Rust。Key 只作为用户本次输入提交，不做前端持久化。"
     risk: "不得缓存 Key、记录 Key 或把原生存储实现移入前端。"
 
   - path: "src/settingsService.ts"
@@ -267,7 +267,7 @@ source_areas:
     status: "active"
     read_when:
       - "调整设置页面协议、数据计数或 Key 来源状态。"
-    notes: "校验 Key configured/source 一致性、模型/数据目录、三个非负 SQLite 计数和字体/字号/发送快捷键偏好；偏好只通过 repository 写入并返回数据库 revision。余额再次校验可用状态、唯一三字符币种和非负十进制金额；使用量按今天/近 7 天/近 30 天/全部生成本机半开日历区间，并校验三类明细唯一、非负安全整数及总览一致性；备份结果校验文件名、路径、大小和时间。"
+    notes: "校验 Key configured/source 一致性、模型/数据目录、三个非负 SQLite 计数、Windows 开机启动布尔状态，以及字体/字号/发送键/关闭策略/全局快捷键偏好；偏好只通过 repository 写入并返回数据库 revision。余额、使用量和备份结果继续执行既有严格校验。"
     risk: "不得让页面绕过 service 使用 Rust 原始响应，也不得从前端推算本地数据概览。"
 
   - path: "src/settingsViewModel.ts"
@@ -275,11 +275,11 @@ source_areas:
     status: "active"
     read_when:
       - "调整设置快照字段、Key 页面校验或迟到结果处理。"
-    notes: "快照只包含 configured/source、模型、数据目录、计数、版本和非敏感偏好；另定义多币种余额、三类 Token 使用量和备份文件结果，不包含 Key 明文或遮罩尾号。本地日期格式化不使用 toISOString；显式 UTC+8 测试覆盖中国时区零点跨日。"
+    notes: "快照只包含 configured/source、模型、数据目录、计数、版本、非敏感偏好和可选的全局快捷键注册错误；另定义多币种余额、三类 Token 使用量和备份文件结果，不包含 Key 明文或遮罩尾号。本地日期格式化不使用 toISOString；显式 UTC+8 测试覆盖中国时区零点跨日。"
     risk: "不得把敏感值加入长期页面模型或返回协议。"
 
   - path: "src/appPreferences.ts"
-    purpose: "应用字体/字号/发送快捷键协议、默认值、运行时校验、语义 CSS 变量和共享发送判断。"
+    purpose: "应用字体/字号/发送键、关闭策略和全局快捷键协议，以及运行时校验、语义 CSS 变量和共享发送判断。"
     status: "active"
     read_when:
       - "调整字体选项、字号范围、发送快捷键或 IME 行为。"
@@ -291,7 +291,7 @@ source_areas:
     status: "active"
     read_when:
       - "排查离开设置页后的保存失败回滚或多个偏好保存竞态。"
-    notes: "候选偏好先全局乐观应用，再通过 SettingsService 保存；当前请求失败时重新读取并应用 SQLite 权威值。generation 跨 SettingsPage 生命周期递增，被较新保存取代的迟到失败不再读取或应用回滚快照。"
+    notes: "候选偏好先全局乐观应用，再通过 SettingsService 保存；当前请求失败时重新读取并应用 SQLite 权威值。generation 跨 SettingsPage 生命周期递增，被较新保存取代的迟到失败不再读取或应用回滚快照；flush 会供安全退出等待正在进行的偏好保存。"
     risk: "不得把协调器下放回页面组件、移除请求身份判断，或在被取代的旧请求失败后覆盖新设置。"
 
   - path: "src/useAppPreferences.ts"
@@ -302,12 +302,29 @@ source_areas:
     notes: "正式 Tauri 窗口只通过 SettingsService 读取 SQLite；持有 AppPreferenceSaveCoordinator，使设置页卸载后保存仍能完成或按权威值全局回滚。监听 app-preferences-updated，并在窗口获焦或重新可见时重读；保存期间到达的重读会延后，迟到读取和旧保存均以请求代次拒绝。非 Tauri 预览只使用默认值。"
     risk: "不得使用 localStorage/sessionStorage 或在 hook 中直接 invoke。"
 
+  - path: "src/desktopLifecycle.ts"
+    purpose: "前端应用级保存等待、安全退出结果隔离和全局快捷键录制纯逻辑。"
+    status: "active"
+    read_when:
+      - "调整安全退出保存等待、强制退出确认或快捷键录制。"
+      - "排查迟到退出结果、设置保存或写作 flush 未被等待。"
+    notes: "DesktopSaveCoordinator 持续跟踪设置 mutation 的 promise/失败和写作草稿 flush；即使 SettingsPage 已卸载，安全退出仍等待进行中操作并报告未解决失败。退出 request ID 激活 mutation gate 后，设置 mutation 与写作编辑入口拒绝新修改，flush 以 mutation generation 确认静默后才调用 typed Rust 退出 command；失败或取消会解除 gate。快捷键录制拒绝裸按键并生成稳定组合字符串。"
+    risk: "不得把模型请求加入退出等待，也不得在此直接操作托盘、窗口、注册表或 SQLite。"
+
+  - path: "tests/desktopLifecycle.test.mjs"
+    purpose: "桌面生命周期前端纯逻辑与正式路径静态边界测试。"
+    status: "active"
+    read_when:
+      - "修改安全退出、单实例、托盘、开机启动或全局快捷键接线。"
+    notes: "覆盖快捷键录制、安全退出成功/失败/取消/强制/过期结果、退出期 mutation 阻断、设置操作切页后的应用级等待、单实例插件优先、三项托盘菜单、隐藏式自动启动和页面不直接 invoke。Rust 配套测试另覆盖 active 元数据回滚、双冲突逐项恢复和窗口聚焦失败时取消一致性。"
+    risk: "静态和纯逻辑测试不替代真实 Windows 托盘、注册表、快捷键冲突和单实例人工验收。"
+
   - path: "tests/settingsService.test.mjs"
     purpose: "设置 repository/service、正式路径隔离和关键失败边界测试。"
     status: "active"
     read_when:
       - "修改设置前端协议、安全边界或桌面能力呈现。"
-    notes: "使用 Node 内置 test runner 覆盖 15 项：既有设置/余额/使用量/目录/备份边界，以及偏好默认值、非法/小数/越界字号拒绝、repository/service typed commands、主窗口与 overlay 的界面字号变量实际消费、写作学习内容与工具栏作用域、两种发送方式、四处 IME 守卫、页面卸载后全局回滚、旧失败不覆盖新成功、卸载组件不更新状态、单行解释固定 Enter 与正式路径隔离。"
+    notes: "与 desktopLifecycle.test.mjs 由 test:settings 统一运行，覆盖既有设置边界，以及偏好保存 flush、开机启动 typed commands、快捷键录制、安全退出、单实例/托盘静态装配和正式路径隔离；自动测试不触碰真实 Windows 开机启动项。"
     risk: "不触碰真实 Windows 凭据，也不替代真实 Tauri/DeepSeek 与重启人工验收。"
 
   - path: "src/components/MemoryPage.tsx"
@@ -325,7 +342,7 @@ source_areas:
     read_when:
       - "调整写作草稿、检查、对比、完成稿或文章库状态流。"
       - "调整正式写作 repository/service 状态、保存竞态或失败重试。"
-    notes: "复用 MainAppShell、MainSidebar 和标题栏；只消费 WritingService。新建、搜索、加载、删除、自动保存、检查、真实问答、完成版本与继续修改均以 Rust/SQLite 返回的 ID、revision 和时间为权威；模型请求绑定文章、数据库 revision、可见快照、完成版本 ID、本地编辑 generation 和同目标请求序号。当前草稿辅导会话按文章和最近完成版本边界保持，自动保存推进 revision 不会清除已接受回答或追问身份；问答按时间持续展开，下一问接续最后回答，不再另设“之前的问题”折叠摘要。完成版本仍按 versionId 严格隔离。当前 revision 分析与基线检查分开消费；完成版本切换会重建只读“基线问题/处理回顾”，清理辅助面板并只显示自身固化的问题、模式和问答，不把基线问题重置为待处理状态或在完成稿中定位。已有草稿时“继续修改”提示返回该草稿。页面 hidden 时不接管 Ctrl+J/Escape。"
+    notes: "复用 MainAppShell、MainSidebar 和标题栏；只消费 WritingService。新建、搜索、加载、删除、自动保存、检查、真实问答、完成版本与继续修改均以 Rust/SQLite 返回的 ID、revision 和时间为权威；模型请求绑定文章、数据库 revision、可见快照、完成版本 ID、本地编辑 generation 和同目标请求序号。当前草稿辅导会话按文章和最近完成版本边界保持，自动保存推进 revision 不会清除已接受回答或追问身份；问答按时间持续展开，下一问接续最后回答，不再另设“之前的问题”折叠摘要。完成版本仍按 versionId 严格隔离。当前 revision 分析与基线检查分开消费；完成版本切换会重建只读“基线问题/处理回顾”，清理辅助面板并只显示自身固化的问题、模式和问答，不把基线问题重置为待处理状态或在完成稿中定位。已有草稿时“继续修改”提示返回该草稿。页面 hidden 时不接管 Ctrl+J/Escape；编辑入口先经过桌面生命周期 mutation gate，退出 flush 期间的输入会被拒绝并按当前快照复原。"
     risk: "不要复制第二套 App Shell，不要在页面组件直接 invoke、读取 localStorage/SQLite 或重新引入硬编码问题和回答。"
 
   - path: "src/writingViewModel.ts"
@@ -636,7 +653,7 @@ source_areas:
     status: "active"
     read_when:
       - "开发全局快捷键、剪贴板、窗口行为、SQLite 命令、原生配置。"
-    notes: "当前包含 Tauri v2 配置、Rust入口和桌面插件。窗口 label 固定为 main 与 overlay：main 加载 index.html?view=main、正常显示在任务栏；overlay 加载 index.html、启动隐藏并继续承载居中与锚定浮窗。lib.rs 对两类窗口命令做 label 校验，只有 overlay 失焦时自动隐藏；快捷键意图先保存在 Rust，再由 overlay 前端原子领取，避免隐藏 WebView 漏事件。"
+    notes: "当前包含 Tauri v2 配置、Rust入口和桌面插件。single-instance 按官方要求最先注册；setup 初始化 SQLite 权威偏好、动态全局快捷键和仅三项菜单的托盘。持久化快捷键被占用时记录实际注册状态与错误但继续 setup，不改写 SQLite；手动启动仍显示 main。带专用参数的开机启动保持 main/overlay 隐藏；overlay 既有失焦/Esc 隐藏和意图领取边界不变。"
     risk: "不要把 UI 状态和业务展示逻辑塞进 Rust 层。"
 
   - path: "src-tauri/tauri.conf.json"
@@ -645,7 +662,7 @@ source_areas:
     read_when:
       - "调整窗口 label、入口 URL、初始尺寸、任务栏或无边框行为。"
       - "排查启动时主应用和快捷 overlay 的显示策略。"
-    notes: "main 为 1440×900、最小 840×600 的可缩放无边框主窗口；本机 150% DPI 下真实 WebView 仍为 1440×900、DPR 1.5，与设计稿原生坐标一致。overlay 保留透明、置顶、跳过任务栏且启动隐藏的浮窗配置。"
+    notes: "main 仍为 1440×900、最小 840×600 的可缩放无边框主窗口，但静态配置先隐藏，由 Rust setup 在手动启动时显示，避免开机启动闪窗。overlay 保留透明、置顶、跳过任务栏且启动隐藏的浮窗配置。"
     risk: "两类窗口必须保持独立 URL、尺寸和生命周期；不要把 main 的位置或显示状态写入 overlay 的进程内位置缓存。"
 
   - path: "src-tauri/src/windows_uia.rs"
@@ -657,6 +674,15 @@ source_areas:
       - "调整开发期 Ctrl+Alt+U 捕获快捷键。"
     notes: "仅 Windows 编译；按焦点元素、窗口根、ElementFromPoint、Raw View 祖先和必要时子树的顺序寻找 TextPattern2/TextPattern。Ctrl+Alt+U 先在源应用前台完成捕获并输出 READRAY_UIA_CAPTURE，再由前端事件链调用 DeepSeek 和锚定解释卡；Obsidian 1.12.7 与 Codex App 已完成真实端到端验证。"
     risk: "不同应用仍需分别验证；本轮未实现 MSAA/IAccessible2、剪贴板辅助或专用应用适配器。选区查询上限与协议一致为 4096 字符，不属于整页翻译能力。"
+
+  - path: "src-tauri/src/desktop_lifecycle.rs"
+    purpose: "托盘、单实例恢复、动态全局快捷键、关闭策略、启动可见性和安全退出 Rust 边界。"
+    status: "active"
+    read_when:
+      - "调整托盘菜单、主窗口关闭/恢复、快捷键注册或安全退出。"
+      - "排查手动/开机启动可见性、第二实例或运行时与 SQLite 偏好不一致。"
+    notes: "托盘左键恢复主窗口，右键菜单仅打开/快速查询/退出；快速查询复用既有 overlay intent。运行时同时保存 SQLite 映射、实际 registered set 和两项独立 startup error；任意偏好保存失败会把物理注册与完整 active 元数据一起回滚。启动双冲突可逐项更换，只注册发生变化的一项并保留另一项错误，两项恢复后清除降级状态。单实例回调只对再次手动启动恢复主窗口。真正退出由主窗口先完成设置写入和写作 flush；取消先清除 pending ID，窗口显示/聚焦失败仅记录警告而不把前端留在过期请求上。"
+    risk: "不得让托盘退出绕过安全退出，或让开机启动、第二实例创建额外托盘和数据库连接；overlay 窗口边界不得在此改写。"
 
   - path: "src-tauri/src/explanation.rs"
     purpose: "阶段二 ExplanationCard 中间协议、CaptureInput 类型和 Rust validator。"
@@ -710,7 +736,7 @@ source_areas:
     status: "active"
     read_when:
       - "调整设置 Rust 协议、Key 验证或 SQLite 数据概览。"
-    notes: "返回无明文的 Key configured/source、实际模型、Tauri 应用数据目录、三类 SQLite 计数、应用版本和非敏感偏好；偏好更新校验字体枚举/字号范围并按 revision 原子更新，陈旧写入拒绝，提交后广播跨窗口事件。候选 Key 先真实验证再写安全存储；余额不持久化；目录 command 使用真实 app_data_dir；备份对权威数据库执行一致性快照。"
+    notes: "返回无明文的 Key configured/source、实际模型、数据目录、三类计数、版本、Windows 实际开机启动状态、可选快捷键注册错误和非敏感偏好。偏好更新除既有校验外还校验关闭策略与两组全局快捷键；先阶段化运行时注册，再按 revision 保存 SQLite，提交模糊错误会回读权威值决定确认或回滚。开机启动 command 直接读写官方插件状态，不写 SQLite。"
     risk: "失败不得替换现有 Key 或报告保存成功；不得记录、序列化返回或在错误消息中拼接候选 Key。备份失败必须清理临时数据库及 sidecar，不得覆盖源库或把残缺文件当成成功结果。"
 
   - path: "src-tauri/src/conversations.rs"
@@ -747,7 +773,7 @@ source_areas:
       - "调整学习记录 schema、迁移或存储字段。"
       - "实现学习记录窗口、搜索、筛选、单条读取或删除。"
       - "排查自动保存或应用数据目录中的 SQLite 问题。"
-    notes: "使用 rusqlite bundled，在 Tauri 应用数据目录创建 readray.sqlite3；v1 为学习记录、v2 为 Quick AI、v3/v4 为写作及 revision 元数据，v5 追加真实 Token usage，v6 追加单行 app_preferences，保存字体、字号、发送快捷键和 revision。旧数据库升级后保留既有数据并获得默认偏好，不扫描系统字体。"
+    notes: "使用 rusqlite bundled，在 Tauri 应用数据目录创建 readray.sqlite3；v1 为学习记录、v2 为 Quick AI、v3/v4 为写作、v5 为 Token usage、v6 新建 app_preferences，v7 只追加关闭策略和两组全局快捷键列。开机启动不进入数据库；v6 升级保留 revision 与既有偏好。"
     risk: "学习记录仍只做事件存储，不做去重、聚合、remembered/forgotten、趋势或历史 UI；新增 schema 必须继续追加 migration，不能改写已发布迁移。"
 
   - path: "scripts/"
@@ -810,7 +836,7 @@ app_scaffold:
     read_when:
       - "调整 Tauri 插件或 Rust 依赖。"
       - "排查原生导出、SQLite 或 Windows 编译。"
-    notes: "阶段六新增官方 tauri-plugin-dialog，与前端插件配套；SQLite 仍由现有 rusqlite bundled 负责。设置页未新增 crate，只为既有 windows 0.61.3 启用 Win32_Security_Credentials feature。"
+    notes: "桌面生命周期开启 tauri 的 tray-icon feature，并新增仅 Rust 使用的官方 tauri-plugin-single-instance 与 tauri-plugin-autostart；single-instance 最先注册。未新增前端插件依赖或 capability，SQLite 仍由现有 rusqlite bundled 负责。"
     risk: "新增依赖前必须说明必要性、替代方案及打包影响；不得为会话管理引入第二套存储或模型客户端。"
 
   - path: "src-tauri/capabilities/default.json"

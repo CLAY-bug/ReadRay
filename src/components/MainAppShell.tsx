@@ -52,6 +52,7 @@ type MainAppShellProps = {
     candidate: AppPreferences,
     previousAuthority: AppPreferences,
   ) => Promise<AppPreferenceSaveOutcome>;
+  interactionBlocked?: boolean;
   onNewConversation?: () => void;
   onNavigate?: (id: MainAppNavigationId) => void;
   onRecentConversationSelect?: (id: string) => void;
@@ -80,6 +81,7 @@ function MainAppShell({
   settingsService,
   preferences,
   onPreferencesSave,
+  interactionBlocked = false,
   onNewConversation = noop,
   onNavigate = noop,
   onRecentConversationSelect = noop,
@@ -413,6 +415,8 @@ function MainAppShell({
   return (
     <div
       ref={appRootRef}
+      inert={interactionBlocked ? true : undefined}
+      aria-busy={interactionBlocked || undefined}
       className={`rr-main-app${sidebarCollapsed ? " is-sidebar-collapsed" : ""}${
         activePageId === "conversation" ? " is-conversation-page" : ""
       }`}

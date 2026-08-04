@@ -45,6 +45,8 @@ function snapshot(overrides = {}) {
     writingDocumentCount: 1,
     appVersion: "0.1.0",
     preferences: preferences(),
+    autostartEnabled: false,
+    shortcutRegistrationError: null,
     ...overrides,
   };
 }
@@ -157,6 +159,8 @@ test("Tauri 设置 repository 通过有类型 command 和原生保存对话框�
       if (command === "update_app_preferences") {
         return preferences({ ...args.preferences, revision: args.preferences.revision + 1 });
       }
+      if (command === "get_autostart_enabled") return false;
+      if (command === "set_autostart_enabled") return args.enabled;
       return snapshot();
     },
     async (options) => {
@@ -168,6 +172,8 @@ test("Tauri 设置 repository 通过有类型 command 和原生保存对话框�
   await repository.get();
   await repository.getPreferences();
   await repository.updatePreferences(preferences({ uiFontSize: 16 }));
+  await repository.getAutostartEnabled();
+  await repository.setAutostartEnabled(true);
   await repository.validateAndSaveApiKey("candidate-secret");
   await repository.clearApiKey();
   await repository.getBalance();
@@ -182,6 +188,8 @@ test("Tauri 设置 repository 通过有类型 command 和原生保存对话框�
       command: "update_app_preferences",
       args: { preferences: preferences({ uiFontSize: 16 }) },
     },
+    { command: "get_autostart_enabled", args: undefined },
+    { command: "set_autostart_enabled", args: { enabled: true } },
     {
       command: "validate_and_save_deepseek_api_key",
       args: { apiKey: "candidate-secret" },
@@ -216,6 +224,8 @@ test("service 规范化输入并拒绝不一致的运行时快照", async () => 
     get: async () => snapshot(),
     getPreferences: async () => preferences(),
     updatePreferences: async (next) => ({ ...next, revision: next.revision + 1 }),
+    getAutostartEnabled: async () => false,
+    setAutostartEnabled: async (enabled) => enabled,
     validateAndSaveApiKey: async (apiKey) => {
       saved.push(apiKey);
       return snapshot({ apiKeyConfigured: true, apiKeySource: "credential" });
@@ -229,6 +239,8 @@ test("service 规范化输入并拒绝不一致的运行时快照", async () => 
 
   assert.equal((await service.loadSettings()).learningRecordCount, 3);
   assert.equal((await service.loadPreferences()).uiFontSize, 14);
+  assert.equal(await service.loadAutostartEnabled(), false);
+  assert.equal(await service.setAutostartEnabled(true), true);
   assert.equal(
     (await service.savePreferences(preferences({ learningFontSize: 19 }))).revision,
     1,
@@ -359,6 +371,37 @@ test("旧保存迟到失败不得覆盖较新保存成功后的全局偏好", as
   assert.equal(reloads, 0, "被取代的失败不得再读取回滚快照");
   assert.equal(applied.at(-1).uiFontSize, 19);
   assert.equal(applied.at(-1).revision, 9);
+});
+
+test("安全退出会等待进行中的设置保存并传播保存失败", async () => {
+  const pendingSave = deferred();
+  const coordinator = new AppPreferenceSaveCoordinator({
+    save: () => pendingSave.promise,
+    load: async () => preferences(),
+    apply: () => {},
+  });
+  const saving = coordinator.save(
+    preferences({ uiFontSize: 16 }),
+    preferences(),
+  );
+  let flushed = false;
+  const flushing = coordinator.flush().then(() => {
+    flushed = true;
+  });
+  await flushAsyncWork();
+  assert.equal(flushed, false);
+  pendingSave.resolve(preferences({ revision: 1, uiFontSize: 16 }));
+  await saving;
+  await flushing;
+  assert.equal(flushed, true);
+
+  const failing = new AppPreferenceSaveCoordinator({
+    save: async () => { throw new Error("SQLite 写入失败"); },
+    load: async () => preferences(),
+    apply: () => {},
+  });
+  void failing.save(preferences({ uiFontSize: 18 }), preferences());
+  await assert.rejects(() => failing.flush(), /SQLite 写入失败/);
 });
 
 test("余额 service 严格映射多币种，并允许失败后重新请求", async () => {
@@ -801,7 +844,9 @@ test("正式设置页保持五类设计结构，确定性操作已接线且不�
   assert.match(page, /\["data", "数据"\]/);
   assert.match(page, /\["about", "关于"\]/);
   assert.match(page, /function UnavailableButton[\s\S]*?disabled/);
-  assert.match(page, /<UnavailableButton>录制新快捷键<\/UnavailableButton>/);
+  assert.match(page, /录制新快捷键/);
+  assert.match(page, /shortcutFromKeyEvent/);
+  assert.match(page, /恢复默认快捷键/);
   assert.match(page, /onClick=\{refreshBalance\}/);
   assert.match(page, /new BalanceRefreshController/);
   assert.equal([...page.matchAll(/\.replaceCredential\(/g)].length, 2);
@@ -822,7 +867,10 @@ test("正式设置页保持五类设计结构，确定性操作已接线且不�
   assert.match(page, /onClick=\{\(\) => setShowingLicenses\(true\)\}/);
   assert.match(page, /Geist-OFL\.txt\?raw/);
   assert.match(page, /Source-Han-Serif-OFL\.txt\?raw/);
-  assert.doesNotMatch(page, /role="switch"|隐藏到托盘|autostart|closeBehavior/i);
+  assert.match(page, /role="switch"/);
+  assert.match(page, /隐藏到托盘/);
+  assert.match(page, /autostart/i);
+  assert.match(page, /closeBehavior/);
   assert.match(styles, /\.rr-settings-nav\s*\{[\s\S]*?width:\s*192px/);
   assert.match(styles, /\.rr-settings-content\s*\{[\s\S]*?width:\s*min\(820px/);
   assert.match(styles, /\.rr-settings-row\s*\{[\s\S]*?min-height:\s*82px/);

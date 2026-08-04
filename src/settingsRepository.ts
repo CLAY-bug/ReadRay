@@ -17,6 +17,8 @@ export interface SettingsRepository {
   get(): Promise<SettingsSnapshot>;
   getPreferences(): Promise<AppPreferences>;
   updatePreferences(preferences: AppPreferences): Promise<AppPreferences>;
+  getAutostartEnabled(): Promise<boolean>;
+  setAutostartEnabled(enabled: boolean): Promise<boolean>;
   validateAndSaveApiKey(apiKey: string): Promise<SettingsSnapshot>;
   clearApiKey(): Promise<SettingsSnapshot>;
   getBalance(): Promise<DeepSeekBalance>;
@@ -59,6 +61,14 @@ export class TauriSettingsRepository implements SettingsRepository {
     return this.invokeCommand<AppPreferences>("update_app_preferences", {
       preferences,
     });
+  }
+
+  getAutostartEnabled() {
+    return this.invokeCommand<boolean>("get_autostart_enabled");
+  }
+
+  setAutostartEnabled(enabled: boolean) {
+    return this.invokeCommand<boolean>("set_autostart_enabled", { enabled });
   }
 
   validateAndSaveApiKey(apiKey: string) {

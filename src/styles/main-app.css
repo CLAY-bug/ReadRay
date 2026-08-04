@@ -1497,3 +1497,57 @@
     transition-duration: 0.01ms !important;
   }
 }
+.rr-safe-exit-backdrop {
+  position: fixed;
+  z-index: 1000;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  background: rgba(28, 27, 23, 0.32);
+}
+
+.rr-safe-exit-dialog {
+  width: min(440px, calc(100vw - 48px));
+  border: 1px solid var(--rr-main-border);
+  border-radius: 14px;
+  padding: 24px;
+  background: var(--rr-main-bg);
+  box-shadow: 0 18px 48px rgba(38, 37, 30, 0.2);
+  color: var(--rr-main-text);
+}
+
+.rr-safe-exit-dialog h2 {
+  margin: 0 0 10px;
+  font-size: calc(18px * var(--rr-ui-font-scale));
+}
+
+.rr-safe-exit-dialog p {
+  margin: 0;
+  color: var(--rr-main-muted);
+  line-height: 1.6;
+  overflow-wrap: anywhere;
+}
+
+.rr-safe-exit-actions {
+  display: flex;
+  gap: 10px;
+  margin-top: 22px;
+}
+
+.rr-safe-exit-actions button {
+  border: 1px solid var(--rr-main-border);
+  border-radius: 8px;
+  padding: 8px 14px;
+  background: var(--rr-main-surface);
+  color: var(--rr-main-text);
+}
+
+.rr-safe-exit-actions button.is-danger {
+  color: #9f3a2f;
+}
+
+.rr-safe-exit-dialog small {
+  display: block;
+  margin-top: 12px;
+  color: var(--rr-main-muted);
+}

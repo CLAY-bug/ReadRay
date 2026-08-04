@@ -8,6 +8,11 @@ import {
 import type { SettingsService } from "../settingsService";
 import type { AppPreferenceSaveOutcome } from "../appPreferenceSaveCoordinator";
 import {
+  desktopSaveCoordinator,
+  shortcutFromKeyEvent,
+  shortcutParts,
+} from "../desktopLifecycle";
+import {
   DEFAULT_APP_PREFERENCES,
   LEARNING_FONT_SIZE_MAX,
   LEARNING_FONT_SIZE_MIN,
@@ -208,23 +213,45 @@ function UnavailableButton({
   );
 }
 
-function ShortcutRow({ name, keyName }: { name: string; keyName: "R" | "U" }) {
+function ShortcutRow({
+  name,
+  value,
+  recording,
+  disabled,
+  isDefault,
+  onRecord,
+  onRestore,
+}: {
+  name: string;
+  value: string;
+  recording: boolean;
+  disabled: boolean;
+  isDefault: boolean;
+  onRecord: () => void;
+  onRestore: () => void;
+}) {
   return (
     <div className="rr-settings-shortcut-row">
       <div className="rr-settings-shortcut-name">{name}</div>
       <div className="rr-settings-shortcut-actions">
-        <div className="rr-settings-shortcut-value" aria-label={`Ctrl Alt ${keyName}`}>
-          <kbd>Ctrl</kbd>
-          <kbd>Alt</kbd>
-          <kbd>{keyName}</kbd>
+        <div className="rr-settings-shortcut-value" aria-label={value}>
+          {shortcutParts(value).map((part) => <kbd key={part}>{part}</kbd>)}
         </div>
-        <UnavailableButton>录制新快捷键</UnavailableButton>
-        <UnavailableButton className="is-ghost">禁用</UnavailableButton>
+        <button
+          className="rr-settings-button"
+          type="button"
+          disabled={disabled}
+          aria-pressed={recording}
+          onClick={onRecord}
+        >
+          {recording ? "请按组合键…" : "录制新快捷键"}
+        </button>
         <button
           className="rr-settings-restore"
           type="button"
-          disabled
-          title="当前已是默认值"
+          disabled={disabled || isDefault}
+          title={isDefault ? "当前已是默认值" : "恢复默认快捷键"}
+          onClick={onRestore}
         >
           恢复默认
         </button>
@@ -291,6 +318,12 @@ function SettingsPage({
   const [preferenceStatus, setPreferenceStatus] = useState<RequestStatus>("idle");
   const [preferenceMessage, setPreferenceMessage] = useState<string>();
   const [failedPreferences, setFailedPreferences] = useState<AppPreferences>();
+  const [recordingShortcut, setRecordingShortcut] = useState<
+    "quickQueryShortcut" | "selectionExplanationShortcut"
+  >();
+  const [shortcutError, setShortcutError] = useState<string>();
+  const [autostartStatus, setAutostartStatus] = useState<RequestStatus>("idle");
+  const [autostartMessage, setAutostartMessage] = useState<string>();
   const mountedRef = useRef(false);
   const operationKeyRef = useRef(0);
   const balanceControllerRef = useRef<{
@@ -302,7 +335,11 @@ function SettingsPage({
   const directoryKeyRef = useRef(0);
   const backupKeyRef = useRef(0);
   const preferenceKeyRef = useRef(0);
+  const autostartKeyRef = useRef(0);
   const scrollRef = useRef<HTMLDivElement>(null);
+  function trackSettingsOperation<T>(label: string, start: () => Promise<T>) {
+    return desktopSaveCoordinator.runMutation(label, start);
+  }
 
   useEffect(() => {
     mountedRef.current = true;
@@ -313,8 +350,78 @@ function SettingsPage({
       directoryKeyRef.current += 1;
       backupKeyRef.current += 1;
       preferenceKeyRef.current += 1;
+      autostartKeyRef.current += 1;
     };
   }, []);
+
+  useEffect(() => {
+    if (!recordingShortcut || !snapshot) return;
+    const activeRecording = recordingShortcut;
+    const currentSnapshot = snapshot;
+    function record(event: KeyboardEvent) {
+      event.preventDefault();
+      event.stopPropagation();
+      if (event.key === "Escape") {
+        setRecordingShortcut(undefined);
+        setShortcutError(undefined);
+        return;
+      }
+      try {
+        const shortcut = shortcutFromKeyEvent(event);
+        if (!shortcut) return;
+        const other = activeRecording === "quickQueryShortcut"
+          ? currentSnapshot.preferences.selectionExplanationShortcut
+          : currentSnapshot.preferences.quickQueryShortcut;
+        if (shortcut === other) {
+          throw new Error("快速查询和选区解释不能使用同一个快捷键。");
+        }
+        setShortcutError(undefined);
+        setRecordingShortcut(undefined);
+        patchPreferences({ [activeRecording]: shortcut });
+      } catch (error) {
+        setShortcutError(errorMessage(error));
+      }
+    }
+    window.addEventListener("keydown", record, true);
+    return () => window.removeEventListener("keydown", record, true);
+  }, [recordingShortcut, snapshot]);
+
+  useEffect(() => {
+    if (!service) return;
+    const currentService = service;
+    let disposed = false;
+    async function refreshAutostart() {
+      if (document.visibilityState !== "visible") return;
+      const requestKey = autostartKeyRef.current + 1;
+      autostartKeyRef.current = requestKey;
+      try {
+        const enabled = await currentService.loadAutostartEnabled();
+        if (
+          disposed ||
+          !isSettingsOperationCurrent(
+            mountedRef.current,
+            requestKey,
+            autostartKeyRef.current,
+          )
+        ) return;
+        setSnapshot((current) => current ? { ...current, autostartEnabled: enabled } : current);
+        setAutostartStatus("idle");
+        setAutostartMessage(undefined);
+      } catch (error) {
+        if (!disposed) {
+          setAutostartStatus("error");
+          setAutostartMessage(`读取失败：${errorMessage(error)}`);
+        }
+      }
+    }
+    window.addEventListener("focus", refreshAutostart);
+    document.addEventListener("visibilitychange", refreshAutostart);
+    return () => {
+      disposed = true;
+      window.removeEventListener("focus", refreshAutostart);
+      document.removeEventListener("visibilitychange", refreshAutostart);
+    };
+  }, [service]);
 
   useEffect(() => {
     function syncDocumentVisibility() {
@@ -386,6 +493,7 @@ function SettingsPage({
       (nextSnapshot) => {
         if (ignore) return;
         setSnapshot(nextSnapshot);
+        setShortcutError(nextSnapshot.shortcutRegistrationError ?? undefined);
         setEditingKey(!nextSnapshot.apiKeyConfigured);
         setLoadStatus("ready");
       },
@@ -485,7 +593,10 @@ function SettingsPage({
     setOperationMessage(undefined);
     setOperationError(undefined);
     try {
-      const nextSnapshot = await service.validateAndSaveApiKey(keyDraft);
+      const nextSnapshot = await trackSettingsOperation(
+        "API Key 操作",
+        () => service.validateAndSaveApiKey(keyDraft),
+      );
       if (
         !isSettingsOperationCurrent(
           mountedRef.current,
@@ -528,7 +639,10 @@ function SettingsPage({
     setOperationMessage(undefined);
     setOperationError(undefined);
     try {
-      const nextSnapshot = await service.clearApiKey();
+      const nextSnapshot = await trackSettingsOperation(
+        "API Key 操作",
+        () => service.clearApiKey(),
+      );
       if (
         !isSettingsOperationCurrent(
           mountedRef.current,
@@ -660,6 +774,10 @@ function SettingsPage({
       return;
     }
     const previous = snapshot.preferences;
+    const shortcutsChanged =
+      next.quickQueryShortcut !== previous.quickQueryShortcut ||
+      next.selectionExplanationShortcut !== previous.selectionExplanationShortcut;
+    if (!desktopSaveCoordinator.recordMutation()) return;
     const requestKey = preferenceKeyRef.current + 1;
     preferenceKeyRef.current = requestKey;
     setPreferenceStatus("loading");
@@ -689,11 +807,44 @@ function SettingsPage({
         setFailedPreferences(outcome.retryPreferences);
         setPreferenceStatus("error");
         setPreferenceMessage(outcome.message);
+        if (shortcutsChanged) {
+          setShortcutError(outcome.message);
+        }
         return;
       }
       setSnapshot((current) =>
         current ? { ...current, preferences: outcome.preferences } : current,
       );
+      if (shortcutsChanged) {
+        try {
+          const refreshed = await service.loadSettings();
+          if (
+            !isSettingsOperationCurrent(
+              mountedRef.current,
+              requestKey,
+              preferenceKeyRef.current,
+            )
+          ) {
+            return;
+          }
+          setSnapshot((current) => current ? {
+            ...current,
+            preferences: outcome.preferences,
+            shortcutRegistrationError: refreshed.shortcutRegistrationError,
+          } : current);
+          setShortcutError(refreshed.shortcutRegistrationError ?? undefined);
+        } catch (error) {
+          if (
+            isSettingsOperationCurrent(
+              mountedRef.current,
+              requestKey,
+              preferenceKeyRef.current,
+            )
+          ) {
+            setShortcutError(`快捷键已保存，但无法读取剩余注册状态：${errorMessage(error)}`);
+          }
+        }
+      }
       setPreferenceStatus("success");
       setPreferenceMessage("已保存并应用。");
     } catch (error) {
@@ -711,6 +862,9 @@ function SettingsPage({
       setPreferenceMessage(
         `保存失败：${errorMessage(error)}`,
       );
+      if (shortcutsChanged) {
+        setShortcutError(`快捷键保存失败：${errorMessage(error)}`);
+      }
     } finally {
       if (
         isSettingsOperationCurrent(
@@ -729,6 +883,55 @@ function SettingsPage({
   function patchPreferences(patch: Partial<AppPreferences>) {
     if (!snapshot) return;
     void savePreferences({ ...snapshot.preferences, ...patch });
+  }
+
+  async function toggleAutostart() {
+    if (!service || !snapshot || autostartStatus === "loading") return;
+    const requested = !snapshot.autostartEnabled;
+    const requestKey = autostartKeyRef.current + 1;
+    autostartKeyRef.current = requestKey;
+    setAutostartStatus("loading");
+    setAutostartMessage(undefined);
+    try {
+      const enabled = await trackSettingsOperation(
+        "开机启动操作",
+        () => service.setAutostartEnabled(requested),
+      );
+      if (
+        !isSettingsOperationCurrent(
+          mountedRef.current,
+          requestKey,
+          autostartKeyRef.current,
+        )
+      ) return;
+      setSnapshot((current) => current ? { ...current, autostartEnabled: enabled } : current);
+      setAutostartStatus("success");
+      setAutostartMessage(enabled ? "已启用 Windows 开机启动。" : "已关闭 Windows 开机启动。");
+    } catch (error) {
+      if (
+        !isSettingsOperationCurrent(
+          mountedRef.current,
+          requestKey,
+          autostartKeyRef.current,
+        )
+      ) return;
+      let detail = errorMessage(error);
+      try {
+        const authoritative = await service.loadAutostartEnabled();
+        if (
+          !isSettingsOperationCurrent(
+            mountedRef.current,
+            requestKey,
+            autostartKeyRef.current,
+          )
+        ) return;
+        setSnapshot((current) => current ? { ...current, autostartEnabled: authoritative } : current);
+      } catch (readError) {
+        detail += `；重新读取失败：${errorMessage(readError)}`;
+      }
+      setAutostartStatus("error");
+      setAutostartMessage(`开机启动修改失败：${detail}`);
+    }
   }
 
   if (!service) {
@@ -868,40 +1071,92 @@ function SettingsPage({
                 </div>
 
                 <div className="rr-settings-group">
-                  <GroupHeading title="全局快捷键" meta="当前只读展示；桌面生命周期任务后开放编辑" />
+                  <GroupHeading title="全局快捷键" meta="按下 Esc 可取消录制" />
                   <div className="rr-settings-panel">
-                    <ShortcutRow name="快速查询" keyName="R" />
-                    <ShortcutRow name="选区解释" keyName="U" />
+                    <ShortcutRow
+                      name="快速查询"
+                      value={snapshot.preferences.quickQueryShortcut}
+                      recording={recordingShortcut === "quickQueryShortcut"}
+                      disabled={preferenceStatus === "loading"}
+                      isDefault={snapshot.preferences.quickQueryShortcut === DEFAULT_APP_PREFERENCES.quickQueryShortcut}
+                      onRecord={() => {
+                        setShortcutError(undefined);
+                        setRecordingShortcut("quickQueryShortcut");
+                      }}
+                      onRestore={() => patchPreferences({
+                        quickQueryShortcut: DEFAULT_APP_PREFERENCES.quickQueryShortcut,
+                      })}
+                    />
+                    <ShortcutRow
+                      name="选区解释"
+                      value={snapshot.preferences.selectionExplanationShortcut}
+                      recording={recordingShortcut === "selectionExplanationShortcut"}
+                      disabled={preferenceStatus === "loading"}
+                      isDefault={snapshot.preferences.selectionExplanationShortcut === DEFAULT_APP_PREFERENCES.selectionExplanationShortcut}
+                      onRecord={() => {
+                        setShortcutError(undefined);
+                        setRecordingShortcut("selectionExplanationShortcut");
+                      }}
+                      onRestore={() => patchPreferences({
+                        selectionExplanationShortcut: DEFAULT_APP_PREFERENCES.selectionExplanationShortcut,
+                      })}
+                    />
                   </div>
+                  {shortcutError ? (
+                    <div className="rr-settings-inline-message is-error" role="alert">
+                      <span>{shortcutError}</span>
+                    </div>
+                  ) : null}
                 </div>
 
                 <div className="rr-settings-group">
-                  <GroupHeading title="启动与关闭" meta="桌面生命周期能力留给后续独立任务" />
+                  <GroupHeading title="启动与关闭" meta="Windows 实际状态与安全退出" />
                   <div className="rr-settings-panel">
                     <div className="rr-settings-row">
-                      <SettingsCopy label="开机启动" />
+                      <SettingsCopy
+                        label="开机启动"
+                        help="开机启动时只运行托盘和全局快捷键，不显示窗口。"
+                      />
                       <div className="rr-settings-stack-control">
                         <div className="rr-settings-control">
                           <button
-                            className="rr-settings-switch"
+                            className={`rr-settings-switch${snapshot.autostartEnabled ? " is-on" : ""}`}
                             type="button"
-                            aria-label="开机启动尚未开放"
-                            disabled
+                            role="switch"
+                            aria-checked={snapshot.autostartEnabled}
+                            aria-label="开机启动"
+                            disabled={autostartStatus === "loading"}
+                            onClick={() => void toggleAutostart()}
                           />
-                          <span>尚未开放</span>
+                          <span>{snapshot.autostartEnabled ? "已开启" : "已关闭"}</span>
                         </div>
+                        {autostartMessage ? (
+                          <div
+                            className={`rr-settings-action-status ${autostartStatus === "error" ? "is-error" : "is-success"}`}
+                            role={autostartStatus === "error" ? "alert" : "status"}
+                          >
+                            {autostartMessage}
+                          </div>
+                        ) : null}
                       </div>
                     </div>
                     <div className="rr-settings-row">
-                      <SettingsCopy label="关闭主窗口时" />
+                      <SettingsCopy
+                        label="关闭主窗口时"
+                        help="选择退出时会先静默保存设置和写作草稿。"
+                      />
                       <div className="rr-settings-stack-control">
                         <select
                           className="rr-settings-select rr-settings-close-select"
                           aria-label="关闭主窗口时"
-                          value="current"
-                          disabled
+                          value={snapshot.preferences.closeBehavior}
+                          disabled={preferenceStatus === "loading"}
+                          onChange={(event) => patchPreferences({
+                            closeBehavior: event.target.value as AppPreferences["closeBehavior"],
+                          })}
                         >
-                          <option value="current">当前窗口行为</option>
+                          <option value="hideToTray">隐藏到托盘</option>
+                          <option value="exit">退出 ReadRay</option>
                         </select>
                       </div>
                     </div>

@@ -4,16 +4,16 @@
 
 ## TL;DR
 
-- 当前状态：阶段一至阶段六已经完成；阶段七设置页的 Key 管理、第一批“官方余额、打开数据目录、SQLite 备份”和第二批“ReadRay 本地 Token 使用量、备份本地日期修复”已经通过审核。第三批“字体/字号与发送快捷键”已实现，正等待独立审核与真实 Tauri 人工验收；桌面生命周期仍未实现，因此阶段七未完成。
+- 当前状态：阶段一至阶段七已经完成；阶段七设置与桌面生命周期已通过复审和真实 Tauri 人工验收。
 - 当前路线：Windows 原生，Tauri + React + TypeScript + Rust + SQLite。
-- 下一步：独立审核并在真实 Tauri 中人工验收第三批字体/字号、重启与跨窗口同步、四处发送方式和中文输入法组合边界；桌面生命周期继续留给后续独立任务。
-- 后续顺序：阶段七完成后进入复习闭环；其后的阶段顺序以 `docs/DEVELOPMENT_PLAN.md` 为准。
+- 下一步：按 `docs/DEVELOPMENT_PLAN.md` 先讨论阶段八复习对象、优先级信号和反馈语义；本次提交不进入阶段八实现。
+- 后续顺序：完成阶段八产品讨论后再实现复习闭环；其后的阶段顺序以 `docs/DEVELOPMENT_PLAN.md` 为准。
 - 当前约束：不使用通用 Agent 框架，不内置商业词典，不做 OCR、本地大模型或跨平台支持。
 - 交接原则：`HANDOFF.md` 只记录会影响下一次恢复上下文的信息，小型文档措辞和格式调整不记录。
 
 ## 当前阶段入口
 
-完整文件职责和按任务检索入口以 `docs/RESOURCE_MAP.yml` 为准；这里仅保留恢复阶段七时最先需要的入口，避免维护第二份资源地图。
+完整文件职责和按任务检索入口以 `docs/RESOURCE_MAP.yml` 为准；这里保留阶段七收口证据及进入阶段八前最先需要的入口，避免维护第二份资源地图。
 
 - `AGENTS.md`：协作规则；开始任务时先读。
 - `docs/DEVELOPMENT_PLAN.md`：项目方向、阶段边界和验收标准的权威来源。
@@ -48,7 +48,7 @@
 - 无选区 overlay 由 `Ctrl+Alt+R` 显式呼出输入态，Esc 或窗口失焦隐藏；输入态/结果态可通过浮层顶部拖动，拖动后的位置会在当前进程内记住；结果态由前端请求 Rust 调整窗口尺寸。
 - 当前窗口位置方案已经接受：无拖动记录时使用屏幕偏上区域作为默认位置，拖动后优先恢复当前进程内记录的位置；现阶段不再继续校准默认位置。
 - Tauri 窗口角色固定为 `main` 与 `overlay`：`main` 加载 `index.html?view=main`，显示在任务栏并允许调整大小；`overlay` 加载 `index.html`，启动隐藏、置顶且跳过任务栏。两类窗口命令按 label 校验，主窗口状态不得写入 overlay 位置缓存。
-- 主窗口关闭策略暂定为隐藏而非退出进程，使全局快捷键和隐藏的 overlay 继续存活；当前没有托盘或“重新打开主窗口”入口，该生命周期缺口留待后续单独处理。
+- 主窗口默认关闭策略为隐藏到托盘，使全局快捷键和隐藏的 overlay 继续存活；设置可改为安全退出。托盘已提供恢复主窗口、快速查询和真正退出三项入口。
 - Windows UIA 捕获必须在 ReadRay show/focus 前完成；`Ctrl+Alt+U` 触发划词捕获并显示选区附近的真实 DeepSeek 解释卡，`Ctrl+Alt+R` 保持无选区居中输入流程。两条链路共享 create_explanation_card，不接 SQLite、OCR 或剪贴板辅助。
 - 正式交互分为两种状态：有选区和 `anchorRect` 时显示锚定结果浮层；无选区时通过快捷键呼出居中输入框，用户手动输入后再切换到结果态。
 - ExplanationCard 是 ReadRay 的中间协议，服务 DeepSeek 结构化输出、compact UI 映射和后续 SQLite 本地记忆；它不是某个前端组件的 props。
@@ -135,9 +135,9 @@
 - 阶段六自动验证已通过：会话前端 18 项、写作前端回归 25 项、完整 Rust 65 项通过且 2 项真实 DeepSeek 联网测试按既有 ignored 标记跳过；`pnpm build`、`cargo fmt --check`、`cargo check`、RESOURCE_MAP YAML 解析和 `git diff --check` 均通过。没有使用浏览器或 Computer Use，也没有启动 Tauri 窗口替代人工验收。
 - 用户已在真实 Tauri 主窗口完成人工验收：全部历史、侧栏与历史页左键打开/右键管理、当前标题原地重命名、删除确认、原生导出及列表同步符合预期；阶段六已正式收口。
 
-### 阶段七：设置页面（第三批待独立审核与人工验收）
+### 阶段七：设置与桌面生命周期（已完成）
 
-- 已按 `design-open-design/readray-settings.html` 把设置入口接入现有 `MainAppShell` / `MainSidebar`，没有复制外壳。视觉返修后保留通用、外观、AI 服务、数据、关于五类导航，以及设计稿的 192px 分类栏、820px 内容列、卡片层级和页面密度。Key、官方余额、四档本地 Token 使用量、SQLite 概览/目录/备份、随包字体许可证、两组字体字号和两种发送快捷键现已形成真实闭环；主题和语言仍只读，固定全局快捷键只展示，桌面生命周期操作继续诚实禁用。
+- 已按 `design-open-design/readray-settings.html` 把设置入口接入现有 `MainAppShell` / `MainSidebar`，没有复制外壳。视觉返修后保留通用、外观、AI 服务、数据、关于五类导航，以及设计稿既有层级和密度。Key、余额、Token、数据、字体字号、发送键三批设置均已完成；本轮只在原先禁用位置接通两组全局快捷键、开机启动和关闭策略，没有重做设置页或 App Shell。
 - 正式前端路径为 `SettingsPage -> SettingsService -> SettingsRepository -> Rust commands`。页面覆盖 loading、读取失败/重试、Key 首次配置、真实验证、成功保存、更新时保留旧配置、失败原地重试、清除确认/失败重试和卸载后迟到结果拒绝；组件不直接 invoke，也不读取 localStorage/sessionStorage。
 - `src-tauri/src/secret_store.rs` 使用 Windows Credential Manager 的 generic credential 持久化 DeepSeek Key；前端快照只返回 configured/source，不返回明文或尾号。清除时先写非敏感禁用标记，再删除已保存 Key，因此开发机 `.env` 不会在清除后偷偷重新生效；保存的新 Key 优先于标记，失败清除不会误报为已停用。
 - 候选 Key 先通过共享 `deepseek_client` 向当前 ReadRay 模型执行真实 `chat/completions` 验证，成功后才写入凭据管理器；失败不会替换现有配置。正常解释、Quick AI 和写作请求已统一改为优先读取安全存储，只有尚未形成保存/清除决定时才兼容开发期 `DEEPSEEK_API_KEY`。
@@ -153,15 +153,18 @@
 - 发送快捷键支持 Enter 发送/Shift+Enter 换行，或 Ctrl+Enter 发送/Enter 换行；今天、完整对话、overlay Quick AI 和写作辅导共用同一 `shouldSendMultilineMessage`，`nativeEvent.isComposing` 为真时始终不发送。单行解释查询未接入该偏好，继续固定 Enter。
 - 设置页响应式规则继续以应用容器为准：1440×900 使用 192px 分类栏；840×600 时分类改为顶部横向，900px 以下表单和数据行纵向排列；全局侧栏仍只按用户操作在 252/72px 间切换。
 - 第三批自动验证通过：设置前端 15 项、会话前端回归 18 项、写作前端回归 25 项；完整 Rust 91 项通过，2 项真实 DeepSeek 联网测试按既有 ignored 标记跳过；`pnpm build`、`cargo fmt --check`、`cargo check`、RESOURCE_MAP YAML 解析和 `git diff --check` 均通过。设置测试覆盖页面卸载后的全局回滚、旧失败与新成功隔离及卸载组件不更新状态；没有使用浏览器、Computer Use 或 Tauri 窗口替代人工验收。
-- 尚未完成：第三批字体/字号、失败回退、重启恢复、主窗口/overlay 同步、四处发送方式和中文输入法组合边界的真实 Tauri 人工验收；桌面生命周期仍未实现。阶段七不得因第三批代码完成而标记完成。
+- 桌面生命周期新增官方 `tauri-plugin-single-instance`、`tauri-plugin-autostart` 和 `tauri` 的 `tray-icon` feature；替代方案分别是自建 Windows mutex/IPC、手写注册表和 Win32 Shell_NotifyIcon，均会复制平台能力。两个插件只在 Rust 使用，未新增前端依赖或 capability；single-instance 按官方要求最先注册，第二进程在 setup/SQLite/托盘前即被拦截，再次手动启动只恢复、显示并聚焦已有 main。
+- 托盘使用现有应用图标，左键恢复主窗口，右键菜单严格只有“打开 ReadRay”“快速查询”“退出 ReadRay”；快速查询复用既有 overlay intent/尺寸/聚焦链路。overlay 失焦/Esc 隐藏和锚定窗口边界未改。main 静态配置先隐藏，手动启动由 Rust setup 正常显示；仅携带专用 autostart 参数时 main/overlay 都保持隐藏。
+- SQLite v7 只向 v6 `app_preferences` 追加 `close_behavior`、`quick_query_shortcut` 和 `selection_explanation_shortcut`，保留同一 revision 权威。开机启动不写 SQLite，设置快照和切换 command 每次读取官方插件的 Windows 实际状态。快捷键运行时元数据同时保存 SQLite 映射、实际 `registered_shortcuts` 和两项独立 startup error；任意偏好保存失败时，物理注册与完整 active 元数据一起恢复，两组快捷键无需重启即可继续响应。启动时两项都冲突也不改写 SQLite；修改一项只尝试注册该项，另一项错误继续显示，之后可单独恢复第二项。
+- 默认关闭 main 隐藏到托盘并保留快捷键和后台保存；选择“退出 ReadRay”后与托盘退出共用安全退出。持续存活的应用级协调器跟踪偏好、Key 保存/清除、开机启动写入并 flush 全部防抖写作草稿，切离 SettingsPage 后仍会等待操作，卸载组件不接收迟到状态；模型请求不加入等待。收到退出请求即激活 mutation gate，并显示阻断交互的“正在保存并退出”，设置和写作编辑入口拒绝新修改，flush 以 generation 确认静默。失败后解除 gate、恢复 main，并提供重试、取消和仍然退出。取消先让 Rust 清除 pending ID；窗口显示/聚焦失败只记录警告并仍返回取消成功，前端失败分支还会重读 pending 状态，避免困在过期请求。
+- 本轮复审修复后自动验证通过：设置/生命周期前端 25 项、会话前端回归 18 项、写作前端回归 26 项；完整 Rust 103 项通过，2 项真实 DeepSeek 联网测试按既有 ignored 标记跳过；`pnpm build`、`cargo fmt --check`、`cargo check`、RESOURCE_MAP YAML 解析和 `git diff --check` 均通过。自动测试未修改本机开机启动项，也没有使用浏览器、Computer Use 或真实 Tauri 窗口替代人工验收。
+- 阶段七复审与真实 Tauri 人工验收已经通过：托盘左右键与菜单、两种关闭策略、安全退出成功/失败/取消/强制退出、开机启动注册/注销及隐藏启动、第二次手动启动恢复、快捷键录制/冲突/逐项恢复/重启恢复，以及隐藏主窗口后的快捷键和后台自动保存均已验收；阶段七正式收口。
 
 ## 下一步
 
-阶段六已经完成，阶段七前两批已经通过审核；第三批字体/字号与发送快捷键正等待独立审核和真实 Tauri 人工验收。阶段七状态不变，桌面生命周期留给后续独立任务。
+阶段一至阶段七已经完成。下一步进入阶段八前的产品讨论，本交接不代表已授权阶段八实现。
 
-- 本批独立审核应重点检查 v6 只追加 migration、偏好 revision 与失败回读、前端迟到结果守卫、主窗口/overlay 重载路径、字体变量作用域，以及四处发送判断是否确实共用并覆盖 IME；不得把单行解释查询或桌面生命周期混入。
-- 用户人工验收在真实 Tauri 中覆盖两组字体、字号边界和恢复默认；保存失败后的数据库值恢复；应用重启与 overlay 隐藏/重现后的同步；四处切换两种发送方式，并用中文输入法候选确认 Enter 不误发送。人工验收前不要把第三批写成已验收。
-- 后续桌面生命周期任务在现有主窗口与 overlay 边界上独立实现快捷键管理、开机启动、关闭/隐藏、托盘退出、单实例和重新打开主窗口；不得因设置页已有说明文字而视为接线。
+- 阶段八实现前先讨论复习对象、真实优先级信号、“记得/忘了”的反馈语义，以及复习与历史浏览的边界。
 - 新环境仍可复制 `.env.example` 为 `.env` 填写开发期 `DEEPSEEK_API_KEY`；用户在设置页保存或清除后，以 Windows 安全存储中的持久化决定为准。真实 `.env` 不提交。
 
 ## 当前已知限制与后续边界
@@ -177,7 +180,7 @@
 - **阶段八边界**：记忆页还不能可靠生成重复出现次数或时间线，“过去的出现”入口保持隐藏；复习、去重和长期记忆留到对应阶段统一设计。
 - **后续体验优化**：Quick AI 当前按纯文本、非流式展示，模型仍可能返回 Markdown 标记；Markdown 渲染/规范化、真正流式输出和更可靠的对话策略不自动并入阶段六。
 - **对话后续边界**：阶段六的查看全部、重命名、删除和原生导出已经完成；回答重生成和记忆引用聚合属于更后续能力，当前 UI 继续诚实禁用。
-- **阶段七范围**：Key 管理、第一批余额/目录/备份和第二批本地 Token 使用量/备份本地日期修复已经验收；第三批字体/字号与发送快捷键已经接线，正等待独立审核和真实 Tauri 人工验收。主窗口关闭后仍只隐藏并保留后台快捷键，托盘、单实例、开机启动、关闭策略和重新显示主窗口入口尚未形成完整桌面生命周期，留给后续独立任务。
+- **阶段七范围**：三批设置功能与桌面生命周期已经通过复审和真实 Tauri 人工验收，阶段七已完成；本次收口未进入阶段八。
 
 ## 暂时不要做
 

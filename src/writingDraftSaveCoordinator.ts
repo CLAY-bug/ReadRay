@@ -104,6 +104,28 @@ export class WritingDraftSaveCoordinator {
     return this.drain(documentId);
   }
 
+  async flushAll() {
+    const failures: string[] = [];
+    for (const [documentId, state] of this.states) {
+      if (!state.pending && !state.inFlight) continue;
+      try {
+        const saved = await this.flush(documentId);
+        if (!saved) {
+          failures.push(
+            `文章 ${documentId}：${state.lastError ?? "草稿仍未保存。"}`,
+          );
+        }
+      } catch (error) {
+        failures.push(
+          `文章 ${documentId}：${error instanceof Error ? error.message : String(error)}`,
+        );
+      }
+    }
+    if (failures.length) {
+      throw new Error(failures.join("；"));
+    }
+  }
+
   async retry(documentId: number) {
     const state = this.requireState(documentId);
     state.lastError = undefined;

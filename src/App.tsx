@@ -52,6 +52,11 @@ import {
   type SettingsService,
 } from "./settingsService";
 import { useAppPreferences } from "./useAppPreferences";
+import {
+  desktopSaveCoordinator,
+  runForcedExit,
+  runSafeExit,
+} from "./desktopLifecycle";
 import "./App.css";
 import "./styles/main-app.css";
 import "./styles/conversation-page.css";
@@ -68,6 +73,14 @@ type CheckResult = {
 type WindowState = {
   visible: boolean;
   alwaysOnTop: boolean;
+};
+
+type SafeExitRequest = { requestId: number };
+
+type SafeExitFailure = {
+  requestId: number;
+  message?: string;
+  retrying: boolean;
 };
 
 const MAIN_APP_DESIGN_WIDTH = 1440;
@@ -1029,6 +1042,83 @@ function MainAppWindow() {
       : null,
   );
   const { preferences, savePreferences } = useAppPreferences(settingsService);
+  const [safeExitFailure, setSafeExitFailure] = useState<SafeExitFailure>();
+  const safeExitGenerationRef = useRef(0);
+  const handledSafeExitRequestRef = useRef<number | undefined>(undefined);
+
+  const performSafeExit = useCallback(async (requestId: number) => {
+    const generation = safeExitGenerationRef.current + 1;
+    safeExitGenerationRef.current = generation;
+    try {
+      desktopSaveCoordinator.beginExit(requestId);
+    } catch (error) {
+      setSafeExitFailure({
+        requestId,
+        message: formatError(error),
+        retrying: false,
+      });
+      return;
+    }
+    setSafeExitFailure({ requestId, retrying: true });
+    const outcome = await runSafeExit(requestId, {
+      flush: () => desktopSaveCoordinator.flushAll(),
+      complete: (currentRequestId) =>
+        invoke<void>("complete_app_exit", { requestId: currentRequestId }),
+      isCurrent: () => safeExitGenerationRef.current === generation,
+    });
+    if (outcome.status === "failed") {
+      desktopSaveCoordinator.endExit(requestId);
+      await invoke<void>("restore_main_window").catch((error) => {
+        console.error("ReadRay 退出失败后恢复主窗口失败：", error);
+      });
+      if (safeExitGenerationRef.current === generation) {
+        setSafeExitFailure({
+          requestId,
+          message: outcome.message,
+          retrying: false,
+        });
+      }
+    } else if (outcome.status === "stale") {
+      desktopSaveCoordinator.endExit(requestId);
+    }
+  }, []);
+
+  const handleSafeExitRequest = useCallback((requestId: number) => {
+    if (handledSafeExitRequestRef.current === requestId) return;
+    handledSafeExitRequestRef.current = requestId;
+    void performSafeExit(requestId);
+  }, [performSafeExit]);
+
+  useEffect(() => {
+    if (!isTauriRuntime) {
+      return;
+    }
+
+    let disposed = false;
+    let unlisten: (() => void) | undefined;
+    void listen<SafeExitRequest>("readray://safe-exit-requested", (event) => {
+      if (!disposed) handleSafeExitRequest(event.payload.requestId);
+    }).then((cleanup) => {
+      if (disposed) {
+        cleanup();
+      } else {
+        unlisten = cleanup;
+        void invoke<number | null>("get_pending_app_exit_request").then(
+          (requestId) => {
+            if (!disposed && requestId !== null) handleSafeExitRequest(requestId);
+          },
+          (error) => console.error("ReadRay 待处理退出请求读取失败：", error),
+        );
+      }
+    }).catch((error) => {
+      console.error("ReadRay 安全退出监听失败：", error);
+    });
+    return () => {
+      disposed = true;
+      safeExitGenerationRef.current += 1;
+      unlisten?.();
+    };
+  }, [handleSafeExitRequest, isTauriRuntime]);
 
   useEffect(() => {
     if (!isTauriRuntime) {
@@ -1205,8 +1295,68 @@ function MainAppWindow() {
     }
   }, [runMainWindowCommand]);
 
+  const forceExit = useCallback(async () => {
+    const failure = safeExitFailure;
+    if (!failure) return;
+    const confirmed = window.confirm(
+      "仍然退出 ReadRay？尚未落盘的设置或写作修改可能丢失。",
+    );
+    if (!confirmed) return;
+    safeExitGenerationRef.current += 1;
+    setSafeExitFailure({ ...failure, retrying: true });
+    try {
+      desktopSaveCoordinator.beginExit(failure.requestId);
+      await runForcedExit(failure.requestId, true, (requestId) =>
+        invoke<void>("force_app_exit", { requestId }),
+      );
+    } catch (error) {
+      desktopSaveCoordinator.endExit(failure.requestId);
+      setSafeExitFailure({
+        ...failure,
+        retrying: false,
+        message: `仍然退出失败：${formatError(error)}`,
+      });
+    }
+  }, [safeExitFailure]);
+
+  const cancelExit = useCallback(async () => {
+    const failure = safeExitFailure;
+    if (!failure) return;
+    safeExitGenerationRef.current += 1;
+    setSafeExitFailure({ ...failure, retrying: true });
+    try {
+      desktopSaveCoordinator.beginExit(failure.requestId);
+      await invoke<void>("cancel_app_exit", { requestId: failure.requestId });
+      desktopSaveCoordinator.endExit(failure.requestId);
+      handledSafeExitRequestRef.current = undefined;
+      setSafeExitFailure(undefined);
+    } catch (error) {
+      desktopSaveCoordinator.endExit(failure.requestId);
+      let pendingRequestId: number | null | undefined;
+      try {
+        pendingRequestId = await invoke<number | null>(
+          "get_pending_app_exit_request",
+        );
+      } catch (readError) {
+        console.error("ReadRay 取消退出失败后读取 pending 状态失败：", readError);
+      }
+      if (pendingRequestId !== undefined && pendingRequestId !== failure.requestId) {
+        desktopSaveCoordinator.endExit(failure.requestId);
+        handledSafeExitRequestRef.current = undefined;
+        setSafeExitFailure(undefined);
+        return;
+      }
+      setSafeExitFailure({
+        ...failure,
+        retrying: false,
+        message: `取消退出失败：${formatError(error)}`,
+      });
+    }
+  }, [safeExitFailure]);
+
   const mainApp = (
-    <MainAppShell
+    <>
+      <MainAppShell
       viewModel={mainAppViewModel}
       memoryViewModel={memoryPageViewModel}
       memoryService={memoryService}
@@ -1219,6 +1369,7 @@ function MainAppWindow() {
       settingsService={settingsService}
       preferences={preferences}
       onPreferencesSave={savePreferences}
+      interactionBlocked={safeExitFailure?.retrying === true}
       isMaximized={isMaximized}
       onStartDragging={() => {
         void runMainWindowCommand("start_main_window_drag");
@@ -1228,9 +1379,57 @@ function MainAppWindow() {
       }}
       onToggleMaximize={toggleMaximized}
       onClose={() => {
-        void runMainWindowCommand("hide_main_window");
+        void runMainWindowCommand("apply_main_window_close_behavior");
       }}
-    />
+      />
+      {safeExitFailure ? (
+        <div className="rr-safe-exit-backdrop" role="presentation">
+          <section
+            className="rr-safe-exit-dialog"
+            role={safeExitFailure.message ? "alertdialog" : "dialog"}
+            aria-modal="true"
+            aria-labelledby="rr-safe-exit-title"
+            aria-describedby="rr-safe-exit-message"
+          >
+            <h2 id="rr-safe-exit-title">
+              {safeExitFailure.message
+                ? "保存失败，ReadRay 尚未退出"
+                : "正在保存并退出"}
+            </h2>
+            <p id="rr-safe-exit-message">
+              {safeExitFailure.message ?? "正在等待设置操作和写作草稿安全落盘…"}
+            </p>
+            {safeExitFailure.message ? <div className="rr-safe-exit-actions">
+              <button
+                type="button"
+                disabled={safeExitFailure.retrying}
+                onClick={() => void performSafeExit(safeExitFailure.requestId)}
+              >
+                {safeExitFailure.retrying ? "正在重试…" : "重试保存"}
+              </button>
+              <button
+                type="button"
+                disabled={safeExitFailure.retrying}
+                onClick={() => void cancelExit()}
+              >
+                取消退出，继续使用
+              </button>
+              <button
+                className="is-danger"
+                type="button"
+                disabled={safeExitFailure.retrying}
+                onClick={() => void forceExit()}
+              >
+                仍然退出
+              </button>
+            </div> : null}
+            {safeExitFailure.message ? (
+              <small>仍然退出可能丢失尚未落盘的修改。</small>
+            ) : null}
+          </section>
+        </div>
+      ) : null}
+    </>
   );
 
   if (isTauriRuntime) {

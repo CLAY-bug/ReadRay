@@ -410,6 +410,16 @@
   content: "";
 }
 
+.rr-settings-switch.is-on {
+  background: var(--rr-main-accent) !important;
+  opacity: 1;
+}
+
+.rr-settings-switch.is-on::after {
+  left: 19px;
+  background: #fff;
+}
+
 .rr-settings-future-note {
   display: flex;
   align-items: flex-start;

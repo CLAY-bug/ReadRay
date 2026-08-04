@@ -492,6 +492,31 @@ test("防抖自动保存只提交最新正文并推进数据库 revision", async
   assert.equal(saved[0].draftSnapshot.title, "Latest");
 });
 
+test("应用安全退出会 flush 所有文档的防抖草稿", async () => {
+  const calls = [];
+  const coordinator = new WritingDraftSaveCoordinator(
+    {
+      saveDraft: async (documentId, expectedRevision, nextSnapshot) => {
+        calls.push(documentId);
+        return documentRecord({
+          id: documentId,
+          revision: expectedRevision + 1,
+          draftSnapshot: nextSnapshot,
+        });
+      },
+    },
+    { delayMs: 10_000 },
+  );
+  coordinator.register(documentRecord({ id: 17 }));
+  coordinator.register(documentRecord({ id: 18, revision: 5 }));
+  coordinator.schedule(17, snapshot("One", "First"));
+  coordinator.schedule(18, snapshot("Two", "Second"));
+  await coordinator.flushAll();
+  assert.deepEqual(calls.sort((a, b) => a - b), [17, 18]);
+  assert.equal(coordinator.currentRevision(17), 3);
+  assert.equal(coordinator.currentRevision(18), 6);
+});
+
 test("切换 flush、失败重试和 dispose 均保留文章身份与最新正文", async () => {
   let attempts = 0;
   const calls = [];

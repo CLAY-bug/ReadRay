@@ -11,6 +11,7 @@ import {
   AppPreferenceSaveCoordinator,
   type AppPreferenceSaveOutcome,
 } from "./appPreferenceSaveCoordinator";
+import { desktopSaveCoordinator } from "./desktopLifecycle";
 
 export function useAppPreferences(service: SettingsService | null) {
   const [preferences, setPreferences] = useState<AppPreferences>(
@@ -89,6 +90,14 @@ export function useAppPreferences(service: SettingsService | null) {
       saveCoordinator?.dispose();
     };
   }, [reload, saveCoordinator]);
+
+  useEffect(() => {
+    if (!saveCoordinator) return;
+    return desktopSaveCoordinator.register({
+      label: "设置保存",
+      flush: () => saveCoordinator.flush(),
+    });
+  }, [saveCoordinator]);
 
   useEffect(() => {
     if (!service) return;

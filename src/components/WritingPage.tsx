@@ -10,6 +10,7 @@ import {
   WritingDraftSaveCoordinator,
   type WritingSaveState,
 } from "../writingDraftSaveCoordinator";
+import { desktopSaveCoordinator } from "../desktopLifecycle";
 import { loadWritingLibrary } from "../writingLibraryLoader";
 import {
   captureWritingRequestIdentity,
@@ -241,10 +242,15 @@ function WritingPage({
       },
     });
     saveCoordinatorRef.current = coordinator;
+    const unregisterExitFlusher = desktopSaveCoordinator.register({
+      label: "写作草稿",
+      flush: () => coordinator.flushAll(),
+    });
     if (activeDocumentRef.current) {
       coordinator.register(activeDocumentRef.current);
     }
     return () => {
+      unregisterExitFlusher();
       if (saveCoordinatorRef.current === coordinator) {
         saveCoordinatorRef.current = null;
       }
@@ -523,6 +529,10 @@ function WritingPage({
   function handleEditorChange(nextSnapshot: WritingSnapshot) {
     const document = activeDocumentRef.current;
     if (!document?.draftSnapshot) {
+      return;
+    }
+    if (!desktopSaveCoordinator.recordMutation()) {
+      setResetKey((key) => key + 1);
       return;
     }
     localEditGenerationRef.current += 1;

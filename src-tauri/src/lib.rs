@@ -4,12 +4,14 @@ use std::path::PathBuf;
 use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, Instant};
 use tauri::{
-    LogicalPosition, LogicalSize, PhysicalPosition, PhysicalSize, WebviewWindow, WindowEvent,
+    Emitter, LogicalPosition, LogicalSize, Manager, PhysicalPosition, PhysicalSize, WebviewWindow,
+    WindowEvent,
 };
 
 pub mod conversations;
 pub mod deepseek_client;
 pub mod deepseek_explanation;
+pub mod desktop_lifecycle;
 pub mod explanation;
 pub mod learning_records;
 pub mod model_usage;
@@ -20,7 +22,6 @@ pub mod settings;
 pub mod windows_uia;
 pub mod writing;
 
-const READRAY_SHORTCUT_LABEL: &str = "Ctrl+Alt+R";
 const MAIN_WINDOW_LABEL: &str = "main";
 const OVERLAY_WINDOW_LABEL: &str = "overlay";
 pub(crate) const DEEPSEEK_BASE_URL: &str = "https://api.deepseek.com";
@@ -379,6 +380,17 @@ fn show_and_focus(window: &WebviewWindow) -> Result<(), String> {
     Ok(())
 }
 
+pub(crate) fn wake_quick_query(app: &tauri::AppHandle) -> Result<(), String> {
+    let window = app
+        .get_webview_window(OVERLAY_WINDOW_LABEL)
+        .ok_or_else(|| "ReadRay overlay 窗口不存在。".to_string())?;
+    set_pending_overlay_intent(OverlayIntent::show_input())?;
+    resize_overlay_window(&window, OverlayWindowStage::Input)?;
+    show_and_focus(&window)?;
+    app.emit_to(OVERLAY_WINDOW_LABEL, "readray://overlay-intent", ())
+        .map_err(tauri_err)
+}
+
 fn toggle_window_visibility(window: &WebviewWindow) -> Result<bool, String> {
     let visible = window.is_visible().map_err(tauri_err)?;
 
@@ -404,7 +416,7 @@ fn stage1_status(window: tauri::WebviewWindow) -> Result<WindowState, String> {
 
 #[tauri::command]
 fn shortcut_label() -> &'static str {
-    READRAY_SHORTCUT_LABEL
+    desktop_lifecycle::DEFAULT_QUICK_QUERY_SHORTCUT
 }
 
 #[tauri::command]
@@ -710,27 +722,28 @@ pub fn run() {
     #[cfg(desktop)]
     use tauri::Manager;
     #[cfg(desktop)]
-    use tauri_plugin_global_shortcut::{
-        Code, GlobalShortcutExt, Modifiers, Shortcut, ShortcutState,
-    };
-
-    #[cfg(desktop)]
-    let readray_shortcut = Shortcut::new(Some(Modifiers::CONTROL | Modifiers::ALT), Code::KeyR);
-    #[cfg(desktop)]
-    let registered_shortcut = readray_shortcut.clone();
-    #[cfg(all(desktop, target_os = "windows"))]
-    let uia_capture_shortcut = Shortcut::new(Some(Modifiers::CONTROL | Modifiers::ALT), Code::KeyU);
-    #[cfg(all(desktop, target_os = "windows"))]
-    let registered_uia_capture_shortcut = uia_capture_shortcut.clone();
+    use tauri_plugin_global_shortcut::ShortcutState;
 
     tauri::Builder::default()
+        .plugin(tauri_plugin_single_instance::init(|app, argv, _cwd| {
+            if !argv
+                .iter()
+                .any(|argument| argument == desktop_lifecycle::AUTOSTART_ARGUMENT)
+            {
+                if let Err(error) = desktop_lifecycle::show_main_window(app) {
+                    eprintln!("READRAY_SINGLE_INSTANCE_RESTORE_ERROR={error}");
+                }
+            }
+        }))
         .plugin(tauri_plugin_clipboard_manager::init())
         .plugin(
             #[cfg(desktop)]
             tauri_plugin_global_shortcut::Builder::new()
                 .with_handler(move |app, shortcut, event| {
                     #[cfg(target_os = "windows")]
-                    if shortcut == &uia_capture_shortcut {
+                    if desktop_lifecycle::shortcut_action(shortcut)
+                        == Some(desktop_lifecycle::ShortcutAction::SelectionExplanation)
+                    {
                         match event.state() {
                             ShortcutState::Pressed => {
                                 let capture = windows_uia::capture_foreground();
@@ -803,37 +816,23 @@ pub fn run() {
                         return;
                     }
 
-                    if shortcut == &readray_shortcut
+                    if desktop_lifecycle::shortcut_action(shortcut)
+                        == Some(desktop_lifecycle::ShortcutAction::QuickQuery)
                         && matches!(event.state(), ShortcutState::Released)
                     {
                         eprintln!("READRAY_OVERLAY_SHORTCUT=released");
-                        if let Some(window) = app.get_webview_window(OVERLAY_WINDOW_LABEL) {
-                            if let Err(error) =
-                                set_pending_overlay_intent(OverlayIntent::show_input())
-                            {
-                                eprintln!("READRAY_OVERLAY_INTENT_ERROR={error}");
-                                return;
-                            }
-                            if let Err(error) =
-                                resize_overlay_window(&window, OverlayWindowStage::Input)
-                            {
-                                eprintln!("READRAY_OVERLAY_RESIZE_ERROR={error}");
-                            }
-                            if let Err(error) = show_and_focus(&window) {
-                                eprintln!("READRAY_OVERLAY_SHOW_ERROR={error}");
-                            } else {
-                                eprintln!("READRAY_OVERLAY_SHOW=ok");
-                            }
-                            if let Err(error) =
-                                app.emit_to(OVERLAY_WINDOW_LABEL, "readray://overlay-intent", ())
-                            {
-                                eprintln!("READRAY_OVERLAY_INTENT_EMIT_ERROR={error}");
-                            }
+                        if let Err(error) = wake_quick_query(app) {
+                            eprintln!("READRAY_OVERLAY_SHOW_ERROR={error}");
                         } else {
-                            eprintln!("READRAY_OVERLAY_WINDOW_MISSING");
+                            eprintln!("READRAY_OVERLAY_SHOW=ok");
                         }
                     }
                 })
+                .build(),
+        )
+        .plugin(
+            tauri_plugin_autostart::Builder::new()
+                .arg(desktop_lifecycle::AUTOSTART_ARGUMENT)
                 .build(),
         )
         .plugin(tauri_plugin_opener::init())
@@ -843,10 +842,20 @@ pub fn run() {
 
             #[cfg(desktop)]
             {
-                app.global_shortcut().register(registered_shortcut)?;
-                #[cfg(target_os = "windows")]
-                app.global_shortcut()
-                    .register(registered_uia_capture_shortcut)?;
+                settings::initialize_desktop_preferences(app.handle())
+                    .map_err(std::io::Error::other)?;
+                desktop_lifecycle::setup_tray(app).map_err(std::io::Error::other)?;
+                if desktop_lifecycle::launched_from_autostart() {
+                    if let Some(main) = app.get_webview_window(MAIN_WINDOW_LABEL) {
+                        let _ = main.hide();
+                    }
+                    if let Some(overlay) = app.get_webview_window(OVERLAY_WINDOW_LABEL) {
+                        let _ = overlay.hide();
+                    }
+                } else {
+                    desktop_lifecycle::show_main_window(app.handle())
+                        .map_err(std::io::Error::other)?;
+                }
             }
 
             Ok(())
@@ -863,7 +872,7 @@ pub fn run() {
             }
             WindowEvent::CloseRequested { api, .. } if window.label() == MAIN_WINDOW_LABEL => {
                 api.prevent_close();
-                let _ = window.hide();
+                desktop_lifecycle::handle_main_close(window.app_handle(), window);
             }
             WindowEvent::CloseRequested { api, .. } if window.label() == OVERLAY_WINDOW_LABEL => {
                 api.prevent_close();
@@ -913,6 +922,8 @@ pub fn run() {
             settings::get_settings_snapshot,
             settings::get_app_preferences,
             settings::update_app_preferences,
+            settings::get_autostart_enabled,
+            settings::set_autostart_enabled,
             settings::validate_and_save_deepseek_api_key,
             settings::clear_deepseek_api_key,
             settings::get_deepseek_balance,
@@ -927,7 +938,14 @@ pub fn run() {
             writing::complete_writing_document,
             writing::continue_writing_document,
             writing::analyze_writing_document,
-            writing::ask_writing_question
+            writing::ask_writing_question,
+            desktop_lifecycle::request_app_exit,
+            desktop_lifecycle::get_pending_app_exit_request,
+            desktop_lifecycle::restore_main_window,
+            desktop_lifecycle::cancel_app_exit,
+            desktop_lifecycle::complete_app_exit,
+            desktop_lifecycle::force_app_exit,
+            desktop_lifecycle::apply_main_window_close_behavior
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

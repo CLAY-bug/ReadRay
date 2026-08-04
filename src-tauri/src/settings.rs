@@ -1,7 +1,7 @@
 use crate::deepseek_client::{
     configured_model, get_deepseek_json, post_chat_completion_with_api_key,
 };
-use crate::{learning_records, secret_store};
+use crate::{desktop_lifecycle, learning_records, secret_store};
 use rusqlite::{params, Connection, OpenFlags};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -11,6 +11,7 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 use tauri::{AppHandle, Emitter, Manager};
+use tauri_plugin_autostart::ManagerExt as AutostartManagerExt;
 use tauri_plugin_opener::OpenerExt;
 
 static BACKUP_TEMP_COUNTER: AtomicU64 = AtomicU64::new(0);
@@ -27,6 +28,8 @@ pub struct SettingsSnapshot {
     writing_document_count: i64,
     app_version: String,
     preferences: AppPreferences,
+    autostart_enabled: bool,
+    shortcut_registration_error: Option<String>,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq, Serialize)]
@@ -84,6 +87,30 @@ pub enum SendShortcut {
     CtrlEnter,
 }
 
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum CloseBehavior {
+    HideToTray,
+    Exit,
+}
+
+impl CloseBehavior {
+    fn storage_value(self) -> &'static str {
+        match self {
+            Self::HideToTray => "hide_to_tray",
+            Self::Exit => "exit",
+        }
+    }
+
+    fn from_storage(value: &str) -> Result<Self, String> {
+        match value {
+            "hide_to_tray" => Ok(Self::HideToTray),
+            "exit" => Ok(Self::Exit),
+            _ => Err("数据库包含未知的主窗口关闭策略。".to_string()),
+        }
+    }
+}
+
 impl SendShortcut {
     fn storage_value(self) -> &'static str {
         match self {
@@ -104,12 +131,15 @@ impl SendShortcut {
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct AppPreferences {
-    revision: i64,
+    pub(crate) revision: i64,
     ui_font: UiFont,
     ui_font_size: i64,
     learning_font: LearningFont,
     learning_font_size: i64,
     send_shortcut: SendShortcut,
+    pub(crate) close_behavior: CloseBehavior,
+    pub(crate) quick_query_shortcut: String,
+    pub(crate) selection_explanation_shortcut: String,
 }
 
 impl Default for AppPreferences {
@@ -121,6 +151,10 @@ impl Default for AppPreferences {
             learning_font: LearningFont::NewsreaderSourceHanSerif,
             learning_font_size: 17,
             send_shortcut: SendShortcut::Enter,
+            close_behavior: CloseBehavior::HideToTray,
+            quick_query_shortcut: desktop_lifecycle::DEFAULT_QUICK_QUERY_SHORTCUT.to_string(),
+            selection_explanation_shortcut:
+                desktop_lifecycle::DEFAULT_SELECTION_EXPLANATION_SHORTCUT.to_string(),
         }
     }
 }
@@ -135,13 +169,18 @@ fn validate_app_preferences(preferences: &AppPreferences) -> Result<(), String> 
     if !(14..=24).contains(&preferences.learning_font_size) {
         return Err("学习内容字号必须在 14–24 px 之间。".to_string());
     }
+    desktop_lifecycle::validate_shortcut_pair(
+        &preferences.quick_query_shortcut,
+        &preferences.selection_explanation_shortcut,
+    )?;
     Ok(())
 }
 
 fn read_app_preferences(connection: &Connection) -> Result<AppPreferences, String> {
     let stored = connection
         .query_row(
-            "SELECT revision, ui_font, ui_font_size, learning_font, learning_font_size, send_shortcut \
+            "SELECT revision, ui_font, ui_font_size, learning_font, learning_font_size, send_shortcut, \
+                    close_behavior, quick_query_shortcut, selection_explanation_shortcut \
              FROM app_preferences WHERE id = 1",
             [],
             |row| {
@@ -152,6 +191,9 @@ fn read_app_preferences(connection: &Connection) -> Result<AppPreferences, Strin
                     row.get::<_, String>(3)?,
                     row.get::<_, i64>(4)?,
                     row.get::<_, String>(5)?,
+                    row.get::<_, String>(6)?,
+                    row.get::<_, String>(7)?,
+                    row.get::<_, String>(8)?,
                 ))
             },
         )
@@ -163,6 +205,9 @@ fn read_app_preferences(connection: &Connection) -> Result<AppPreferences, Strin
         learning_font: LearningFont::from_storage(&stored.3)?,
         learning_font_size: stored.4,
         send_shortcut: SendShortcut::from_storage(&stored.5)?,
+        close_behavior: CloseBehavior::from_storage(&stored.6)?,
+        quick_query_shortcut: stored.7,
+        selection_explanation_shortcut: stored.8,
     };
     validate_app_preferences(&preferences)?;
     Ok(preferences)
@@ -180,14 +225,19 @@ fn save_app_preferences(
         .execute(
             "UPDATE app_preferences \
              SET revision = revision + 1, ui_font = ?1, ui_font_size = ?2, \
-                 learning_font = ?3, learning_font_size = ?4, send_shortcut = ?5 \
-             WHERE id = 1 AND revision = ?6",
+                 learning_font = ?3, learning_font_size = ?4, send_shortcut = ?5, \
+                 close_behavior = ?6, quick_query_shortcut = ?7, \
+                 selection_explanation_shortcut = ?8 \
+             WHERE id = 1 AND revision = ?9",
             params![
                 preferences.ui_font.storage_value(),
                 preferences.ui_font_size,
                 preferences.learning_font.storage_value(),
                 preferences.learning_font_size,
                 preferences.send_shortcut.storage_value(),
+                preferences.close_behavior.storage_value(),
+                preferences.quick_query_shortcut,
+                preferences.selection_explanation_shortcut,
                 preferences.revision,
             ],
         )
@@ -200,6 +250,14 @@ fn save_app_preferences(
         .commit()
         .map_err(|error| format!("无法提交 ReadRay 偏好设置：{error}"))?;
     Ok(saved)
+}
+
+fn is_expected_saved_candidate(authority: &AppPreferences, candidate: &AppPreferences) -> bool {
+    authority
+        == &AppPreferences {
+            revision: candidate.revision + 1,
+            ..candidate.clone()
+        }
 }
 
 #[derive(Deserialize)]
@@ -388,6 +446,8 @@ fn settings_snapshot(app: &AppHandle) -> Result<SettingsSnapshot, String> {
         writing_document_count: counts.writing_documents,
         app_version: app.package_info().version.to_string(),
         preferences,
+        autostart_enabled: read_autostart_enabled(app)?,
+        shortcut_registration_error: desktop_lifecycle::shortcut_registration_error(),
     })
 }
 
@@ -575,9 +635,77 @@ pub fn update_app_preferences(
     preferences: AppPreferences,
 ) -> Result<AppPreferences, String> {
     let mut connection = learning_records::open_database_for_app(&app)?;
-    let saved = save_app_preferences(&mut connection, &preferences)?;
+    let current = read_app_preferences(&connection)?;
+    if current.revision != preferences.revision {
+        return Err("设置已在另一个窗口更新，请重试。".to_string());
+    }
+    let staged = desktop_lifecycle::stage_runtime_preferences(&app, &current, &preferences)?;
+    let saved = match save_app_preferences(&mut connection, &preferences) {
+        Ok(saved) => saved,
+        Err(error) => {
+            match read_app_preferences(&connection) {
+                Ok(authority) if is_expected_saved_candidate(&authority, &preferences) => {
+                    desktop_lifecycle::commit_runtime_preferences(staged, &authority)?;
+                    let _ = app.emit("readray://app-preferences-updated", &authority);
+                    return Ok(authority);
+                }
+                Ok(_) => {}
+                Err(read_error) => {
+                    return Err(desktop_lifecycle::rollback_runtime_preferences(
+                        &app,
+                        staged,
+                        format!("{error}；提交失败后重新读取 SQLite 失败：{read_error}"),
+                    ));
+                }
+            }
+            return Err(desktop_lifecycle::rollback_runtime_preferences(
+                &app, staged, error,
+            ));
+        }
+    };
+    desktop_lifecycle::commit_runtime_preferences(staged, &saved)?;
     let _ = app.emit("readray://app-preferences-updated", &saved);
     Ok(saved)
+}
+
+fn map_autostart_status(result: Result<bool, impl std::fmt::Display>) -> Result<bool, String> {
+    result.map_err(|error| format!("无法读取 Windows 开机启动状态：{error}"))
+}
+
+fn read_autostart_enabled(app: &AppHandle) -> Result<bool, String> {
+    map_autostart_status(app.autolaunch().is_enabled())
+}
+
+#[tauri::command]
+pub fn get_autostart_enabled(app: AppHandle) -> Result<bool, String> {
+    read_autostart_enabled(&app)
+}
+
+#[tauri::command]
+pub fn set_autostart_enabled(app: AppHandle, enabled: bool) -> Result<bool, String> {
+    let manager = app.autolaunch();
+    let current = map_autostart_status(manager.is_enabled())?;
+    if current != enabled {
+        if enabled {
+            manager
+                .enable()
+                .map_err(|error| format!("无法启用 Windows 开机启动：{error}"))?;
+        } else {
+            manager
+                .disable()
+                .map_err(|error| format!("无法关闭 Windows 开机启动：{error}"))?;
+        }
+    }
+    let authoritative = map_autostart_status(manager.is_enabled())?;
+    if authoritative != enabled {
+        return Err("Windows 返回的开机启动状态与请求不一致。".to_string());
+    }
+    Ok(authoritative)
+}
+
+pub(crate) fn initialize_desktop_preferences(app: &AppHandle) -> Result<(), String> {
+    let preferences = read_app_preferences(&learning_records::open_database_for_app(app)?)?;
+    desktop_lifecycle::initialize_runtime_preferences(app, &preferences)
 }
 
 #[tauri::command]
@@ -687,7 +815,18 @@ mod tests {
             writing_document_count: 3,
             app_version: "0.1.0".to_string(),
             preferences: AppPreferences::default(),
+            autostart_enabled: false,
+            shortcut_registration_error: None,
         }
+    }
+
+    #[test]
+    fn autostart_state_mapping_preserves_windows_authority_and_errors() {
+        assert!(!map_autostart_status(Ok::<bool, &str>(false)).unwrap());
+        assert!(map_autostart_status(Ok::<bool, &str>(true)).unwrap());
+        assert!(map_autostart_status(Err::<bool, &str>("access denied"))
+            .unwrap_err()
+            .contains("access denied"));
     }
 
     #[test]
@@ -785,6 +924,31 @@ mod tests {
 
         drop(connection);
         let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn ambiguous_preference_save_only_confirms_matching_advanced_authority() {
+        let candidate = AppPreferences {
+            revision: 3,
+            quick_query_shortcut: "Ctrl+Shift+R".to_string(),
+            ..AppPreferences::default()
+        };
+        assert!(is_expected_saved_candidate(
+            &AppPreferences {
+                revision: 4,
+                ..candidate.clone()
+            },
+            &candidate,
+        ));
+        assert!(!is_expected_saved_candidate(&candidate, &candidate));
+        assert!(!is_expected_saved_candidate(
+            &AppPreferences {
+                revision: 4,
+                quick_query_shortcut: "Ctrl+Alt+R".to_string(),
+                ..candidate.clone()
+            },
+            &candidate,
+        ));
     }
 
     #[test]

@@ -28,6 +28,7 @@ function errorMessage(error: unknown) {
 export class AppPreferenceSaveCoordinator {
   private generation = 0;
   private pendingRequests = 0;
+  private readonly activeSaves = new Set<Promise<AppPreferenceSaveOutcome>>();
   private readonly operations: AppPreferenceSaveOperations;
 
   constructor(operations: AppPreferenceSaveOperations) {
@@ -42,7 +43,30 @@ export class AppPreferenceSaveCoordinator {
     this.generation += 1;
   }
 
-  async save(
+  save(
+    candidate: AppPreferences,
+    previousAuthority: AppPreferences,
+  ): Promise<AppPreferenceSaveOutcome> {
+    const active = this.runSave(candidate, previousAuthority);
+    this.activeSaves.add(active);
+    void active.finally(() => this.activeSaves.delete(active));
+    return active;
+  }
+
+  async flush() {
+    const failures: string[] = [];
+    while (this.activeSaves.size) {
+      const outcomes = await Promise.all([...this.activeSaves]);
+      for (const outcome of outcomes) {
+        if (outcome.status === "failed") failures.push(outcome.message);
+      }
+    }
+    if (failures.length) {
+      throw new Error([...new Set(failures)].join("；"));
+    }
+  }
+
+  private async runSave(
     candidate: AppPreferences,
     previousAuthority: AppPreferences,
   ): Promise<AppPreferenceSaveOutcome> {

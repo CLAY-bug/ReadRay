@@ -9,7 +9,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use tauri::{AppHandle, Manager};
 
 const DATABASE_FILE_NAME: &str = "readray.sqlite3";
-const DATABASE_SCHEMA_VERSION: i64 = 6;
+const DATABASE_SCHEMA_VERSION: i64 = 7;
 pub const EXPLANATION_CARD_SCHEMA_VERSION: i64 = 1;
 const DEFAULT_PAGE: u32 = 1;
 const DEFAULT_PAGE_SIZE: u32 = 20;
@@ -196,13 +196,26 @@ INSERT INTO app_preferences (
 );
 "#;
 
+const MIGRATION_7: &str = r#"
+ALTER TABLE app_preferences
+  ADD COLUMN close_behavior TEXT NOT NULL DEFAULT 'hide_to_tray'
+  CHECK (close_behavior IN ('hide_to_tray', 'exit'));
+
+ALTER TABLE app_preferences
+  ADD COLUMN quick_query_shortcut TEXT NOT NULL DEFAULT 'Ctrl+Alt+R';
+
+ALTER TABLE app_preferences
+  ADD COLUMN selection_explanation_shortcut TEXT NOT NULL DEFAULT 'Ctrl+Alt+U';
+"#;
+
 const MIGRATIONS: &[(i64, &str)] = &[
     (1, MIGRATION_1),
     (2, MIGRATION_2),
     (3, MIGRATION_3),
     (4, MIGRATION_4),
     (5, MIGRATION_5),
-    (DATABASE_SCHEMA_VERSION, MIGRATION_6),
+    (6, MIGRATION_6),
+    (DATABASE_SCHEMA_VERSION, MIGRATION_7),
 ];
 
 #[derive(Clone, Debug, Serialize)]
@@ -1131,6 +1144,82 @@ mod tests {
                 "newsreader_source_han_serif".to_string(),
                 17,
                 "enter".to_string(),
+            )
+        );
+        drop(upgraded);
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn version_six_preferences_upgrade_adds_lifecycle_defaults_without_data_loss() {
+        let (root, path) = test_database_path();
+        fs::create_dir_all(&root).unwrap();
+        let connection = Connection::open(&path).unwrap();
+        connection
+            .execute_batch(
+                "CREATE TABLE schema_migrations (
+                    version INTEGER PRIMARY KEY,
+                    applied_at_unix_ms INTEGER NOT NULL
+                 );",
+            )
+            .unwrap();
+        for migration in [
+            MIGRATION_1,
+            MIGRATION_2,
+            MIGRATION_3,
+            MIGRATION_4,
+            MIGRATION_5,
+            MIGRATION_6,
+        ] {
+            connection.execute_batch(migration).unwrap();
+        }
+        connection
+            .execute(
+                "INSERT INTO schema_migrations (version, applied_at_unix_ms)
+                 VALUES (1, 100), (2, 200), (3, 300), (4, 400), (5, 500), (6, 600)",
+                [],
+            )
+            .unwrap();
+        connection
+            .execute(
+                "UPDATE app_preferences SET revision = 4, ui_font_size = 16,
+                 learning_font_size = 20, send_shortcut = 'ctrl_enter' WHERE id = 1",
+                [],
+            )
+            .unwrap();
+        drop(connection);
+
+        let upgraded = open_database(&path).unwrap();
+        let values: (i64, i64, i64, String, String, String, String) = upgraded
+            .query_row(
+                "SELECT revision, ui_font_size, learning_font_size, send_shortcut,
+                        close_behavior, quick_query_shortcut,
+                        selection_explanation_shortcut
+                 FROM app_preferences WHERE id = 1",
+                [],
+                |row| {
+                    Ok((
+                        row.get(0)?,
+                        row.get(1)?,
+                        row.get(2)?,
+                        row.get(3)?,
+                        row.get(4)?,
+                        row.get(5)?,
+                        row.get(6)?,
+                    ))
+                },
+            )
+            .unwrap();
+        assert_eq!(
+            values,
+            (
+                4,
+                16,
+                20,
+                "ctrl_enter".to_string(),
+                "hide_to_tray".to_string(),
+                "Ctrl+Alt+R".to_string(),
+                "Ctrl+Alt+U".to_string(),
             )
         );
         drop(upgraded);
