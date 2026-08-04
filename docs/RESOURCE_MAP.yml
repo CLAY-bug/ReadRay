@@ -4,7 +4,7 @@ project:
   repo_root: "."
 
 meta:
-  version: "1.27"
+  version: "1.28"
   last_updated: "2026-08-04"
   updated_by: "Codex"
   source_of_truth: "docs/RESOURCE_MAP.yml"
@@ -30,6 +30,16 @@ core_docs:
       - "需要判断是否添加流程、依赖或架构。"
     notes: "只记录会改变 Codex 行为的规则；背景信息、阶段计划和技术细节放到 docs/。"
     risk: "不要把临时想法、宽泛口号或不会改变行为的规则塞进本文件。"
+
+  - path: "README.md"
+    purpose: "面向仓库访问者的项目概览、当前能力、架构边界、开发命令和文档入口。"
+    status: "active"
+    read_when:
+      - "需要快速了解 ReadRay 已实现的产品能力。"
+      - "准备本地运行、执行自动验证或寻找权威文档入口。"
+      - "阶段状态或公开项目说明发生变化。"
+    notes: "保持简洁并与 DEVELOPMENT_PLAN/HANDOFF 的当前阶段一致；只提供公开概览，不复制完整资源地图或交接记录。"
+    risk: "README 不是阶段计划或验收证据；不得写入 API Key、本机绝对路径或尚未实现的功能。"
 
   - path: "docs/DEVELOPMENT_PLAN.md"
     purpose: "项目定位、技术栈、核心原则、阶段计划和风险说明。"
