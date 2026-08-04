@@ -911,6 +911,8 @@ pub fn run() {
             quick_ai::export_quick_ai_conversation,
             quick_ai::send_quick_ai_message,
             settings::get_settings_snapshot,
+            settings::get_app_preferences,
+            settings::update_app_preferences,
             settings::validate_and_save_deepseek_api_key,
             settings::clear_deepseek_api_key,
             settings::get_deepseek_balance,

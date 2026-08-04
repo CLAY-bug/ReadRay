@@ -51,6 +51,7 @@ import {
   RepositorySettingsService,
   type SettingsService,
 } from "./settingsService";
+import { useAppPreferences } from "./useAppPreferences";
 import "./App.css";
 import "./styles/main-app.css";
 import "./styles/conversation-page.css";
@@ -185,6 +186,13 @@ function formatError(error: unknown) {
 }
 
 function OverlayApp() {
+  const isTauriRuntime = "__TAURI_INTERNALS__" in window;
+  const [settingsService] = useState<SettingsService | null>(() =>
+    isTauriRuntime
+      ? new RepositorySettingsService(new TauriSettingsRepository())
+      : null,
+  );
+  const { preferences } = useAppPreferences(settingsService);
   const previewAnchorRef = useRef<HTMLDivElement>(null);
   const [shortcutLabel, setShortcutLabel] = useState("Ctrl+Alt+R");
   const [windowCheck, setWindowCheck] = useState<CheckResult>(idle);
@@ -844,6 +852,7 @@ function OverlayApp() {
               }}
               onNewConversation={() => void createNewQuickAiConversation()}
               onOpenChange={handleCommandOpenChange}
+              sendShortcut={preferences.sendShortcut}
             />
           ) : (
             <>
@@ -1019,6 +1028,7 @@ function MainAppWindow() {
       ? new RepositorySettingsService(new TauriSettingsRepository())
       : null,
   );
+  const { preferences, savePreferences } = useAppPreferences(settingsService);
 
   useEffect(() => {
     if (!isTauriRuntime) {
@@ -1207,6 +1217,8 @@ function MainAppWindow() {
       conversationService={conversationService}
       writingService={writingService}
       settingsService={settingsService}
+      preferences={preferences}
+      onPreferencesSave={savePreferences}
       isMaximized={isMaximized}
       onStartDragging={() => {
         void runMainWindowCommand("start_main_window_drag");

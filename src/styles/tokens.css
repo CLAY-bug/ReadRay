@@ -65,11 +65,18 @@
   --rr-space-5: 20px;
   --rr-space-6: 24px;
 
-  --rr-font-display:
+  --rr-ui-font-family:
     "ReadRay Geist", "ReadRay Source Han Sans SC", system-ui, sans-serif;
-  --rr-font-stack: var(--rr-font-display);
-  --rr-font-body:
-    "ReadRay Newsreader", "ReadRay Source Han Serif SC", ui-serif, serif;
-  --rr-font-mono:
+  --rr-ui-mono-font-family:
     "ReadRay Geist Mono", "ReadRay Source Han Sans SC", ui-monospace, monospace;
+  --rr-learning-font-family:
+    "ReadRay Newsreader", "ReadRay Source Han Serif SC", ui-serif, serif;
+  --rr-ui-font-size: 14px;
+  --rr-learning-font-size: 17px;
+  --rr-ui-font-scale: 1;
+  --rr-learning-font-scale: 1;
+  --rr-font-display: var(--rr-ui-font-family);
+  --rr-font-stack: var(--rr-font-display);
+  --rr-font-body: var(--rr-learning-font-family);
+  --rr-font-mono: var(--rr-ui-mono-font-family);
 }

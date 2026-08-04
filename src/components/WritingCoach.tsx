@@ -16,6 +16,10 @@ import {
   LatestWritingRequestSequence,
   mergeWritingConversationAnswers,
 } from "../writingReviewState";
+import {
+  shouldSendMultilineMessage,
+  type SendShortcut,
+} from "../appPreferences";
 
 export type CoachIssueState = {
   status: "open" | "editing" | "modified" | "ignored" | "baseline";
@@ -59,6 +63,7 @@ type WritingCoachProps = {
   onToggleHint: (issueId: string) => void;
   onToggleReference: (issueId: string) => void;
   onToggleIgnore: (issueId: string) => void;
+  sendShortcut: SendShortcut;
 };
 
 const quickPrompts = [
@@ -177,12 +182,14 @@ function WritingAgentPanel({
   answers,
   onAsk,
   onClose,
+  sendShortcut,
 }: {
   request: WritingAgentRequest;
   mode: Exclude<WritingMode, "compare" | "library">;
   answers: WritingAgentAnswer[];
   onAsk: (request: WritingAgentQuestion) => Promise<WritingAgentAnswer>;
   onClose: () => void;
+  sendShortcut: SendShortcut;
 }) {
   const [question, setQuestion] = useState("");
   const [selectionText, setSelectionText] = useState("");
@@ -468,7 +475,17 @@ function WritingAgentPanel({
                 }
                 onChange={(event) => setQuestion(event.target.value)}
                 onKeyDown={(event) => {
-                  if (event.ctrlKey && event.key === "Enter") {
+                  if (
+                    shouldSendMultilineMessage(
+                      {
+                        key: event.key,
+                        shiftKey: event.shiftKey,
+                        ctrlKey: event.ctrlKey,
+                        isComposing: event.nativeEvent.isComposing,
+                      },
+                      sendShortcut,
+                    )
+                  ) {
                     event.preventDefault();
                     event.currentTarget.form?.requestSubmit();
                   }
@@ -501,6 +518,7 @@ function WritingCoach({
   onToggleHint,
   onToggleReference,
   onToggleIgnore,
+  sendShortcut,
 }: WritingCoachProps) {
   const readOnlyBaseline = mode === "completed";
   const visibleIssues = useMemo(
@@ -516,6 +534,7 @@ function WritingCoach({
         answers={answers}
         onAsk={onAsk}
         onClose={onCloseAssist}
+        sendShortcut={sendShortcut}
       />
     );
   }

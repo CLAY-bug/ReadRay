@@ -1,4 +1,8 @@
 import type { SettingsRepository } from "./settingsRepository";
+import {
+  validateAppPreferences,
+  type AppPreferences,
+} from "./appPreferences.ts";
 import { modelUsageRangeBounds } from "./settingsViewModel.ts";
 import type {
   DatabaseBackupResult,
@@ -13,6 +17,8 @@ import type {
 
 export interface SettingsService {
   loadSettings(): Promise<SettingsSnapshot>;
+  loadPreferences(): Promise<AppPreferences>;
+  savePreferences(preferences: AppPreferences): Promise<AppPreferences>;
   validateAndSaveApiKey(apiKey: string): Promise<SettingsSnapshot>;
   clearApiKey(): Promise<SettingsSnapshot>;
   loadBalance(): Promise<DeepSeekBalance>;
@@ -46,6 +52,7 @@ export function validateSettingsSnapshot(
   assertCount(snapshot.learningRecordCount, "学习记录数");
   assertCount(snapshot.conversationCount, "对话数");
   assertCount(snapshot.writingDocumentCount, "写作文档数");
+  validateAppPreferences(snapshot.preferences);
   return snapshot;
 }
 
@@ -163,6 +170,16 @@ export class RepositorySettingsService implements SettingsService {
 
   async loadSettings() {
     return validateSettingsSnapshot(await this.repository.get());
+  }
+
+  async loadPreferences() {
+    return validateAppPreferences(await this.repository.getPreferences());
+  }
+
+  async savePreferences(preferences: AppPreferences) {
+    return validateAppPreferences(
+      await this.repository.updatePreferences(validateAppPreferences(preferences)),
+    );
   }
 
   async validateAndSaveApiKey(apiKey: string) {

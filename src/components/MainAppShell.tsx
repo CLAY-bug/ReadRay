@@ -22,6 +22,8 @@ import {
 } from "../todayService";
 import type { WritingService } from "../writingService";
 import type { SettingsService } from "../settingsService";
+import type { AppPreferences } from "../appPreferences";
+import type { AppPreferenceSaveOutcome } from "../appPreferenceSaveCoordinator";
 import ConversationPage from "./ConversationPage";
 import ConversationHistoryPage from "./ConversationHistoryPage";
 import ConversationManagementMenu, {
@@ -45,6 +47,11 @@ type MainAppShellProps = {
   conversationService: ConversationService | null;
   writingService: WritingService | null;
   settingsService: SettingsService | null;
+  preferences: AppPreferences;
+  onPreferencesSave: (
+    candidate: AppPreferences,
+    previousAuthority: AppPreferences,
+  ) => Promise<AppPreferenceSaveOutcome>;
   onNewConversation?: () => void;
   onNavigate?: (id: MainAppNavigationId) => void;
   onRecentConversationSelect?: (id: string) => void;
@@ -71,6 +78,8 @@ function MainAppShell({
   conversationService,
   writingService,
   settingsService,
+  preferences,
+  onPreferencesSave,
   onNewConversation = noop,
   onNavigate = noop,
   onRecentConversationSelect = noop,
@@ -480,6 +489,7 @@ function MainAppShell({
               onThreadIdentityChange={updateActiveConversation}
               onConversationDeleted={handleCurrentConversationDeleted}
               externalTitleUpdate={externalConversationTitle}
+              sendShortcut={preferences.sendShortcut}
             />
           ) : (
             <main
@@ -519,7 +529,10 @@ function MainAppShell({
             requestedRecordId={requestedMemoryRecordId}
           />
         ) : activePageId === "settings" ? (
-          <SettingsPage service={settingsService} />
+          <SettingsPage
+            service={settingsService}
+            onPreferencesSave={onPreferencesSave}
+          />
         ) : activePageId === "writing" ? null : (
           <TodayPage
             viewModel={todayViewModel}
@@ -528,6 +541,7 @@ function MainAppShell({
             onRetry={() => setTodayRetryToken((token) => token + 1)}
             onActionSelect={handleTodayActionSelect}
             onSubmitPrompt={handleSubmitPrompt}
+            sendShortcut={preferences.sendShortcut}
           />
         )}
         <WritingPage
@@ -535,6 +549,7 @@ function MainAppShell({
           libraryRequest={writingLibraryRequest}
           service={writingService}
           onWindowTitleChange={setWritingWindowTitle}
+          sendShortcut={preferences.sendShortcut}
         />
       </div>
       {conversationService ? (

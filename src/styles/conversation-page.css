@@ -36,7 +36,7 @@
   min-width: 0;
   flex: 1;
   overflow: hidden;
-  font-size: 14px;
+  font-size: var(--rr-ui-font-size);
   font-weight: 630;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -62,7 +62,7 @@ button.rr-conversation-title:not(:disabled) {
   color: var(--rr-main-fg);
   background: var(--rr-main-bg);
   box-shadow: 0 0 0 2px rgba(245, 78, 0, 0.12);
-  font-size: 14px;
+  font-size: var(--rr-ui-font-size);
   font-weight: 630;
 }
 
@@ -86,7 +86,7 @@ button.rr-conversation-title:not(:disabled) {
   border-radius: 6px !important;
   color: var(--rr-main-muted) !important;
   cursor: pointer;
-  font-size: 12px;
+  font-size: calc(12px * var(--rr-ui-font-scale));
 }
 
 .rr-conversation-icon-button:hover,
@@ -127,7 +127,7 @@ button.rr-conversation-title:not(:disabled) {
   color: var(--rr-main-fg-secondary) !important;
   text-align: left;
   cursor: pointer;
-  font-size: 12px !important;
+  font-size: calc(12px * var(--rr-ui-font-scale)) !important;
 }
 
 .rr-conversation-menu-item:hover,
@@ -194,7 +194,7 @@ button.rr-conversation-title:not(:disabled) {
   border-radius: 8px;
   padding: 7px 12px;
   background: var(--rr-main-surface-warm);
-  font-size: 16px;
+  font-size: calc(16px * var(--rr-ui-font-scale));
   line-height: 1.625;
 }
 
@@ -223,7 +223,7 @@ button.rr-conversation-title:not(:disabled) {
   padding: 2px 0 !important;
   color: var(--rr-main-muted) !important;
   cursor: pointer;
-  font-size: 12px !important;
+  font-size: calc(12px * var(--rr-ui-font-scale)) !important;
   line-height: 1.5;
 }
 
@@ -238,7 +238,7 @@ button.rr-conversation-title:not(:disabled) {
 .rr-conversation-message-meta {
   color: var(--rr-main-meta);
   font-family: var(--rr-main-font-mono);
-  font-size: 12px;
+  font-size: calc(12px * var(--rr-ui-font-scale));
   line-height: 1.5;
   letter-spacing: 0.015em;
 }
@@ -247,7 +247,7 @@ button.rr-conversation-title:not(:disabled) {
   margin: 6px 3px 0;
   opacity: 0.58;
   text-align: right;
-  font-size: 11px;
+  font-size: calc(11px * var(--rr-ui-font-scale));
   transition: opacity 150ms ease;
 }
 
@@ -258,8 +258,8 @@ button.rr-conversation-title:not(:disabled) {
 
 .rr-conversation-assistant-copy {
   color: var(--rr-main-fg);
-  font-family: var(--rr-main-font-display);
-  font-size: 16px;
+  font-family: var(--rr-main-font-body);
+  font-size: calc(var(--rr-learning-font-size) - 1px);
   line-height: 1.625;
   letter-spacing: 0.002em;
   text-wrap: pretty;
@@ -283,7 +283,7 @@ button.rr-conversation-title:not(:disabled) {
   color: var(--rr-main-fg-secondary);
   background: transparent;
   font-family: var(--rr-main-font-mono);
-  font-size: 14.5px;
+  font-size: calc(14.5px * var(--rr-ui-font-scale));
   font-weight: 450;
   line-height: 1.4;
   white-space: nowrap;
@@ -316,7 +316,7 @@ button.rr-conversation-title:not(:disabled) {
   margin: 4px 0 14px !important;
   color: var(--rr-main-fg-secondary);
   font-family: var(--rr-main-font-body);
-  font-size: 17px;
+  font-size: var(--rr-learning-font-size);
   line-height: 1.6;
 }
 
@@ -325,7 +325,7 @@ button.rr-conversation-title:not(:disabled) {
   margin-top: 2px;
   color: var(--rr-main-muted);
   font-family: var(--rr-main-font-display);
-  font-size: 14.5px;
+  font-size: calc(14.5px * var(--rr-ui-font-scale));
   line-height: 1.6;
 }
 
@@ -342,7 +342,7 @@ button.rr-conversation-title:not(:disabled) {
   padding: 0 6px !important;
   color: var(--rr-main-muted) !important;
   cursor: pointer;
-  font-size: 11.5px !important;
+  font-size: calc(11.5px * var(--rr-ui-font-scale)) !important;
 }
 
 .rr-conversation-citation:hover,
@@ -373,7 +373,7 @@ button.rr-conversation-title:not(:disabled) {
 
 .rr-conversation-empty-copy h2 {
   margin: 0 0 8px;
-  font-size: 19px;
+  font-size: calc(19px * var(--rr-ui-font-scale));
   font-weight: 620;
 }
 
@@ -381,7 +381,7 @@ button.rr-conversation-title:not(:disabled) {
   margin: 0;
   color: var(--rr-main-muted);
   font-family: var(--rr-main-font-body);
-  font-size: 16px;
+  font-size: calc(16px * var(--rr-ui-font-scale));
   line-height: 1.6;
 }
 
@@ -424,7 +424,7 @@ button.rr-conversation-title:not(:disabled) {
   padding: 4px 0 !important;
   color: var(--rr-main-muted) !important;
   cursor: pointer;
-  font-size: 11px !important;
+  font-size: calc(11px * var(--rr-ui-font-scale)) !important;
 }
 
 .rr-conversation-error-copy {
@@ -439,7 +439,7 @@ button.rr-conversation-title:not(:disabled) {
   color: var(--rr-main-fg-secondary) !important;
   background: var(--rr-main-surface-warm) !important;
   cursor: pointer;
-  font-size: 12px !important;
+  font-size: calc(12px * var(--rr-ui-font-scale)) !important;
   font-weight: 620 !important;
 }
 
@@ -490,7 +490,7 @@ button.rr-conversation-title:not(:disabled) {
   padding: 9px 0 6px;
   color: var(--rr-main-fg);
   background: transparent;
-  font-size: 16px;
+  font-size: calc(16px * var(--rr-ui-font-scale));
   line-height: 1.625;
   scrollbar-width: thin;
 }
@@ -576,20 +576,20 @@ button.rr-conversation-title:not(:disabled) {
 
 .rr-conversation-drawer-head h2 {
   margin: 0;
-  font-size: 16px;
+  font-size: calc(16px * var(--rr-ui-font-scale));
 }
 
 .rr-conversation-drawer-context {
   margin: 18px 0 8px;
   color: var(--rr-main-meta);
   font-family: var(--rr-main-font-mono);
-  font-size: 10px;
+  font-size: calc(10px * var(--rr-ui-font-scale));
 }
 
 .rr-conversation-memory-record-title {
   margin: 0 0 18px;
   font-family: var(--rr-main-font-body);
-  font-size: 21px;
+  font-size: calc(21px * var(--rr-ui-font-scale));
   font-weight: 580;
   line-height: 1.45;
 }
@@ -609,12 +609,12 @@ button.rr-conversation-title:not(:disabled) {
 .rr-conversation-memory-field dt {
   color: var(--rr-main-meta);
   font-family: var(--rr-main-font-mono);
-  font-size: 10px;
+  font-size: calc(10px * var(--rr-ui-font-scale));
 }
 
 .rr-conversation-memory-field dd {
   margin: 0;
-  font-size: 13px;
+  font-size: calc(13px * var(--rr-ui-font-scale));
 }
 
 .rr-conversation-memory-excerpt {
@@ -623,7 +623,7 @@ button.rr-conversation-title:not(:disabled) {
   padding-top: 18px;
   color: var(--rr-main-muted);
   font-family: var(--rr-main-font-body);
-  font-size: 15px;
+  font-size: calc(15px * var(--rr-ui-font-scale));
   line-height: 1.6;
 }
 
@@ -640,7 +640,7 @@ button.rr-conversation-title:not(:disabled) {
   pointer-events: none;
   transform: translate(-50%, 5px);
   transition: 150ms ease;
-  font-size: 12px;
+  font-size: calc(12px * var(--rr-ui-font-scale));
 }
 
 .rr-conversation-toast.is-visible {
@@ -671,7 +671,7 @@ button.rr-conversation-title:not(:disabled) {
 
 .rr-conversation-history-heading h1 {
   margin: 0;
-  font-size: 27px;
+  font-size: calc(27px * var(--rr-ui-font-scale));
   font-weight: 520;
 }
 
@@ -679,7 +679,7 @@ button.rr-conversation-title:not(:disabled) {
 .rr-conversation-history-heading > span {
   margin: 7px 0 0;
   color: var(--rr-main-muted);
-  font-size: 12px;
+  font-size: calc(12px * var(--rr-ui-font-scale));
 }
 
 .rr-conversation-history-heading > span {
@@ -721,7 +721,7 @@ button.rr-conversation-title:not(:disabled) {
 }
 
 .rr-conversation-history-open strong {
-  font-size: 15px;
+  font-size: calc(15px * var(--rr-ui-font-scale));
   font-weight: 610;
 }
 
@@ -729,7 +729,7 @@ button.rr-conversation-title:not(:disabled) {
   margin-top: 5px;
   color: var(--rr-main-meta);
   font-family: var(--rr-main-font-mono);
-  font-size: 10px;
+  font-size: calc(10px * var(--rr-ui-font-scale));
 }
 
 .rr-conversation-history-state button {
@@ -738,7 +738,7 @@ button.rr-conversation-title:not(:disabled) {
   padding: 0 9px !important;
   color: var(--rr-main-muted) !important;
   cursor: pointer;
-  font-size: 11px !important;
+  font-size: calc(11px * var(--rr-ui-font-scale)) !important;
 }
 
 .rr-conversation-history-open:hover strong,
@@ -766,7 +766,7 @@ button.rr-conversation-title:not(:disabled) {
 
 .rr-conversation-history-state strong {
   color: var(--rr-main-fg);
-  font-size: 16px;
+  font-size: calc(16px * var(--rr-ui-font-scale));
 }
 
 .rr-conversation-history-state p {
@@ -796,13 +796,13 @@ button.rr-conversation-title:not(:disabled) {
 
 .rr-conversation-dialog h2 {
   margin: 0 0 10px;
-  font-size: 17px;
+  font-size: calc(17px * var(--rr-ui-font-scale));
 }
 
 .rr-conversation-dialog > p {
   margin: 0 0 18px;
   color: var(--rr-main-muted);
-  font-size: 13px;
+  font-size: calc(13px * var(--rr-ui-font-scale));
   line-height: 1.6;
 }
 
@@ -815,7 +815,7 @@ button.rr-conversation-title:not(:disabled) {
   padding: 0 11px;
   color: var(--rr-main-fg);
   background: var(--rr-main-bg);
-  font-size: 14px;
+  font-size: calc(14px * var(--rr-ui-font-scale));
 }
 
 .rr-conversation-dialog input:focus {
@@ -826,7 +826,7 @@ button.rr-conversation-title:not(:disabled) {
 .rr-conversation-dialog .rr-conversation-dialog-error {
   margin: 10px 0 0;
   color: #a2382a;
-  font-size: 12px;
+  font-size: calc(12px * var(--rr-ui-font-scale));
 }
 
 .rr-conversation-dialog-actions {
@@ -844,7 +844,7 @@ button.rr-conversation-title:not(:disabled) {
   color: var(--rr-main-fg-secondary) !important;
   background: var(--rr-main-bg) !important;
   cursor: pointer;
-  font-size: 12px !important;
+  font-size: calc(12px * var(--rr-ui-font-scale)) !important;
 }
 
 .rr-conversation-dialog-actions button.is-primary {

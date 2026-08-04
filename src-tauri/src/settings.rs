@@ -10,7 +10,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
-use tauri::{AppHandle, Manager};
+use tauri::{AppHandle, Emitter, Manager};
 use tauri_plugin_opener::OpenerExt;
 
 static BACKUP_TEMP_COUNTER: AtomicU64 = AtomicU64::new(0);
@@ -26,6 +26,180 @@ pub struct SettingsSnapshot {
     conversation_count: i64,
     writing_document_count: i64,
     app_version: String,
+    preferences: AppPreferences,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum UiFont {
+    GeistSourceHanSans,
+    SourceHanSans,
+}
+
+impl UiFont {
+    fn storage_value(self) -> &'static str {
+        match self {
+            Self::GeistSourceHanSans => "geist_source_han_sans",
+            Self::SourceHanSans => "source_han_sans",
+        }
+    }
+
+    fn from_storage(value: &str) -> Result<Self, String> {
+        match value {
+            "geist_source_han_sans" => Ok(Self::GeistSourceHanSans),
+            "source_han_sans" => Ok(Self::SourceHanSans),
+            _ => Err("数据库包含未知的界面字体设置。".to_string()),
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum LearningFont {
+    NewsreaderSourceHanSerif,
+    SourceHanSerif,
+}
+
+impl LearningFont {
+    fn storage_value(self) -> &'static str {
+        match self {
+            Self::NewsreaderSourceHanSerif => "newsreader_source_han_serif",
+            Self::SourceHanSerif => "source_han_serif",
+        }
+    }
+
+    fn from_storage(value: &str) -> Result<Self, String> {
+        match value {
+            "newsreader_source_han_serif" => Ok(Self::NewsreaderSourceHanSerif),
+            "source_han_serif" => Ok(Self::SourceHanSerif),
+            _ => Err("数据库包含未知的学习内容字体设置。".to_string()),
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum SendShortcut {
+    Enter,
+    CtrlEnter,
+}
+
+impl SendShortcut {
+    fn storage_value(self) -> &'static str {
+        match self {
+            Self::Enter => "enter",
+            Self::CtrlEnter => "ctrl_enter",
+        }
+    }
+
+    fn from_storage(value: &str) -> Result<Self, String> {
+        match value {
+            "enter" => Ok(Self::Enter),
+            "ctrl_enter" => Ok(Self::CtrlEnter),
+            _ => Err("数据库包含未知的发送快捷键设置。".to_string()),
+        }
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AppPreferences {
+    revision: i64,
+    ui_font: UiFont,
+    ui_font_size: i64,
+    learning_font: LearningFont,
+    learning_font_size: i64,
+    send_shortcut: SendShortcut,
+}
+
+impl Default for AppPreferences {
+    fn default() -> Self {
+        Self {
+            revision: 0,
+            ui_font: UiFont::GeistSourceHanSans,
+            ui_font_size: 14,
+            learning_font: LearningFont::NewsreaderSourceHanSerif,
+            learning_font_size: 17,
+            send_shortcut: SendShortcut::Enter,
+        }
+    }
+}
+
+fn validate_app_preferences(preferences: &AppPreferences) -> Result<(), String> {
+    if preferences.revision < 0 {
+        return Err("设置版本无效，请重新读取后重试。".to_string());
+    }
+    if !(12..=20).contains(&preferences.ui_font_size) {
+        return Err("界面字号必须在 12–20 px 之间。".to_string());
+    }
+    if !(14..=24).contains(&preferences.learning_font_size) {
+        return Err("学习内容字号必须在 14–24 px 之间。".to_string());
+    }
+    Ok(())
+}
+
+fn read_app_preferences(connection: &Connection) -> Result<AppPreferences, String> {
+    let stored = connection
+        .query_row(
+            "SELECT revision, ui_font, ui_font_size, learning_font, learning_font_size, send_shortcut \
+             FROM app_preferences WHERE id = 1",
+            [],
+            |row| {
+                Ok((
+                    row.get::<_, i64>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, i64>(2)?,
+                    row.get::<_, String>(3)?,
+                    row.get::<_, i64>(4)?,
+                    row.get::<_, String>(5)?,
+                ))
+            },
+        )
+        .map_err(|error| format!("无法读取 ReadRay 偏好设置：{error}"))?;
+    let preferences = AppPreferences {
+        revision: stored.0,
+        ui_font: UiFont::from_storage(&stored.1)?,
+        ui_font_size: stored.2,
+        learning_font: LearningFont::from_storage(&stored.3)?,
+        learning_font_size: stored.4,
+        send_shortcut: SendShortcut::from_storage(&stored.5)?,
+    };
+    validate_app_preferences(&preferences)?;
+    Ok(preferences)
+}
+
+fn save_app_preferences(
+    connection: &mut Connection,
+    preferences: &AppPreferences,
+) -> Result<AppPreferences, String> {
+    validate_app_preferences(preferences)?;
+    let transaction = connection
+        .transaction()
+        .map_err(|error| format!("无法开始保存 ReadRay 偏好设置：{error}"))?;
+    let changed = transaction
+        .execute(
+            "UPDATE app_preferences \
+             SET revision = revision + 1, ui_font = ?1, ui_font_size = ?2, \
+                 learning_font = ?3, learning_font_size = ?4, send_shortcut = ?5 \
+             WHERE id = 1 AND revision = ?6",
+            params![
+                preferences.ui_font.storage_value(),
+                preferences.ui_font_size,
+                preferences.learning_font.storage_value(),
+                preferences.learning_font_size,
+                preferences.send_shortcut.storage_value(),
+                preferences.revision,
+            ],
+        )
+        .map_err(|error| format!("无法保存 ReadRay 偏好设置：{error}"))?;
+    if changed != 1 {
+        return Err("设置已在另一个窗口更新，请重试。".to_string());
+    }
+    let saved = read_app_preferences(&transaction)?;
+    transaction
+        .commit()
+        .map_err(|error| format!("无法提交 ReadRay 偏好设置：{error}"))?;
+    Ok(saved)
 }
 
 #[derive(Deserialize)]
@@ -199,7 +373,9 @@ async fn validate_deepseek_connection(api_key: &str) -> Result<(), String> {
 
 fn settings_snapshot(app: &AppHandle) -> Result<SettingsSnapshot, String> {
     let api_key_state = secret_store::deepseek_api_key_state()?;
-    let counts = read_data_counts(&learning_records::open_database_for_app(app)?)?;
+    let connection = learning_records::open_database_for_app(app)?;
+    let counts = read_data_counts(&connection)?;
+    let preferences = read_app_preferences(&connection)?;
     let app_data_directory = app_data_directory(app)?;
 
     Ok(SettingsSnapshot {
@@ -211,6 +387,7 @@ fn settings_snapshot(app: &AppHandle) -> Result<SettingsSnapshot, String> {
         conversation_count: counts.conversations,
         writing_document_count: counts.writing_documents,
         app_version: app.package_info().version.to_string(),
+        preferences,
     })
 }
 
@@ -388,6 +565,22 @@ pub fn get_settings_snapshot(app: AppHandle) -> Result<SettingsSnapshot, String>
 }
 
 #[tauri::command]
+pub fn get_app_preferences(app: AppHandle) -> Result<AppPreferences, String> {
+    read_app_preferences(&learning_records::open_database_for_app(&app)?)
+}
+
+#[tauri::command]
+pub fn update_app_preferences(
+    app: AppHandle,
+    preferences: AppPreferences,
+) -> Result<AppPreferences, String> {
+    let mut connection = learning_records::open_database_for_app(&app)?;
+    let saved = save_app_preferences(&mut connection, &preferences)?;
+    let _ = app.emit("readray://app-preferences-updated", &saved);
+    Ok(saved)
+}
+
+#[tauri::command]
 pub async fn validate_and_save_deepseek_api_key(
     app: AppHandle,
     api_key: String,
@@ -493,6 +686,7 @@ mod tests {
             conversation_count: 5,
             writing_document_count: 3,
             app_version: "0.1.0".to_string(),
+            preferences: AppPreferences::default(),
         }
     }
 
@@ -525,6 +719,72 @@ mod tests {
         assert_eq!(counts.learning_records, 2);
         assert_eq!(counts.conversations, 1);
         assert_eq!(counts.writing_documents, 1);
+    }
+
+    #[test]
+    fn preferences_default_save_and_reopen_use_sqlite_authority() {
+        let root = test_directory("preferences-reopen");
+        let database_path = root.join("readray.sqlite3");
+        let mut connection = learning_records::open_database(&database_path).unwrap();
+        let defaults = read_app_preferences(&connection).unwrap();
+        assert_eq!(defaults, AppPreferences::default());
+
+        let saved = save_app_preferences(
+            &mut connection,
+            &AppPreferences {
+                ui_font: UiFont::SourceHanSans,
+                ui_font_size: 16,
+                learning_font: LearningFont::SourceHanSerif,
+                learning_font_size: 19,
+                send_shortcut: SendShortcut::CtrlEnter,
+                ..defaults
+            },
+        )
+        .unwrap();
+        assert_eq!(saved.revision, 1);
+        drop(connection);
+
+        let reopened = learning_records::open_database(&database_path).unwrap();
+        assert_eq!(read_app_preferences(&reopened).unwrap(), saved);
+        drop(reopened);
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn preferences_reject_invalid_ranges_and_stale_saves_without_mutation() {
+        let root = test_directory("preferences-guard");
+        let database_path = root.join("readray.sqlite3");
+        let mut connection = learning_records::open_database(&database_path).unwrap();
+        let defaults = read_app_preferences(&connection).unwrap();
+
+        let invalid = AppPreferences {
+            ui_font_size: 21,
+            ..defaults.clone()
+        };
+        assert!(save_app_preferences(&mut connection, &invalid).is_err());
+        assert_eq!(read_app_preferences(&connection).unwrap(), defaults);
+
+        let saved = save_app_preferences(
+            &mut connection,
+            &AppPreferences {
+                ui_font_size: 15,
+                ..defaults.clone()
+            },
+        )
+        .unwrap();
+        let stale_error = save_app_preferences(
+            &mut connection,
+            &AppPreferences {
+                learning_font_size: 20,
+                ..defaults
+            },
+        )
+        .unwrap_err();
+        assert!(stale_error.contains("另一个窗口"));
+        assert_eq!(read_app_preferences(&connection).unwrap(), saved);
+
+        drop(connection);
+        let _ = fs::remove_dir_all(root);
     }
 
     #[test]

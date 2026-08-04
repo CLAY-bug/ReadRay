@@ -27,6 +27,10 @@ import {
 } from "../conversationViewModel";
 import { deliverConversationExport } from "../conversationExportDelivery";
 import MainAppIcon from "./MainAppIcon";
+import {
+  shouldSendMultilineMessage,
+  type SendShortcut,
+} from "../appPreferences";
 
 type ConversationPageProps = {
   request: ConversationRequest;
@@ -40,6 +44,7 @@ type ConversationPageProps = {
     conversationId: string;
     title: string;
   };
+  sendShortcut: SendShortcut;
 };
 
 type GenerationState = {
@@ -299,6 +304,7 @@ function ConversationPage({
   onThreadIdentityChange,
   onConversationDeleted,
   externalTitleUpdate,
+  sendShortcut,
 }: ConversationPageProps) {
   const [thread, setThread] = useState<ConversationThread | null>(null);
   const [draft, setDraft] = useState("");
@@ -1172,9 +1178,15 @@ function ConversationPage({
               onChange={(event) => setDraft(event.target.value)}
               onKeyDown={(event) => {
                 if (
-                  event.key === "Enter" &&
-                  !event.shiftKey &&
-                  !event.nativeEvent.isComposing
+                  shouldSendMultilineMessage(
+                    {
+                      key: event.key,
+                      shiftKey: event.shiftKey,
+                      ctrlKey: event.ctrlKey,
+                      isComposing: event.nativeEvent.isComposing,
+                    },
+                    sendShortcut,
+                  )
                 ) {
                   event.preventDefault();
                   event.currentTarget.form?.requestSubmit();

@@ -47,12 +47,14 @@ import WritingEditor, {
   type WritingSelection,
 } from "./WritingEditor";
 import WritingLibrary from "./WritingLibrary";
+import type { SendShortcut } from "../appPreferences";
 
 type WritingPageProps = {
   hidden?: boolean;
   libraryRequest: number;
   service: WritingService | null;
   onWindowTitleChange: (title: string) => void;
+  sendShortcut: SendShortcut;
 };
 
 type OperationError = {
@@ -112,6 +114,7 @@ function WritingPage({
   libraryRequest,
   service,
   onWindowTitleChange,
+  sendShortcut,
 }: WritingPageProps) {
   const [records, setRecords] = useState<WritingDocumentSummary[]>([]);
   const [libraryStatus, setLibraryStatus] = useState<
@@ -1238,6 +1241,7 @@ function WritingPage({
                     state.status === "ignored" ? "open" : "ignored",
                 }))
               }
+              sendShortcut={sendShortcut}
             />
           </aside>
         </div>

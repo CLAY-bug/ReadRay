@@ -1,5 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import { save } from "@tauri-apps/plugin-dialog";
+import type { AppPreferences } from "./appPreferences";
 import type {
   DatabaseBackupResult,
   DeepSeekBalance,
@@ -14,6 +15,8 @@ export type SettingsInvoke = <T>(
 
 export interface SettingsRepository {
   get(): Promise<SettingsSnapshot>;
+  getPreferences(): Promise<AppPreferences>;
+  updatePreferences(preferences: AppPreferences): Promise<AppPreferences>;
   validateAndSaveApiKey(apiKey: string): Promise<SettingsSnapshot>;
   clearApiKey(): Promise<SettingsSnapshot>;
   getBalance(): Promise<DeepSeekBalance>;
@@ -46,6 +49,16 @@ export class TauriSettingsRepository implements SettingsRepository {
 
   get() {
     return this.invokeCommand<SettingsSnapshot>("get_settings_snapshot");
+  }
+
+  getPreferences() {
+    return this.invokeCommand<AppPreferences>("get_app_preferences");
+  }
+
+  updatePreferences(preferences: AppPreferences) {
+    return this.invokeCommand<AppPreferences>("update_app_preferences", {
+      preferences,
+    });
   }
 
   validateAndSaveApiKey(apiKey: string) {

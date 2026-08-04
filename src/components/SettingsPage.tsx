@@ -6,6 +6,16 @@ import {
   type ReactNode,
 } from "react";
 import type { SettingsService } from "../settingsService";
+import type { AppPreferenceSaveOutcome } from "../appPreferenceSaveCoordinator";
+import {
+  DEFAULT_APP_PREFERENCES,
+  LEARNING_FONT_SIZE_MAX,
+  LEARNING_FONT_SIZE_MIN,
+  parseFontSizeCandidate,
+  UI_FONT_SIZE_MAX,
+  UI_FONT_SIZE_MIN,
+  type AppPreferences,
+} from "../appPreferences";
 import {
   BalanceRefreshController,
   reduceBalanceRefreshState,
@@ -33,6 +43,10 @@ type RequestStatus = "idle" | "loading" | "success" | "error";
 
 type SettingsPageProps = {
   service: SettingsService | null;
+  onPreferencesSave?: (
+    candidate: AppPreferences,
+    previousAuthority: AppPreferences,
+  ) => Promise<AppPreferenceSaveOutcome>;
 };
 
 const settingsSections: ReadonlyArray<readonly [SettingsSection, string]> = [
@@ -240,7 +254,10 @@ function SettingsLoading() {
   );
 }
 
-function SettingsPage({ service }: SettingsPageProps) {
+function SettingsPage({
+  service,
+  onPreferencesSave,
+}: SettingsPageProps) {
   const [activeSection, setActiveSection] = useState<SettingsSection>("general");
   const [snapshot, setSnapshot] = useState<SettingsSnapshot>();
   const [loadStatus, setLoadStatus] = useState<"loading" | "ready" | "error">(
@@ -271,6 +288,9 @@ function SettingsPage({ service }: SettingsPageProps) {
   const [backupStatus, setBackupStatus] = useState<RequestStatus>("idle");
   const [backupResult, setBackupResult] = useState<DatabaseBackupResult>();
   const [backupMessage, setBackupMessage] = useState<string>();
+  const [preferenceStatus, setPreferenceStatus] = useState<RequestStatus>("idle");
+  const [preferenceMessage, setPreferenceMessage] = useState<string>();
+  const [failedPreferences, setFailedPreferences] = useState<AppPreferences>();
   const mountedRef = useRef(false);
   const operationKeyRef = useRef(0);
   const balanceControllerRef = useRef<{
@@ -281,6 +301,7 @@ function SettingsPage({ service }: SettingsPageProps) {
   const usageKeyRef = useRef(0);
   const directoryKeyRef = useRef(0);
   const backupKeyRef = useRef(0);
+  const preferenceKeyRef = useRef(0);
   const scrollRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -291,6 +312,7 @@ function SettingsPage({ service }: SettingsPageProps) {
       usageKeyRef.current += 1;
       directoryKeyRef.current += 1;
       backupKeyRef.current += 1;
+      preferenceKeyRef.current += 1;
     };
   }, []);
 
@@ -628,6 +650,87 @@ function SettingsPage({ service }: SettingsPageProps) {
     setUsageRange(nextRange);
   }
 
+  async function savePreferences(next: AppPreferences) {
+    if (
+      !service ||
+      !onPreferencesSave ||
+      !snapshot ||
+      preferenceStatus === "loading"
+    ) {
+      return;
+    }
+    const previous = snapshot.preferences;
+    const requestKey = preferenceKeyRef.current + 1;
+    preferenceKeyRef.current = requestKey;
+    setPreferenceStatus("loading");
+    setPreferenceMessage(undefined);
+    setFailedPreferences(undefined);
+    setSnapshot((current) => (current ? { ...current, preferences: next } : current));
+
+    try {
+      const outcome = await onPreferencesSave(next, previous);
+      if (
+        !isSettingsOperationCurrent(
+          mountedRef.current,
+          requestKey,
+          preferenceKeyRef.current,
+        )
+      ) {
+        return;
+      }
+      if (outcome.status === "superseded") {
+        setPreferenceStatus("idle");
+        return;
+      }
+      if (outcome.status === "failed") {
+        setSnapshot((current) =>
+          current ? { ...current, preferences: outcome.preferences } : current,
+        );
+        setFailedPreferences(outcome.retryPreferences);
+        setPreferenceStatus("error");
+        setPreferenceMessage(outcome.message);
+        return;
+      }
+      setSnapshot((current) =>
+        current ? { ...current, preferences: outcome.preferences } : current,
+      );
+      setPreferenceStatus("success");
+      setPreferenceMessage("已保存并应用。");
+    } catch (error) {
+      if (
+        !isSettingsOperationCurrent(
+          mountedRef.current,
+          requestKey,
+          preferenceKeyRef.current,
+        )
+      ) {
+        return;
+      }
+      setFailedPreferences({ ...next, revision: previous.revision });
+      setPreferenceStatus("error");
+      setPreferenceMessage(
+        `保存失败：${errorMessage(error)}`,
+      );
+    } finally {
+      if (
+        isSettingsOperationCurrent(
+          mountedRef.current,
+          requestKey,
+          preferenceKeyRef.current,
+        )
+      ) {
+        setPreferenceStatus((current) =>
+          current === "loading" ? "error" : current,
+        );
+      }
+    }
+  }
+
+  function patchPreferences(patch: Partial<AppPreferences>) {
+    if (!snapshot) return;
+    void savePreferences({ ...snapshot.preferences, ...patch });
+  }
+
   if (!service) {
     return (
       <main className="rr-main-panel rr-settings-page" aria-label="ReadRay 设置">
@@ -725,17 +828,43 @@ function SettingsPage({ service }: SettingsPageProps) {
                         <select
                           className="rr-settings-select rr-settings-send-select"
                           aria-label="发送快捷键"
-                          value="enter"
-                          disabled
+                          value={snapshot.preferences.sendShortcut}
+                          disabled={preferenceStatus === "loading"}
+                          onChange={(event) =>
+                            patchPreferences({
+                              sendShortcut: event.target.value as AppPreferences["sendShortcut"],
+                            })
+                          }
                         >
                           <option value="enter">Enter 发送</option>
+                          <option value="ctrlEnter">Ctrl+Enter 发送</option>
                         </select>
                         <div className="rr-settings-status-line">
-                          默认：Enter 发送，Shift+Enter 换行
+                          {snapshot.preferences.sendShortcut === "enter"
+                            ? "Enter 发送，Shift+Enter 换行"
+                            : "Ctrl+Enter 发送，Enter 换行"}
                         </div>
                       </div>
                     </div>
                   </div>
+                  {preferenceMessage ? (
+                    <div
+                      className={`rr-settings-inline-message ${
+                        preferenceStatus === "error" ? "is-error" : "is-success"
+                      }`}
+                      role={preferenceStatus === "error" ? "alert" : "status"}
+                    >
+                      <span>{preferenceMessage}</span>
+                      {preferenceStatus === "error" && failedPreferences ? (
+                        <button
+                          type="button"
+                          onClick={() => void savePreferences(failedPreferences)}
+                        >
+                          重试
+                        </button>
+                      ) : null}
+                    </div>
+                  ) : null}
                 </div>
 
                 <div className="rr-settings-group">
@@ -817,47 +946,158 @@ function SettingsPage({ service }: SettingsPageProps) {
                   <div className="rr-settings-panel">
                     <div className="rr-settings-row">
                       <SettingsCopy label="界面字体" />
-                      <input
+                      <select
                         className="rr-settings-select rr-settings-font-field rr-settings-ui-font"
                         aria-label="界面字体"
-                        value="ReadRay Geist"
-                        readOnly
-                      />
+                        value={snapshot.preferences.uiFont}
+                        disabled={preferenceStatus === "loading"}
+                        onChange={(event) =>
+                          patchPreferences({
+                            uiFont: event.target.value as AppPreferences["uiFont"],
+                          })
+                        }
+                      >
+                        <option value="geistSourceHanSans">Geist + 思源黑体</option>
+                        <option value="sourceHanSans">思源黑体</option>
+                      </select>
                     </div>
                     <div className="rr-settings-row">
                       <SettingsCopy label="界面字号" />
                       <div className="rr-settings-font-size-control">
                         <label className="rr-settings-number-field">
-                          <input aria-label="界面字号" value="14" readOnly />
+                          <input
+                            aria-label="界面字号"
+                            type="number"
+                            min={UI_FONT_SIZE_MIN}
+                            max={UI_FONT_SIZE_MAX}
+                            step={1}
+                            value={snapshot.preferences.uiFontSize}
+                            disabled={preferenceStatus === "loading"}
+                            onChange={(event) => {
+                              const value = parseFontSizeCandidate(
+                                event.currentTarget.value,
+                                UI_FONT_SIZE_MIN,
+                                UI_FONT_SIZE_MAX,
+                              );
+                              if (value !== undefined) {
+                                patchPreferences({ uiFontSize: value });
+                              } else {
+                                setFailedPreferences(undefined);
+                                setPreferenceStatus("error");
+                                setPreferenceMessage(
+                                  `界面字号必须是 ${UI_FONT_SIZE_MIN}–${UI_FONT_SIZE_MAX} px 之间的整数。`,
+                                );
+                              }
+                            }}
+                          />
                           <span>px</span>
                         </label>
-                        <button className="rr-settings-restore" type="button" disabled>
+                        <button
+                          className="rr-settings-restore"
+                          type="button"
+                          disabled={
+                            preferenceStatus === "loading" ||
+                            snapshot.preferences.uiFontSize ===
+                              DEFAULT_APP_PREFERENCES.uiFontSize
+                          }
+                          onClick={() =>
+                            patchPreferences({
+                              uiFontSize: DEFAULT_APP_PREFERENCES.uiFontSize,
+                            })
+                          }
+                        >
                           恢复默认
                         </button>
                       </div>
                     </div>
                     <div className="rr-settings-row">
                       <SettingsCopy label="学习内容字体" />
-                      <input
+                      <select
                         className="rr-settings-select rr-settings-font-field rr-settings-learning-font"
                         aria-label="学习内容字体"
-                        value="ReadRay Newsreader + 思源宋体"
-                        readOnly
-                      />
+                        value={snapshot.preferences.learningFont}
+                        disabled={preferenceStatus === "loading"}
+                        onChange={(event) =>
+                          patchPreferences({
+                            learningFont: event.target.value as AppPreferences["learningFont"],
+                          })
+                        }
+                      >
+                        <option value="newsreaderSourceHanSerif">
+                          Newsreader + 思源宋体
+                        </option>
+                        <option value="sourceHanSerif">思源宋体</option>
+                      </select>
                     </div>
                     <div className="rr-settings-row">
                       <SettingsCopy label="学习内容字号" />
                       <div className="rr-settings-font-size-control">
                         <label className="rr-settings-number-field">
-                          <input aria-label="学习内容字号" value="17" readOnly />
+                          <input
+                            aria-label="学习内容字号"
+                            type="number"
+                            min={LEARNING_FONT_SIZE_MIN}
+                            max={LEARNING_FONT_SIZE_MAX}
+                            step={1}
+                            value={snapshot.preferences.learningFontSize}
+                            disabled={preferenceStatus === "loading"}
+                            onChange={(event) => {
+                              const value = parseFontSizeCandidate(
+                                event.currentTarget.value,
+                                LEARNING_FONT_SIZE_MIN,
+                                LEARNING_FONT_SIZE_MAX,
+                              );
+                              if (value !== undefined) {
+                                patchPreferences({ learningFontSize: value });
+                              } else {
+                                setFailedPreferences(undefined);
+                                setPreferenceStatus("error");
+                                setPreferenceMessage(
+                                  `学习内容字号必须是 ${LEARNING_FONT_SIZE_MIN}–${LEARNING_FONT_SIZE_MAX} px 之间的整数。`,
+                                );
+                              }
+                            }}
+                          />
                           <span>px</span>
                         </label>
-                        <button className="rr-settings-restore" type="button" disabled>
+                        <button
+                          className="rr-settings-restore"
+                          type="button"
+                          disabled={
+                            preferenceStatus === "loading" ||
+                            snapshot.preferences.learningFontSize ===
+                              DEFAULT_APP_PREFERENCES.learningFontSize
+                          }
+                          onClick={() =>
+                            patchPreferences({
+                              learningFontSize:
+                                DEFAULT_APP_PREFERENCES.learningFontSize,
+                            })
+                          }
+                        >
                           恢复默认
                         </button>
                       </div>
                     </div>
                   </div>
+                  {preferenceMessage ? (
+                    <div
+                      className={`rr-settings-inline-message ${
+                        preferenceStatus === "error" ? "is-error" : "is-success"
+                      }`}
+                      role={preferenceStatus === "error" ? "alert" : "status"}
+                    >
+                      <span>{preferenceMessage}</span>
+                      {preferenceStatus === "error" && failedPreferences ? (
+                        <button
+                          type="button"
+                          onClick={() => void savePreferences(failedPreferences)}
+                        >
+                          重试
+                        </button>
+                      ) : null}
+                    </div>
+                  ) : null}
                 </div>
               </section>
             ) : null}

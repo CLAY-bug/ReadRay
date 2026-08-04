@@ -1,6 +1,10 @@
 import { useLayoutEffect, useRef, useState, type FormEvent } from "react";
 import type { TodayActionId, TodayPageViewModel } from "../mainAppViewModel";
 import MainAppIcon from "./MainAppIcon";
+import {
+  shouldSendMultilineMessage,
+  type SendShortcut,
+} from "../appPreferences";
 
 type TodayPageProps = {
   viewModel: TodayPageViewModel;
@@ -9,6 +13,7 @@ type TodayPageProps = {
   onRetry: () => void;
   onActionSelect: (id: TodayActionId) => void;
   onSubmitPrompt: (value: string) => void;
+  sendShortcut: SendShortcut;
 };
 
 function resizePromptInput(input: HTMLTextAreaElement) {
@@ -27,6 +32,7 @@ function TodayPage({
   onRetry,
   onActionSelect,
   onSubmitPrompt,
+  sendShortcut,
 }: TodayPageProps) {
   const [draft, setDraft] = useState("");
   const inputRef = useRef<HTMLTextAreaElement>(null);
@@ -129,7 +135,17 @@ function TodayPage({
               placeholder={viewModel.composerPlaceholder}
               onChange={(event) => setDraft(event.target.value)}
               onKeyDown={(event) => {
-                if (event.key === "Enter" && !event.shiftKey) {
+                if (
+                  shouldSendMultilineMessage(
+                    {
+                      key: event.key,
+                      shiftKey: event.shiftKey,
+                      ctrlKey: event.ctrlKey,
+                      isComposing: event.nativeEvent.isComposing,
+                    },
+                    sendShortcut,
+                  )
+                ) {
                   event.preventDefault();
                   event.currentTarget.form?.requestSubmit();
                 }

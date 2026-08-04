@@ -21,6 +21,18 @@ import {
   BalanceRefreshController,
   reduceBalanceRefreshState,
 } from "../src/settingsBalanceRefresh.ts";
+import {
+  DEFAULT_APP_PREFERENCES,
+  appPreferenceCssVariables,
+  parseFontSizeCandidate,
+  shouldSendMultilineMessage,
+  validateAppPreferences,
+} from "../src/appPreferences.ts";
+import { AppPreferenceSaveCoordinator } from "../src/appPreferenceSaveCoordinator.ts";
+
+function preferences(overrides = {}) {
+  return { ...DEFAULT_APP_PREFERENCES, ...overrides };
+}
 
 function snapshot(overrides = {}) {
   return {
@@ -32,6 +44,7 @@ function snapshot(overrides = {}) {
     conversationCount: 2,
     writingDocumentCount: 1,
     appVersion: "0.1.0",
+    preferences: preferences(),
     ...overrides,
   };
 }
@@ -138,6 +151,12 @@ test("Tauri 设置 repository 通过有类型 command 和原生保存对话框�
           createdAtUnixMs: 1_700_000_000_000,
         };
       }
+      if (command === "get_app_preferences") {
+        return preferences();
+      }
+      if (command === "update_app_preferences") {
+        return preferences({ ...args.preferences, revision: args.preferences.revision + 1 });
+      }
       return snapshot();
     },
     async (options) => {
@@ -147,6 +166,8 @@ test("Tauri 设置 repository 通过有类型 command 和原生保存对话框�
   );
 
   await repository.get();
+  await repository.getPreferences();
+  await repository.updatePreferences(preferences({ uiFontSize: 16 }));
   await repository.validateAndSaveApiKey("candidate-secret");
   await repository.clearApiKey();
   await repository.getBalance();
@@ -156,6 +177,11 @@ test("Tauri 设置 repository 通过有类型 command 和原生保存对话框�
 
   assert.deepEqual(calls, [
     { command: "get_settings_snapshot", args: undefined },
+    { command: "get_app_preferences", args: undefined },
+    {
+      command: "update_app_preferences",
+      args: { preferences: preferences({ uiFontSize: 16 }) },
+    },
     {
       command: "validate_and_save_deepseek_api_key",
       args: { apiKey: "candidate-secret" },
@@ -188,6 +214,8 @@ test("service 规范化输入并拒绝不一致的运行时快照", async () => 
   const saved = [];
   const service = new RepositorySettingsService({
     get: async () => snapshot(),
+    getPreferences: async () => preferences(),
+    updatePreferences: async (next) => ({ ...next, revision: next.revision + 1 }),
     validateAndSaveApiKey: async (apiKey) => {
       saved.push(apiKey);
       return snapshot({ apiKeyConfigured: true, apiKeySource: "credential" });
@@ -200,6 +228,11 @@ test("service 规范化输入并拒绝不一致的运行时快照", async () => 
   });
 
   assert.equal((await service.loadSettings()).learningRecordCount, 3);
+  assert.equal((await service.loadPreferences()).uiFontSize, 14);
+  assert.equal(
+    (await service.savePreferences(preferences({ learningFontSize: 19 }))).revision,
+    1,
+  );
   assert.equal((await service.validateAndSaveApiKey("  candidate-secret  ")).apiKeySource, "credential");
   assert.deepEqual(saved, ["candidate-secret"]);
   assert.throws(() =>
@@ -210,6 +243,122 @@ test("service 规范化输入并拒绝不一致的运行时快照", async () => 
   assert.throws(() =>
     validateSettingsSnapshot(snapshot({ conversationCount: -1 })),
   );
+});
+
+test("偏好设置校验、字体作用域与两种发送方式保持确定语义", () => {
+  assert.equal(parseFontSizeCandidate("12", 12, 20), 12);
+  assert.equal(parseFontSizeCandidate("20", 12, 20), 20);
+  assert.equal(parseFontSizeCandidate("11", 12, 20), undefined);
+  assert.equal(parseFontSizeCandidate("21", 12, 20), undefined);
+  assert.equal(parseFontSizeCandidate("14.5", 12, 20), undefined);
+  assert.equal(parseFontSizeCandidate("1e1", 12, 20), undefined);
+  assert.equal(parseFontSizeCandidate("", 12, 20), undefined);
+  assert.equal(parseFontSizeCandidate("not-a-size", 12, 20), undefined);
+  assert.throws(
+    () => validateAppPreferences(preferences({ uiFontSize: 21 })),
+    /12–20/,
+  );
+  assert.throws(
+    () => validateAppPreferences(preferences({ learningFontSize: 13 })),
+    /14–24/,
+  );
+  const variables = appPreferenceCssVariables(
+    preferences({
+      uiFont: "sourceHanSans",
+      uiFontSize: 16,
+      learningFont: "sourceHanSerif",
+      learningFontSize: 19,
+    }),
+  );
+  assert.match(variables["--rr-ui-font-family"], /Source Han Sans/);
+  assert.doesNotMatch(variables["--rr-ui-font-family"], /Geist/);
+  assert.match(variables["--rr-learning-font-family"], /Source Han Serif/);
+  assert.doesNotMatch(variables["--rr-learning-font-family"], /Newsreader/);
+  assert.equal(variables["--rr-ui-font-size"], "16px");
+  assert.equal(variables["--rr-learning-font-size"], "19px");
+  assert.equal(variables["--rr-ui-font-scale"], String(16 / 14));
+  assert.equal(variables["--rr-learning-font-scale"], String(19 / 17));
+
+  const key = (overrides = {}) => ({
+    key: "Enter",
+    shiftKey: false,
+    ctrlKey: false,
+    isComposing: false,
+    ...overrides,
+  });
+  assert.equal(shouldSendMultilineMessage(key(), "enter"), true);
+  assert.equal(
+    shouldSendMultilineMessage(key({ shiftKey: true }), "enter"),
+    false,
+  );
+  assert.equal(shouldSendMultilineMessage(key(), "ctrlEnter"), false);
+  assert.equal(
+    shouldSendMultilineMessage(key({ ctrlKey: true }), "ctrlEnter"),
+    true,
+  );
+  assert.equal(
+    shouldSendMultilineMessage(key({ ctrlKey: true, isComposing: true }), "ctrlEnter"),
+    false,
+  );
+});
+
+test("设置页卸载后保存失败仍由持久协调器恢复全局数据库偏好", async () => {
+  const pendingSave = deferred();
+  const authority = preferences({ revision: 4, uiFontSize: 14 });
+  const candidate = preferences({ revision: 4, uiFontSize: 18 });
+  const applied = [];
+  const coordinator = new AppPreferenceSaveCoordinator({
+    save: () => pendingSave.promise,
+    load: async () => authority,
+    apply: (next) => applied.push(next),
+  });
+  let pageMounted = true;
+  let pageStateUpdates = 0;
+  const outcomePromise = coordinator.save(candidate, authority).then((outcome) => {
+    if (pageMounted) pageStateUpdates += 1;
+    return outcome;
+  });
+
+  assert.equal(applied.at(-1).uiFontSize, 18, "候选值先全局乐观应用");
+  pageMounted = false;
+  pendingSave.reject(new Error("database is locked"));
+  const outcome = await outcomePromise;
+
+  assert.equal(outcome.status, "failed");
+  assert.equal(applied.at(-1).uiFontSize, 14, "页面卸载后仍恢复 SQLite 权威值");
+  assert.equal(pageStateUpdates, 0, "卸载页面不接收保存结果状态");
+});
+
+test("旧保存迟到失败不得覆盖较新保存成功后的全局偏好", async () => {
+  const oldSave = deferred();
+  const authority = preferences({ revision: 8, uiFontSize: 14 });
+  const oldCandidate = preferences({ revision: 8, uiFontSize: 15 });
+  const newCandidate = preferences({ revision: 8, uiFontSize: 19 });
+  const savedNew = preferences({ revision: 9, uiFontSize: 19 });
+  const applied = [];
+  let reloads = 0;
+  const coordinator = new AppPreferenceSaveCoordinator({
+    save: (next) =>
+      next.uiFontSize === oldCandidate.uiFontSize
+        ? oldSave.promise
+        : Promise.resolve(savedNew),
+    load: async () => {
+      reloads += 1;
+      return authority;
+    },
+    apply: (next) => applied.push(next),
+  });
+
+  const oldOutcomePromise = coordinator.save(oldCandidate, authority);
+  const newOutcome = await coordinator.save(newCandidate, authority);
+  assert.equal(newOutcome.status, "saved");
+  oldSave.reject(new Error("late failure"));
+  const oldOutcome = await oldOutcomePromise;
+
+  assert.equal(oldOutcome.status, "superseded");
+  assert.equal(reloads, 0, "被取代的失败不得再读取回滚快照");
+  assert.equal(applied.at(-1).uiFontSize, 19);
+  assert.equal(applied.at(-1).revision, 9);
 });
 
 test("余额 service 严格映射多币种，并允许失败后重新请求", async () => {
@@ -579,11 +728,38 @@ test("API Key 页面校验与迟到操作守卫覆盖失败重试边界", () => 
   assert.equal(isSettingsOperationCurrent(true, 4, 5), false);
 });
 
+test("四处多行输入共享发送偏好与 IME 守卫，单行解释仍固定 Enter", async () => {
+  const multilineFiles = [
+    "src/components/TodayPage.tsx",
+    "src/components/ConversationPage.tsx",
+    "src/components/QuickAiPanel.tsx",
+    "src/components/WritingCoach.tsx",
+  ];
+  for (const file of multilineFiles) {
+    const content = await readFile(file, "utf8");
+    assert.match(content, /shouldSendMultilineMessage/);
+    assert.match(content, /nativeEvent\.isComposing/);
+    assert.match(content, /sendShortcut/);
+  }
+  const singleLine = await readFile("src/components/CenteredCommandInput.tsx", "utf8");
+  assert.doesNotMatch(singleLine, /sendShortcut/);
+  assert.match(singleLine, /event\.key === "Enter"/);
+});
+
 test("正式设置页保持五类设计结构，确定性操作已接线且不直接 invoke", async () => {
   const page = await readFile("src/components/SettingsPage.tsx", "utf8");
   const balanceRefresh = await readFile("src/settingsBalanceRefresh.ts", "utf8");
   const styles = await readFile("src/styles/settings-page.css", "utf8");
+  const overlayStyles = await readFile("src/App.css", "utf8");
+  const mainStyles = await readFile("src/styles/main-app.css", "utf8");
+  const writingStyles = await readFile("src/styles/writing-page.css", "utf8");
   const repository = await readFile("src/settingsRepository.ts", "utf8");
+  const preferenceHook = await readFile("src/useAppPreferences.ts", "utf8");
+  const preferenceModel = await readFile("src/appPreferences.ts", "utf8");
+  const preferenceCoordinator = await readFile(
+    "src/appPreferenceSaveCoordinator.ts",
+    "utf8",
+  );
   const shell = await readFile("src/components/MainAppShell.tsx", "utf8");
   const rustSettings = await readFile("src-tauri/src/settings.rs", "utf8");
   const deepSeekClient = await readFile("src-tauri/src/deepseek_client.rs", "utf8");
@@ -593,14 +769,32 @@ test("正式设置页保持五类设计结构，确定性操作已接线且不�
   const migrations = await readFile("src-tauri/src/learning_records.rs", "utf8");
 
   assert.doesNotMatch(page, /\binvoke\s*\(|localStorage|sessionStorage/);
+  assert.doesNotMatch(preferenceHook, /\binvoke\s*\(|localStorage|sessionStorage/);
+  assert.match(preferenceHook, /service\.loadPreferences/);
+  assert.match(preferenceHook, /app-preferences-updated/);
+  assert.doesNotMatch(preferenceModel, /queryLocalFonts|navigator\.fonts|localStorage/);
+  assert.doesNotMatch(page, /service\.savePreferences|service\.loadPreferences/);
+  assert.match(preferenceHook, /new AppPreferenceSaveCoordinator/);
+  assert.match(preferenceHook, /service\.savePreferences/);
+  assert.match(preferenceHook, /service\.loadPreferences/);
+  assert.match(preferenceCoordinator, /generation !== this\.generation/);
+  assert.match(preferenceCoordinator, /保存失败，已恢复数据库设置/);
+  assert.match(page, /parseFontSizeCandidate/);
+  assert.match(
+    page,
+    /await onPreferencesSave\(next, previous\)[\s\S]*?isSettingsOperationCurrent\([\s\S]*?setSnapshot/,
+  );
+  assert.match(page, /finally\s*\{[\s\S]*?current === "loading" \? "error"/);
   assert.match(repository, /validate_and_save_deepseek_api_key/);
+  assert.match(repository, /get_app_preferences/);
+  assert.match(repository, /update_app_preferences/);
   assert.match(repository, /clear_deepseek_api_key/);
   assert.match(repository, /get_deepseek_balance/);
   assert.match(repository, /get_model_usage_summary/);
   assert.match(repository, /open_readray_data_directory/);
   assert.match(repository, /backup_readray_database/);
   assert.match(repository, /if \(!filePath\) \{[\s\S]*?return null/);
-  assert.match(shell, /<SettingsPage service=\{settingsService\}/);
+  assert.match(shell, /<SettingsPage[\s\S]*?service=\{settingsService\}[\s\S]*?onPreferencesSave=\{onPreferencesSave\}/);
   assert.match(page, /\["general", "通用"\]/);
   assert.match(page, /\["appearance", "外观"\]/);
   assert.match(page, /\["ai", "AI 服务"\]/);
@@ -632,12 +826,20 @@ test("正式设置页保持五类设计结构，确定性操作已接线且不�
   assert.match(styles, /\.rr-settings-nav\s*\{[\s\S]*?width:\s*192px/);
   assert.match(styles, /\.rr-settings-content\s*\{[\s\S]*?width:\s*min\(820px/);
   assert.match(styles, /\.rr-settings-row\s*\{[\s\S]*?min-height:\s*82px/);
-  assert.match(styles, /\.rr-settings-header h1\s*\{[\s\S]*?font-size:\s*30px/);
+  assert.match(styles, /\.rr-settings-header h1\s*\{[\s\S]*?font-size:\s*calc\(30px \* var\(--rr-ui-font-scale\)\)/);
   assert.match(styles, /\.rr-settings-link-row\s*\{[\s\S]*?border:\s*0 !important/);
   assert.match(styles, /\.rr-settings-link-row\s*\{[\s\S]*?border-radius:\s*0 !important/);
   assert.match(styles, /\.rr-settings-link-row\s*\{[\s\S]*?min-height:\s*54px !important/);
   assert.match(styles, /@container \(max-width:\s*1100px\)/);
   assert.match(styles, /@container \(max-width:\s*900px\)/);
+  assert.match(overlayStyles, /\.app-shell\s*\{[\s\S]*?font-size:\s*calc\(16px \* var\(--rr-ui-font-scale\)\)/);
+  assert.match(mainStyles, /\.rr-main-app\s*\{[\s\S]*?font-size:\s*calc\(16px \* var\(--rr-ui-font-scale\)\)/);
+  assert.match(writingStyles, /\.rr-writing-editor-title\s*\{[\s\S]*?font-family:\s*var\(--rr-learning-font-family\)[\s\S]*?font-size:\s*calc\(34px \* var\(--rr-learning-font-scale\)\)/);
+  assert.match(writingStyles, /\.rr-writing-article-editor\s*\{[\s\S]*?font-family:\s*var\(--rr-learning-font-family\)/);
+  assert.match(writingStyles, /\.rr-writing-pattern-grid p\s*\{[\s\S]*?font-family:\s*var\(--rr-learning-font-family\)[\s\S]*?var\(--rr-learning-font-scale\)/);
+  assert.match(writingStyles, /\.rr-writing-coach-head h2\s*\{[\s\S]*?font-family:\s*var\(--rr-ui-font-family\)/);
+  assert.match(writingStyles, /\.rr-writing-agent-empty button\s*\{[\s\S]*?font-family:\s*var\(--rr-ui-font-family\)[\s\S]*?var\(--rr-ui-font-scale\)/);
+  assert.doesNotMatch(writingStyles, /ReadRay Source Han (?:Serif|Sans)/);
   const snapshotStruct = rustSettings.slice(
     rustSettings.indexOf("pub struct SettingsSnapshot"),
     rustSettings.indexOf("struct DataCounts"),

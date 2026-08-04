@@ -1,3 +1,5 @@
+import type { AppPreferences } from "./appPreferences";
+
 export type ApiKeySource = "credential" | "environment" | "none";
 
 export type SettingsSnapshot = {
@@ -9,6 +11,7 @@ export type SettingsSnapshot = {
   conversationCount: number;
   writingDocumentCount: number;
   appVersion: string;
+  preferences: AppPreferences;
 };
 
 export type DeepSeekCurrencyBalance = {

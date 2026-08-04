@@ -6,6 +6,10 @@ import {
 } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import type { QuickAiConversation } from "../types/quickAi";
+import {
+  shouldSendMultilineMessage,
+  type SendShortcut,
+} from "../appPreferences";
 
 type QuickAiPanelProps = {
   open: boolean;
@@ -18,6 +22,7 @@ type QuickAiPanelProps = {
   onSend: (value: string) => void;
   onNewConversation: () => void;
   onOpenChange: (open: boolean) => void;
+  sendShortcut: SendShortcut;
 };
 
 function QuickAiPanel({
@@ -31,6 +36,7 @@ function QuickAiPanel({
   onSend,
   onNewConversation,
   onOpenChange,
+  sendShortcut,
 }: QuickAiPanelProps) {
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const messageListRef = useRef<HTMLDivElement>(null);
@@ -84,9 +90,15 @@ function QuickAiPanel({
 
   function handleTextareaKeyDown(event: KeyboardEvent<HTMLTextAreaElement>) {
     if (
-      event.key === "Enter" &&
-      !event.shiftKey &&
-      !event.nativeEvent.isComposing
+      shouldSendMultilineMessage(
+        {
+          key: event.key,
+          shiftKey: event.shiftKey,
+          ctrlKey: event.ctrlKey,
+          isComposing: event.nativeEvent.isComposing,
+        },
+        sendShortcut,
+      )
     ) {
       event.preventDefault();
       submitDraft();

@@ -51,7 +51,7 @@
   align-items: center;
   gap: 8px;
   color: var(--rr-writing-muted);
-  font-size: 12px;
+  font-size: calc(12px * var(--rr-ui-font-scale));
   white-space: nowrap;
 }
 
@@ -73,7 +73,7 @@
   border-radius: 6px !important;
   padding: 0 6px !important;
   color: var(--rr-writing-fg) !important;
-  font-size: 13px !important;
+  font-size: calc(13px * var(--rr-ui-font-scale)) !important;
   font-weight: 620 !important;
   line-height: 28px !important;
   text-overflow: ellipsis;
@@ -118,7 +118,7 @@
 
 .rr-writing-document-menu > button:first-child {
   min-height: 36px !important;
-  font-size: 12px;
+  font-size: calc(12px * var(--rr-ui-font-scale));
   font-weight: 620;
 }
 
@@ -138,7 +138,7 @@
   margin: 0 10px 2px;
   color: var(--rr-writing-meta);
   font-family: var(--rr-font-mono);
-  font-size: 9px;
+  font-size: calc(9px * var(--rr-ui-font-scale));
   letter-spacing: 0.06em;
 }
 
@@ -152,8 +152,8 @@
 }
 
 .rr-writing-document-menu strong {
-  font-family: var(--rr-font-body);
-  font-size: 13px;
+  font-family: var(--rr-ui-font-family);
+  font-size: calc(13px * var(--rr-ui-font-scale));
   font-weight: 540;
 }
 
@@ -161,13 +161,13 @@
 .rr-writing-switcher-empty {
   margin-top: 3px;
   color: var(--rr-writing-meta);
-  font-size: 9.5px;
+  font-size: calc(9.5px * var(--rr-ui-font-scale));
 }
 
 .rr-writing-switcher-empty {
   padding: 10px;
-  font-family: "ReadRay Source Han Serif SC", serif;
-  font-size: 10.5px;
+  font-family: var(--rr-ui-font-family);
+  font-size: calc(10.5px * var(--rr-ui-font-scale));
 }
 
 .rr-writing-document-actions {
@@ -183,7 +183,7 @@
   width: 62px;
   color: var(--rr-writing-meta);
   font-family: var(--rr-font-mono);
-  font-size: 10px;
+  font-size: calc(10px * var(--rr-ui-font-scale));
   text-align: right;
 }
 
@@ -202,7 +202,7 @@
   gap: 7px;
   border-radius: 8px !important;
   padding: 0 12px !important;
-  font-size: 12px !important;
+  font-size: calc(12px * var(--rr-ui-font-scale)) !important;
   font-weight: 620 !important;
   white-space: nowrap;
   transition: color 150ms, background 150ms, box-shadow 200ms, transform 150ms;
@@ -350,7 +350,7 @@
   margin-bottom: 24px;
   color: var(--rr-writing-meta);
   font-family: var(--rr-font-mono);
-  font-size: 9.5px;
+  font-size: calc(9.5px * var(--rr-ui-font-scale));
   letter-spacing: 0.08em;
   text-transform: uppercase;
 }
@@ -358,8 +358,8 @@
 .rr-writing-editor-title {
   margin: 0 0 30px;
   color: var(--rr-writing-fg);
-  font-family: var(--rr-font-body);
-  font-size: 34px;
+  font-family: var(--rr-learning-font-family);
+  font-size: calc(34px * var(--rr-learning-font-scale));
   font-weight: 540;
   line-height: 1.12;
   letter-spacing: -0.025em;
@@ -388,8 +388,8 @@
   min-height: 360px;
   color: var(--rr-writing-fg-2);
   caret-color: var(--rr-writing-fg);
-  font-family: var(--rr-font-body);
-  font-size: 18px;
+  font-family: var(--rr-learning-font-family);
+  font-size: calc(var(--rr-learning-font-size) + 1px);
   font-weight: 430;
   line-height: 1.68;
   outline: 0;
@@ -421,8 +421,8 @@
 
 .rr-writing-starter p {
   margin: 0;
-  font-family: "ReadRay Source Han Serif SC", serif;
-  font-size: 14px;
+  font-family: var(--rr-learning-font-family);
+  font-size: calc(14px * var(--rr-learning-font-scale));
   line-height: 1.6;
 }
 
@@ -432,7 +432,7 @@
   border-radius: 5px !important;
   padding: 0 8px !important;
   color: var(--rr-writing-fg-2) !important;
-  font-size: 11px;
+  font-size: calc(11px * var(--rr-ui-font-scale));
   pointer-events: auto;
 }
 
@@ -477,14 +477,16 @@
 
 .rr-writing-completion-takeaways > header h2 {
   margin: 0;
-  font-size: 12px;
+  font-family: var(--rr-learning-font-family);
+  font-size: calc(12px * var(--rr-learning-font-scale));
   font-weight: 650;
 }
 
 .rr-writing-completion-takeaways > header p {
   margin: 5px 0 0;
   color: var(--rr-writing-meta);
-  font-size: 10px;
+  font-family: var(--rr-learning-font-family);
+  font-size: calc(10px * var(--rr-learning-font-scale));
 }
 
 .rr-writing-completion-pattern {
@@ -503,20 +505,21 @@
   padding-top: 2px;
   color: var(--rr-writing-meta);
   font-family: var(--rr-font-mono);
-  font-size: 9px;
+  font-size: calc(9px * var(--rr-ui-font-scale));
 }
 
 .rr-writing-completion-pattern h3 {
   margin: 0;
-  font-size: 12px;
+  font-family: var(--rr-learning-font-family);
+  font-size: calc(12px * var(--rr-learning-font-scale));
   font-weight: 650;
 }
 
 .rr-writing-completion-pattern p {
   margin: 5px 0 0;
   color: var(--rr-writing-muted);
-  font-family: "ReadRay Source Han Serif SC", serif;
-  font-size: 11px;
+  font-family: var(--rr-learning-font-family);
+  font-size: calc(11px * var(--rr-learning-font-scale));
   line-height: 1.55;
 }
 
@@ -562,22 +565,23 @@
 
 .rr-writing-coach-head h2 {
   margin: 0;
-  font-size: 15px;
+  font-size: calc(15px * var(--rr-ui-font-scale));
   font-weight: 660;
+  font-family: var(--rr-ui-font-family);
   letter-spacing: -0.01em;
 }
 
 .rr-writing-coach-head span {
   color: var(--rr-writing-meta);
   font-family: var(--rr-font-mono);
-  font-size: 9.5px;
+  font-size: calc(9.5px * var(--rr-ui-font-scale));
 }
 
 .rr-writing-coach-head p {
   margin: 8px 0 0;
   color: var(--rr-writing-muted);
-  font-family: "ReadRay Source Han Serif SC", serif;
-  font-size: 12px;
+  font-family: var(--rr-learning-font-family);
+  font-size: calc(12px * var(--rr-learning-font-scale));
   line-height: 1.55;
 }
 
@@ -631,19 +635,19 @@
   justify-content: space-between;
   gap: 12px;
   color: var(--rr-writing-meta);
-  font-size: 10px;
+  font-size: calc(10px * var(--rr-ui-font-scale));
 }
 
 .rr-writing-feedback-type span:last-child {
   font-family: var(--rr-font-mono);
-  font-size: 9px;
+  font-size: calc(9px * var(--rr-ui-font-scale));
 }
 
 .rr-writing-feedback-source {
   margin: 9px 0 0;
   color: var(--rr-writing-fg);
-  font-family: var(--rr-font-body);
-  font-size: 14px;
+  font-family: var(--rr-learning-font-family);
+  font-size: calc(14px * var(--rr-learning-font-scale));
   font-weight: 520;
   line-height: 1.42;
 }
@@ -653,8 +657,8 @@
 .rr-writing-deeper-hint {
   margin: 8px 0 0;
   color: var(--rr-writing-muted);
-  font-family: "ReadRay Source Han Serif SC", serif;
-  font-size: 12px;
+  font-family: var(--rr-learning-font-family);
+  font-size: calc(var(--rr-learning-font-size) - 5px);
   line-height: 1.55;
 }
 
@@ -674,8 +678,8 @@
   padding: 10px 11px;
   color: var(--rr-writing-muted);
   background: var(--rr-writing-border-soft);
-  font-family: var(--rr-font-body);
-  font-size: 12px;
+  font-family: var(--rr-learning-font-family);
+  font-size: calc(12px * var(--rr-learning-font-scale));
   line-height: 1.48;
 }
 
@@ -695,7 +699,7 @@
   border-radius: 5px !important;
   padding: 0 7px !important;
   color: var(--rr-writing-muted) !important;
-  font-size: 10.5px;
+  font-size: calc(10.5px * var(--rr-ui-font-scale));
 }
 
 .rr-writing-feedback-actions > span {
@@ -723,15 +727,16 @@
   margin: 0 0 6px;
   color: var(--rr-writing-meta);
   font-family: var(--rr-font-mono);
-  font-size: 9px;
+  font-size: calc(9px * var(--rr-ui-font-scale));
   letter-spacing: 0.08em;
   text-transform: uppercase;
 }
 
 .rr-writing-assist-head h2 {
   margin: 0;
-  font-size: 15px;
+  font-size: calc(15px * var(--rr-ui-font-scale));
   font-weight: 660;
+  font-family: var(--rr-ui-font-family);
   letter-spacing: -0.01em;
 }
 
@@ -740,7 +745,7 @@
   border-radius: 5px !important;
   padding: 0 7px !important;
   color: var(--rr-writing-muted) !important;
-  font-size: 10px;
+  font-size: calc(10px * var(--rr-ui-font-scale));
 }
 
 .rr-writing-assist-head button:hover {
@@ -770,8 +775,8 @@
 .rr-writing-agent-empty > p {
   margin: 0;
   color: var(--rr-writing-fg-2);
-  font-family: "ReadRay Source Han Serif SC", serif;
-  font-size: 13px;
+  font-family: var(--rr-learning-font-family);
+  font-size: calc(13px * var(--rr-learning-font-scale));
   line-height: 1.65;
 }
 
@@ -779,7 +784,7 @@
   display: block;
   margin-top: 8px;
   color: var(--rr-writing-meta);
-  font-size: 10px;
+  font-size: calc(10px * var(--rr-ui-font-scale));
   line-height: 1.55;
 }
 
@@ -794,8 +799,8 @@
   border-radius: 5px !important;
   padding: 0 8px !important;
   color: var(--rr-writing-muted) !important;
-  font-family: "ReadRay Source Han Sans SC", sans-serif;
-  font-size: 11px;
+  font-family: var(--rr-ui-font-family);
+  font-size: calc(11px * var(--rr-ui-font-scale));
   text-align: left;
 }
 
@@ -808,7 +813,7 @@
   margin: 0 0 12px;
   color: var(--rr-writing-meta);
   font-family: var(--rr-font-mono);
-  font-size: 9px;
+  font-size: calc(9px * var(--rr-ui-font-scale));
   line-height: 1.5;
   letter-spacing: 0.035em;
 }
@@ -818,22 +823,23 @@
   border-bottom: 1px solid var(--rr-writing-border);
   padding: 0 0 14px;
   color: var(--rr-writing-fg);
-  font-family: var(--rr-font-body);
-  font-size: 14px;
+  font-family: var(--rr-learning-font-family);
+  font-size: calc(var(--rr-learning-font-size) - 3px);
   line-height: 1.5;
 }
 
 .rr-writing-agent-answer h3 {
   margin: 0 0 8px;
-  font-size: 13px;
+  font-family: var(--rr-learning-font-family);
+  font-size: calc(13px * var(--rr-learning-font-scale));
   font-weight: 660;
 }
 
 .rr-writing-agent-copy {
   margin: 0;
   color: var(--rr-writing-fg-2);
-  font-family: "ReadRay Source Han Serif SC", serif;
-  font-size: 12px;
+  font-family: var(--rr-learning-font-family);
+  font-size: calc(var(--rr-learning-font-size) - 5px);
   line-height: 1.68;
 }
 
@@ -856,7 +862,7 @@
   margin: 0 0 8px;
   color: var(--rr-writing-meta);
   font-family: var(--rr-font-mono);
-  font-size: 9px;
+  font-size: calc(9px * var(--rr-ui-font-scale));
   letter-spacing: 0.06em;
   text-transform: uppercase;
 }
@@ -866,8 +872,8 @@
 .rr-writing-map ul {
   margin: 0;
   color: var(--rr-writing-fg-2);
-  font-family: "ReadRay Source Han Serif SC", serif;
-  font-size: 12px;
+  font-family: var(--rr-learning-font-family);
+  font-size: calc(12px * var(--rr-learning-font-scale));
   line-height: 1.65;
 }
 
@@ -885,7 +891,7 @@
   gap: 6px;
   padding: 0;
   list-style: none;
-  font-family: var(--rr-font-body);
+  font-family: var(--rr-learning-font-family);
 }
 
 .rr-writing-map ul li {
@@ -897,7 +903,7 @@
 .rr-writing-map .rr-writing-map-starter {
   border-left: 1px solid var(--rr-writing-border);
   padding-left: 10px;
-  font-family: var(--rr-font-body);
+  font-family: var(--rr-learning-font-family);
 }
 
 .rr-writing-map .rr-writing-map-starter + .rr-writing-map-starter {
@@ -918,7 +924,7 @@
   padding: 0 8px !important;
   color: var(--rr-writing-muted) !important;
   background: var(--rr-writing-border-soft) !important;
-  font-size: 10px;
+  font-size: calc(10px * var(--rr-ui-font-scale));
 }
 
 .rr-writing-agent-refine button:hover {
@@ -950,14 +956,14 @@
 .rr-writing-agent-pending p {
   margin: 0 0 8px;
   color: var(--rr-writing-fg-2);
-  font-family: "ReadRay Source Han Serif SC", serif;
-  font-size: 12px;
+  font-family: var(--rr-learning-font-family);
+  font-size: calc(12px * var(--rr-learning-font-scale));
   line-height: 1.55;
 }
 
 .rr-writing-agent-pending span {
   color: var(--rr-writing-meta);
-  font-size: 10px;
+  font-size: calc(10px * var(--rr-ui-font-scale));
 }
 
 .rr-writing-agent-composer {
@@ -992,7 +998,7 @@
   overflow: hidden;
   padding: 4px 4px 0 7px;
   color: var(--rr-writing-muted);
-  font-size: 9px;
+  font-size: calc(9px * var(--rr-ui-font-scale));
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -1004,7 +1010,7 @@
   place-items: center;
   border-radius: 9999px !important;
   color: var(--rr-writing-meta) !important;
-  font-size: 13px;
+  font-size: calc(13px * var(--rr-ui-font-scale));
 }
 
 .rr-writing-agent-input > div {
@@ -1027,8 +1033,8 @@
   outline: 0;
   color: var(--rr-writing-fg);
   background: transparent;
-  font-family: "ReadRay Source Han Serif SC", serif;
-  font-size: 13px;
+  font-family: var(--rr-learning-font-family);
+  font-size: calc(13px * var(--rr-learning-font-scale));
   line-height: 1.48;
   scrollbar-width: none;
 }
@@ -1050,7 +1056,7 @@
   padding: 0 10px !important;
   color: var(--rr-writing-muted) !important;
   background: var(--rr-writing-warm) !important;
-  font-size: 11px;
+  font-size: calc(11px * var(--rr-ui-font-scale));
 }
 
 .rr-writing-agent-input.has-content > div > button {
@@ -1084,7 +1090,7 @@
   border-radius: 5px !important;
   padding: 0 8px !important;
   color: var(--rr-writing-bg) !important;
-  font-size: 10.5px;
+  font-size: calc(10.5px * var(--rr-ui-font-scale));
   white-space: nowrap;
 }
 
@@ -1120,7 +1126,7 @@
 
 .rr-writing-compare-head h1 {
   margin: 0;
-  font-size: 24px;
+  font-size: calc(24px * var(--rr-ui-font-scale));
   font-weight: 560;
   letter-spacing: -0.02em;
 }
@@ -1128,8 +1134,8 @@
 .rr-writing-compare-head p {
   margin: 7px 0 0;
   color: var(--rr-writing-muted);
-  font-family: "ReadRay Source Han Serif SC", serif;
-  font-size: 12px;
+  font-family: var(--rr-learning-font-family);
+  font-size: calc(12px * var(--rr-learning-font-scale));
   line-height: 1.5;
 }
 
@@ -1167,7 +1173,7 @@
   gap: 12px;
   color: var(--rr-writing-meta);
   font-family: var(--rr-font-mono);
-  font-size: 9.5px;
+  font-size: calc(9.5px * var(--rr-ui-font-scale));
   letter-spacing: 0.08em;
 }
 
@@ -1187,8 +1193,8 @@
 
 .rr-writing-diff-scroll > h2 {
   margin: 0 0 20px;
-  font-family: var(--rr-font-body);
-  font-size: 23px;
+  font-family: var(--rr-learning-font-family);
+  font-size: calc(23px * var(--rr-learning-font-scale));
   font-weight: 540;
   line-height: 1.2;
   letter-spacing: -0.02em;
@@ -1196,8 +1202,8 @@
 
 .rr-writing-diff-copy {
   color: var(--rr-writing-fg-2);
-  font-family: var(--rr-font-body);
-  font-size: 15px;
+  font-family: var(--rr-learning-font-family);
+  font-size: calc(15px * var(--rr-learning-font-scale));
   line-height: 1.58;
 }
 
@@ -1228,14 +1234,16 @@
 
 .rr-writing-patterns-title h2 {
   margin: 0;
-  font-size: 13px;
+  font-family: var(--rr-learning-font-family);
+  font-size: calc(13px * var(--rr-learning-font-scale));
   font-weight: 650;
 }
 
 .rr-writing-patterns-title p {
   margin: 5px 0 0;
   color: var(--rr-writing-meta);
-  font-size: 10px;
+  font-family: var(--rr-learning-font-family);
+  font-size: calc(10px * var(--rr-learning-font-scale));
 }
 
 .rr-writing-pattern-grid {
@@ -1259,20 +1267,21 @@
 .rr-writing-pattern-grid article > span {
   color: var(--rr-writing-meta);
   font-family: var(--rr-font-mono);
-  font-size: 10px;
+  font-size: calc(10px * var(--rr-ui-font-scale));
 }
 
 .rr-writing-pattern-grid h2 {
   margin: 0;
-  font-size: 12px;
+  font-family: var(--rr-learning-font-family);
+  font-size: calc(12px * var(--rr-learning-font-scale));
   font-weight: 650;
 }
 
 .rr-writing-pattern-grid p {
   margin: 6px 0 0;
   color: var(--rr-writing-muted);
-  font-family: "ReadRay Source Han Serif SC", serif;
-  font-size: 11px;
+  font-family: var(--rr-learning-font-family);
+  font-size: calc(11px * var(--rr-learning-font-scale));
   line-height: 1.5;
 }
 
@@ -1307,15 +1316,15 @@
   margin: 0 0 6px;
   color: var(--rr-writing-meta);
   font-family: var(--rr-font-mono);
-  font-size: 9.5px;
+  font-size: calc(9.5px * var(--rr-ui-font-scale));
   letter-spacing: 0.08em;
   text-transform: uppercase;
 }
 
 .rr-writing-library-head h1 {
   margin: 0;
-  font-family: var(--rr-font-body);
-  font-size: 30px;
+  font-family: var(--rr-learning-font-family);
+  font-size: calc(30px * var(--rr-learning-font-scale));
   font-weight: 540;
   line-height: 1.05;
   letter-spacing: -0.025em;
@@ -1326,8 +1335,8 @@
   max-width: 650px;
   margin-top: 7px;
   color: var(--rr-writing-muted);
-  font-family: "ReadRay Source Han Serif SC", serif;
-  font-size: 11.5px;
+  font-family: var(--rr-learning-font-family);
+  font-size: calc(11.5px * var(--rr-learning-font-scale));
   line-height: 1.5;
 }
 
@@ -1346,7 +1355,7 @@
   color: var(--rr-writing-fg);
   background: var(--rr-writing-bg);
   font-family: var(--rr-font-display);
-  font-size: 11px;
+  font-size: calc(11px * var(--rr-ui-font-scale));
 }
 
 .rr-writing-library-head-actions input {
@@ -1382,7 +1391,7 @@
   margin: 0 0 8px 10px;
   color: var(--rr-writing-meta);
   font-family: var(--rr-font-mono);
-  font-size: 9px;
+  font-size: calc(9px * var(--rr-ui-font-scale));
   letter-spacing: 0.08em;
 }
 
@@ -1405,14 +1414,14 @@
   border-radius: 6px !important;
   padding: 0 10px !important;
   color: var(--rr-writing-muted) !important;
-  font-size: 11px;
+  font-size: calc(11px * var(--rr-ui-font-scale));
   text-align: left;
 }
 
 .rr-writing-library-index button span:last-child {
   color: var(--rr-writing-meta);
   font-family: var(--rr-font-mono);
-  font-size: 9px;
+  font-size: calc(9px * var(--rr-ui-font-scale));
 }
 
 .rr-writing-library-index button:hover,
@@ -1438,7 +1447,7 @@
 .rr-writing-library-catalog-head h2 {
   margin: 0;
   font-family: var(--rr-font-body);
-  font-size: 18px;
+  font-size: calc(18px * var(--rr-ui-font-scale));
   font-weight: 540;
   letter-spacing: -0.015em;
 }
@@ -1447,8 +1456,8 @@
   display: block;
   margin-top: 3px;
   color: var(--rr-writing-meta);
-  font-family: "ReadRay Source Han Serif SC", serif;
-  font-size: 10px;
+  font-family: var(--rr-ui-font-family);
+  font-size: calc(10px * var(--rr-ui-font-scale));
 }
 
 .rr-writing-library-catalog-head select {
@@ -1492,7 +1501,7 @@
   padding: 5px 7px !important;
   border-radius: 6px !important;
   color: var(--rr-writing-meta) !important;
-  font-size: 10px !important;
+  font-size: calc(10px * var(--rr-ui-font-scale)) !important;
   opacity: 0;
   transition: color 150ms, opacity 150ms, background 150ms;
 }
@@ -1523,7 +1532,7 @@
 
 .rr-writing-article-title {
   font-family: var(--rr-font-body);
-  font-size: 16.5px;
+  font-size: calc(16.5px * var(--rr-ui-font-scale));
   font-weight: 540;
   line-height: 1.2;
 }
@@ -1541,7 +1550,7 @@
 .rr-writing-article-meta > span {
   color: var(--rr-writing-meta);
   font-family: var(--rr-font-mono);
-  font-size: 9.5px;
+  font-size: calc(9.5px * var(--rr-ui-font-scale));
   white-space: nowrap;
 }
 
@@ -1565,14 +1574,14 @@
 .rr-writing-article-excerpt {
   margin-top: 5px;
   color: var(--rr-writing-muted);
-  font-family: "ReadRay Source Han Serif SC", serif;
-  font-size: 10.5px;
+  font-family: var(--rr-learning-font-family);
+  font-size: calc(10.5px * var(--rr-learning-font-scale));
   line-height: 1.35;
 }
 
 .rr-writing-article-enter {
   color: var(--rr-writing-meta);
-  font-size: 13px;
+  font-size: calc(13px * var(--rr-ui-font-scale));
   transition: color 150ms, transform 150ms;
 }
 
@@ -1585,8 +1594,8 @@
   margin: 0;
   padding: 34px 14px;
   color: var(--rr-writing-meta);
-  font-family: "ReadRay Source Han Serif SC", serif;
-  font-size: 11px;
+  font-family: var(--rr-ui-font-family);
+  font-size: calc(11px * var(--rr-ui-font-scale));
 }
 
 .rr-writing-operation-error,
@@ -1600,8 +1609,8 @@
   border-radius: 8px;
   background: color-mix(in srgb, var(--rr-writing-danger) 6%, var(--rr-writing-paper));
   color: var(--rr-writing-danger);
-  font-family: "ReadRay Source Han Serif SC", serif;
-  font-size: 11px;
+  font-family: var(--rr-ui-font-family);
+  font-size: calc(11px * var(--rr-ui-font-scale));
 }
 
 .rr-writing-operation-error {
@@ -1648,7 +1657,7 @@
   background-color: transparent;
   color: var(--rr-writing-muted);
   font-family: var(--rr-font-mono);
-  font-size: 10px;
+  font-size: calc(10px * var(--rr-ui-font-scale));
 }
 
 @container (max-width: 980px) {

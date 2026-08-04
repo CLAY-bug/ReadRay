@@ -9,7 +9,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use tauri::{AppHandle, Manager};
 
 const DATABASE_FILE_NAME: &str = "readray.sqlite3";
-const DATABASE_SCHEMA_VERSION: i64 = 5;
+const DATABASE_SCHEMA_VERSION: i64 = 6;
 pub const EXPLANATION_CARD_SCHEMA_VERSION: i64 = 1;
 const DEFAULT_PAGE: u32 = 1;
 const DEFAULT_PAGE_SIZE: u32 = 20;
@@ -166,12 +166,43 @@ CREATE INDEX idx_model_usage_records_created_category
   ON model_usage_records(created_at_unix_ms, category);
 "#;
 
+const MIGRATION_6: &str = r#"
+CREATE TABLE app_preferences (
+  id INTEGER PRIMARY KEY CHECK (id = 1),
+  revision INTEGER NOT NULL DEFAULT 0 CHECK (revision >= 0),
+  ui_font TEXT NOT NULL CHECK (ui_font IN ('geist_source_han_sans', 'source_han_sans')),
+  ui_font_size INTEGER NOT NULL CHECK (ui_font_size BETWEEN 12 AND 20),
+  learning_font TEXT NOT NULL CHECK (learning_font IN ('newsreader_source_han_serif', 'source_han_serif')),
+  learning_font_size INTEGER NOT NULL CHECK (learning_font_size BETWEEN 14 AND 24),
+  send_shortcut TEXT NOT NULL CHECK (send_shortcut IN ('enter', 'ctrl_enter'))
+);
+
+INSERT INTO app_preferences (
+  id,
+  revision,
+  ui_font,
+  ui_font_size,
+  learning_font,
+  learning_font_size,
+  send_shortcut
+) VALUES (
+  1,
+  0,
+  'geist_source_han_sans',
+  14,
+  'newsreader_source_han_serif',
+  17,
+  'enter'
+);
+"#;
+
 const MIGRATIONS: &[(i64, &str)] = &[
     (1, MIGRATION_1),
     (2, MIGRATION_2),
     (3, MIGRATION_3),
     (4, MIGRATION_4),
-    (DATABASE_SCHEMA_VERSION, MIGRATION_5),
+    (5, MIGRATION_5),
+    (DATABASE_SCHEMA_VERSION, MIGRATION_6),
 ];
 
 #[derive(Clone, Debug, Serialize)]
@@ -1018,6 +1049,90 @@ mod tests {
         assert_eq!(usage_table_count, 1);
         assert_eq!(preserved_title, "升级后保留");
         assert_eq!(usage_count, 0);
+        drop(upgraded);
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn version_five_database_adds_default_preferences_without_losing_usage() {
+        let (root, path) = test_database_path();
+        fs::create_dir_all(&root).unwrap();
+        let connection = Connection::open(&path).unwrap();
+        connection
+            .execute_batch(
+                "CREATE TABLE schema_migrations (
+                    version INTEGER PRIMARY KEY,
+                    applied_at_unix_ms INTEGER NOT NULL
+                 );",
+            )
+            .unwrap();
+        connection.execute_batch(MIGRATION_1).unwrap();
+        connection.execute_batch(MIGRATION_2).unwrap();
+        connection.execute_batch(MIGRATION_3).unwrap();
+        connection.execute_batch(MIGRATION_4).unwrap();
+        connection.execute_batch(MIGRATION_5).unwrap();
+        connection
+            .execute(
+                "INSERT INTO schema_migrations (version, applied_at_unix_ms)
+                 VALUES (1, 100), (2, 200), (3, 300), (4, 400), (5, 500)",
+                [],
+            )
+            .unwrap();
+        connection
+            .execute(
+                "INSERT INTO model_usage_records (
+                    category, prompt_tokens, completion_tokens, total_tokens, created_at_unix_ms
+                 ) VALUES ('quick_ai', 10, 5, 15, 600)",
+                [],
+            )
+            .unwrap();
+        drop(connection);
+
+        let upgraded = open_database(&path).unwrap();
+        let version: i64 = upgraded
+            .query_row("SELECT MAX(version) FROM schema_migrations", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        let usage_total: i64 = upgraded
+            .query_row(
+                "SELECT total_tokens FROM model_usage_records WHERE id = 1",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        let defaults: (i64, String, i64, String, i64, String) = upgraded
+            .query_row(
+                "SELECT revision, ui_font, ui_font_size, learning_font,
+                        learning_font_size, send_shortcut
+                 FROM app_preferences WHERE id = 1",
+                [],
+                |row| {
+                    Ok((
+                        row.get(0)?,
+                        row.get(1)?,
+                        row.get(2)?,
+                        row.get(3)?,
+                        row.get(4)?,
+                        row.get(5)?,
+                    ))
+                },
+            )
+            .unwrap();
+
+        assert_eq!(version, DATABASE_SCHEMA_VERSION);
+        assert_eq!(usage_total, 15);
+        assert_eq!(
+            defaults,
+            (
+                0,
+                "geist_source_han_sans".to_string(),
+                14,
+                "newsreader_source_han_serif".to_string(),
+                17,
+                "enter".to_string(),
+            )
+        );
         drop(upgraded);
         let _ = fs::remove_dir_all(root);
     }
