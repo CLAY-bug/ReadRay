@@ -47,6 +47,7 @@ import geistLicense from "../assets/fonts/licenses/Geist-OFL.txt?raw";
 import newsreaderLicense from "../assets/fonts/licenses/Newsreader-OFL.txt?raw";
 import sourceHanSansLicense from "../assets/fonts/licenses/Source-Han-Sans-OFL.txt?raw";
 import sourceHanSerifLicense from "../assets/fonts/licenses/Source-Han-Serif-OFL.txt?raw";
+import flexokiLicense from "../assets/flexoki-LICENSE.txt?raw";
 
 type SettingsSection = "general" | "appearance" | "ai" | "data" | "about";
 type OperationState = "idle" | "saving" | "clearing";
@@ -77,6 +78,11 @@ const usageRanges: ReadonlyArray<readonly [ModelUsageRange, string]> = [
 ];
 
 const licenseMaterials = [
+  {
+    name: "Flexoki（内置主题配色）",
+    license: "MIT License",
+    text: flexokiLicense,
+  },
   {
     name: "Geist 与 Geist Mono",
     license: "SIL Open Font License 1.1",
@@ -316,7 +322,6 @@ function SettingsPage({
   const [themeStatus, setThemeStatus] = useState<RequestStatus>("idle");
   const [themeMessage, setThemeMessage] = useState<string>();
   const [themeRetry, setThemeRetry] = useState<ThemeMutationRetry>();
-  const [confirmingThemeDelete, setConfirmingThemeDelete] = useState<string>();
   const mountedRef = useRef(false);
   const operationKeyRef = useRef(0);
   const balanceControllerRef = useRef<{
@@ -950,7 +955,6 @@ function SettingsPage({
         case "saved":
           setThemeStatus("success");
           setThemeMessage(successMessage(outcome));
-          setConfirmingThemeDelete(undefined);
           break;
         case "failed":
           setThemeStatus("error");
@@ -983,29 +987,6 @@ function SettingsPage({
     }
   }
 
-  function importTheme() {
-    void runThemeMutation(
-      "主题导入",
-      { kind: "import" },
-      () => themeController.importPackage(),
-      (outcome) => {
-        const imported = outcome.mutation.kind === "import"
-          ? outcome.snapshot.themes.find(
-              (theme) => theme.manifest.id === outcome.mutation.themeId,
-            )
-          : undefined;
-        const warningCopy = imported?.warnings.length
-          ? ` 已安全忽略：${imported.warnings.slice(0, 3).join("；")}${
-              imported.warnings.length > 3 ? "；其余警告已省略" : ""
-            }。`
-          : "";
-        return imported
-          ? `已导入 ${imported.manifest.name}，当前主题未改变。${warningCopy}`
-          : "主题已导入，当前主题未改变。";
-      },
-    );
-  }
-
   function selectTheme(themeId: string, mode?: ThemeMode) {
     const theme = themeController.snapshot.themes.find(
       (candidate) => candidate.manifest.id === themeId,
@@ -1025,23 +1006,6 @@ function SettingsPage({
       { kind: "select", themeId, mode: selectedMode },
       () => themeController.select(themeId, selectedMode),
       () => `已应用 ${theme.manifest.name} · ${selectedMode === "light" ? "浅色" : "深色"}。`,
-    );
-  }
-
-  function deleteTheme(themeId: string) {
-    const theme = themeController.snapshot.themes.find(
-      (candidate) => candidate.manifest.id === themeId,
-    );
-    if (!theme || theme.builtin) return;
-    void runThemeMutation(
-      "主题删除",
-      { kind: "delete", themeId },
-      () => themeController.delete(themeId),
-      () => `已删除 ${theme.manifest.name}${
-        themeController.snapshot.currentThemeId === themeId
-          ? "，并恢复 ReadRay Default"
-          : ""
-      }。`,
     );
   }
 
@@ -1345,54 +1309,6 @@ function SettingsPage({
                               </option>
                             ))}
                           </select>
-                          <button
-                            className="rr-settings-button"
-                            type="button"
-                            disabled={themeBusy || themeController.status === "error"}
-                            onClick={importTheme}
-                          >
-                            导入主题
-                          </button>
-                          {selectedTheme?.builtin ? (
-                            <button
-                              className="rr-settings-button rr-settings-unavailable"
-                              type="button"
-                              disabled
-                              title="ReadRay Default 是内置主题，不能删除"
-                            >
-                              删除主题
-                            </button>
-                          ) : confirmingThemeDelete === selectedTheme?.manifest.id ? (
-                            <>
-                              <button
-                                className="rr-settings-button is-danger"
-                                type="button"
-                                disabled={themeBusy}
-                                onClick={() => {
-                                  if (selectedTheme) deleteTheme(selectedTheme.manifest.id);
-                                }}
-                              >
-                                确认删除
-                              </button>
-                              <button
-                                className="rr-settings-restore"
-                                type="button"
-                                disabled={themeBusy}
-                                onClick={() => setConfirmingThemeDelete(undefined)}
-                              >
-                                取消
-                              </button>
-                            </>
-                          ) : (
-                            <button
-                              className="rr-settings-button"
-                              type="button"
-                              disabled={themeBusy || !selectedTheme}
-                              onClick={() => setConfirmingThemeDelete(selectedTheme?.manifest.id)}
-                            >
-                              删除主题
-                            </button>
-                          )}
                         </div>
                       </div>
                     </div>
@@ -1420,9 +1336,6 @@ function SettingsPage({
                       ) : null}
                     </div>
                   ) : null}
-                  <FutureNote>
-                    仅支持 ReadRayThemeV1 的 manifest.json 与 theme.css；原始 CSS 不会执行，外部主题需经独立适配器转换。
-                  </FutureNote>
                 </div>
 
                 <div className="rr-settings-group">
@@ -2074,7 +1987,7 @@ function SettingsPage({
             <div className="rr-settings-license-head">
               <div>
                 <h2 id="rr-settings-license-title">许可证与第三方材料</h2>
-                <p>以下材料随 ReadRay 字体资源一起打包，可展开查看完整许可证文本。</p>
+                <p>以下材料随 ReadRay 字体与主题资源一起打包，可展开查看完整许可证文本。</p>
               </div>
               <button
                 className="rr-settings-button"

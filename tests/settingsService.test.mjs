@@ -843,10 +843,10 @@ test("正式设置页保持五类设计结构，确定性操作已接线且不�
   assert.match(page, /\["ai", "AI 服务"\]/);
   assert.match(page, /\["data", "数据"\]/);
   assert.match(page, /\["about", "关于"\]/);
-  assert.match(page, /themeController\.importPackage/);
   assert.match(page, /themeController\.select/);
-  assert.match(page, /themeController\.delete/);
-  assert.match(page, /ReadRay Default 是内置主题，不能删除/);
+  assert.doesNotMatch(page, /themeController\.importPackage/);
+  assert.doesNotMatch(page, /themeController\.delete/);
+  assert.doesNotMatch(page, /ReadRay 内置主题不能删除/);
   assert.match(page, /录制新快捷键/);
   assert.match(page, /shortcutFromKeyEvent/);
   assert.match(page, /恢复默认快捷键/);
@@ -874,7 +874,7 @@ test("正式设置页保持五类设计结构，确定性操作已接线且不�
   assert.match(page, /隐藏到托盘/);
   assert.match(page, /autostart/i);
   assert.match(page, /closeBehavior/);
-  assert.match(styles, /\.rr-settings-nav\s*\{[\s\S]*?width:\s*192px/);
+  assert.match(styles, /\.rr-settings-nav\s*\{[\s\S]*?width:\s*160px/);
   assert.match(styles, /\.rr-settings-content\s*\{[\s\S]*?width:\s*min\(820px/);
   assert.match(styles, /\.rr-settings-row\s*\{[\s\S]*?min-height:\s*82px/);
   assert.match(styles, /\.rr-settings-header h1\s*\{[\s\S]*?font-size:\s*calc\(30px \* var\(--rr-ui-font-scale\)\)/);

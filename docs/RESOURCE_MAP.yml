@@ -4,7 +4,7 @@ project:
   repo_root: "."
 
 meta:
-  version: "1.31"
+  version: "1.35"
   last_updated: "2026-08-05"
   updated_by: "Codex"
   source_of_truth: "docs/RESOURCE_MAP.yml"
@@ -167,8 +167,8 @@ source_areas:
     purpose: "主应用全局左侧栏，包含新对话、学习导航、最近对话、查看全部和设置入口。"
     status: "active"
     read_when:
-      - "调整主应用导航结构、最近对话展示或手动折叠态。"
-    notes: "默认宽 252px，用户手动折叠为 72px 纯图标栏；展开态最近对话来自真实 Quick AI 标题，并支持 loading/empty/error/retry。最近项左键打开，右键把数据库 ID 和标题交给统一的会话管理菜单；不维护常驻或悬停操作按钮。"
+      - "调整主应用导航结构、最近对话展示、手动折叠态或侧边栏宽度拖拽。"
+    notes: "默认宽 252px，用户手动折叠为 72px 纯图标栏；展开态最近对话来自真实 Quick AI 标题，并支持 loading/empty/error/retry。最近项左键打开，右键把数据库 ID 和标题交给统一的会话管理菜单；不维护常驻或悬停操作按钮。侧边栏右缘提供 180–360px 的拖拽调整手柄，拖拽宽度经 onWidthChange 上报到外壳并通过 --rr-main-sidebar-width 应用，折叠态隐藏手柄。"
     risk: "组件只消费装配层数据；最近对话和查看全部入口不得自行读取 SQLite 或维护第二份会话事实。"
 
   - path: "src/components/TodayPage.tsx"
@@ -262,16 +262,24 @@ source_areas:
     read_when:
       - "调整设置页、DeepSeek Key 首次配置/更新/清除或失败重试。"
       - "排查设置页 loading、重启恢复或窄窗口布局。"
-    notes: "复用 MainAppShell、MainSidebar 和标题栏；页面只消费 SettingsService 与应用级 AppThemeController。主题区真实支持本地 ReadRayThemeV1 导入、实际 mode 选择和自定义主题删除；内置默认不可删除，同 ID 明确拒绝。既有 Key、余额、Token、数据、字体字号、发送键、全局快捷键、开机启动和关闭策略保持原正式链路。"
+    notes: "复用 MainAppShell、MainSidebar 和标题栏；页面只消费 SettingsService 与应用级 AppThemeController。主题区只提供随包内置主题的选择与 light/dark 模式切换，暂不开放导入或删除入口；主题失败不得覆盖当前权威配色。既有 Key、余额、Token、数据、字体字号、发送键、全局快捷键、开机启动和关闭策略保持原正式链路。"
     risk: "不得直接 invoke、读主题文件、读取 localStorage/sessionStorage、显示或返回已保存 Key 明文；主题失败不得覆盖当前权威配色。"
 
   - path: "src/themeProtocol.ts"
-    purpose: "ReadRayThemeV1 前端类型、严格快照校验、内置默认主题和白名单 CSS 变量应用。"
+    purpose: "ReadRayThemeV1 前端类型、严格快照校验、内置主题（ReadRay Default、Flexoki 与 28 个 Codex 预设）和白名单 CSS 变量应用。"
     status: "active"
     read_when:
-      - "调整主题语义 token、默认回退、运行时变量或 adapter 边界。"
-    notes: "只把规范化颜色逐项写入既有 rr-main 变量；应用中途失败会恢复全部旧值，ReadRay Default 保留当前浅色视觉。字符串长度按 Unicode code point 计数（Array.from().length），与 Rust chars().count() 一致，保证含 emoji 的 manifest 在前端校验与 Rust 安全预检结果相同。"
+      - "调整主题语义 token、默认回退、内置主题、运行时变量或 adapter 边界。"
+    notes: "只把规范化颜色逐项写入既有 rr-main 变量；应用中途失败会恢复全部旧值，ReadRay Default 保留当前浅色视觉。字符串长度按 Unicode code point 计数（Array.from().length），与 Rust chars().count() 一致，保证含 emoji 的 manifest 在前端校验与 Rust 安全预检结果相同。内置主题列表由 READRAY_BUILTIN_THEME_IDS 定义（30 个随包主题），快照校验要求所有已知内置主题与 canonical 完全一致并拒绝未知内置标记；Codex 内置主题完整配色来自 codexThemeData.ts（由生成脚本产出，与 Rust 端字节级一致），不运行时派生。"
     risk: "不得接收或插入原始 CSS，也不得把主题应用到 overlay、字体、字号或布局。"
+
+  - path: "src/codexThemeData.ts"
+    purpose: "28 个 Codex 预设内置主题的完整展开配色与 manifest 数据表。"
+    status: "active"
+    read_when:
+      - "调整 Codex 内置主题配色、来源或许可证归属。"
+    notes: "由 scripts/gen-themes.mjs 从 scripts/codex-theme-extract/core-palette.json 生成，不要手工编辑；与 src-tauri/src/codex_themes_data.rs 字节级一致，避免运行时派生的浮点分叉。每个主题保留真实 light/dark 可用性并标注来源与许可证。"
+    risk: "修改配色应改 core-palette.json 后重跑生成脚本，不能直接改本文件；不得在运行时依赖 Codex 安装目录或网络。"
 
   - path: "src/themeRepository.ts"
     purpose: "主题目录原生选择与 get/import/select/delete typed Tauri commands。"
@@ -306,11 +314,11 @@ source_areas:
     risk: "不得在 overlay 创建主题服务，不得使用 localStorage/sessionStorage 或直接 invoke。"
 
   - path: "tests/themeService.test.mjs"
-    purpose: "主题前端 typed commands、快照校验、默认变量等价、失败回滚和正式安全边界测试。"
+    purpose: "主题前端 typed commands、快照校验、内置主题列表、默认变量等价、失败回滚和正式安全边界测试。"
     status: "active"
     read_when:
-      - "修改主题前端协议、运行时应用或设置页正式路径。"
-    notes: "由 test:settings 统一运行；聚焦覆盖 Rust/前端规范颜色、按 code point 的字符串长度边界、导入精确目标、提交未确认对账、并发冲突、默认变量、运行时回滚和阴影 token 静态守卫；Rust 配套测试覆盖 CSS 文本解析、限制、可读性、SQLite lifecycle 和重启恢复。"
+      - "修改主题前端协议、内置主题、运行时应用或设置页正式路径。"
+    notes: "由 test:settings 统一运行；聚焦覆盖 Rust/前端规范颜色、按 code point 的字符串长度边界、内置主题列表与 Flexoki 双模式运行时变量映射、28 个 Codex 内置主题的清单/模式支持/唯一 ID/删除限制/运行时变量映射、builtin 删除限制、导入精确目标、提交未确认对账、并发冲突、默认变量、运行时回滚和阴影 token 静态守卫；Rust 配套测试覆盖 CSS 文本解析、限制、可读性、SQLite lifecycle、重启恢复、Flexoki 与 Codex 内置主题保护。"
     risk: "自动测试不替代真实 Tauri 的原生目录选择、即时视觉和重启人工验收。"
 
   - path: "src/settingsBalanceRefresh.ts"
@@ -623,7 +631,7 @@ source_areas:
     status: "active"
     read_when:
       - "调整设置页视觉、1440×900/840×600 或两档侧栏布局。"
-    notes: "全部使用 rr-settings-* 作用域并复用 main-app.css 变量；包含余额、使用量 loading/error/retry、数据操作和确认框状态。应用容器不超过 1100px 时分类导航改为顶部横向，不超过 900px 时表单与数据行纵向排列。"
+    notes: "全部使用 rr-settings-* 作用域并复用 main-app.css 变量；包含余额、使用量 loading/error/retry、数据操作和确认框状态。分类导航栏 160px 宽，应用容器不超过 1100px 时转为顶部横向，不超过 900px 时表单与数据行纵向排列。所有 select 使用 appearance:none + 自定义 chevron、hover/focus 边框过渡与主题色焦点光晕。"
     risk: "不要复制 App Shell、重定义全局 token 或影响今天、写作、记忆、对话、overlay 和 UIA。"
 
   - path: "src/assets/fonts/"
@@ -811,8 +819,16 @@ source_areas:
     status: "active"
     read_when:
       - "调整主题协议、安全白名单、路径限制、可读性或导入/选择/删除持久化。"
-    notes: "只读所选目录直属普通文件；拒绝 at-rule、URL、脚本、嵌套和超限输入，忽略未知选择器/变量并返回警告；颜色输出为前后端共用的唯一规范形式；导入支持只读安全预检并在写入时重新解析核对目标 ID；数据库只保存规范化主题，不保存原始 CSS。"
+    notes: "只读所选目录直属普通文件；拒绝 at-rule、URL、脚本、嵌套和超限输入，忽略未知选择器/变量并返回警告；颜色输出为前后端共用的唯一规范形式；导入支持只读安全预检并在写入时重新解析核对目标 ID；数据库只保存规范化主题，不保存原始 CSS。内置主题由 builtin_theme_ids() 统一维护（readray-default、flexoki 与 28 个 Codex 预设），随包主题不可删除、不可被自定义 ID 冲突覆盖，模式选择按各内置主题实际声明的 modes 校验。Flexoki 配色映射只读取自本机 Obsidian Flexoki 1.1.0（Steph Ango，MIT）；Codex 预设主题完整配色来自 codex_themes_data.rs（生成脚本产出，与前端字节级一致），各主题标注来源与许可证。"
     risk: "不得执行 CSS、联网下载、静默覆盖同 ID、放宽目录边界或把内置默认主题重复写入数据库。"
+
+  - path: "src-tauri/src/codex_themes_data.rs"
+    purpose: "28 个 Codex 预设内置主题的完整展开配色与 manifest 数据表（Rust 侧）。"
+    status: "active"
+    read_when:
+      - "调整 Codex 内置主题配色、来源或许可证归属。"
+    notes: "由 scripts/gen-themes.mjs 从 scripts/codex-theme-extract/core-palette.json 生成，不要手工编辑；与 src/codexThemeData.ts 字节级一致，避免运行时派生的浮点分叉。const 静态表使用 &'static str 字段，运行时由 codex_builtin_themes() 转为 ReadRayThemeV1。"
+    risk: "修改配色应改 core-palette.json 后重跑生成脚本，不能直接改本文件；不得在运行时依赖 Codex 安装目录或网络。"
 
   - path: "src-tauri/src/conversations.rs"
     purpose: "Quick AI conversation/message SQLite 仓库和序列化协议。"
@@ -867,6 +883,38 @@ source_areas:
       - "需要重新核对或刷新比赛官方资料。"
     notes: "使用 requests 抓取官网页面和附件，使用 PyMuPDF/zip XML 抽取 PDF/DOCX 文本。"
     risk: "该脚本会覆盖同名 resource 文件；运行前应确认 Git 状态可回滚。"
+
+  - path: "scripts/extract-asar.mjs"
+    purpose: "一次性只读脚本：从 Codex app.asar 提取主题注册表与主题 chunk 文件。"
+    status: "active"
+    read_when:
+      - "Codex 更新后需要重新核对或刷新内置主题来源。"
+    notes: "使用 Node 原生 fs/buffer 解析 ASAR 格式（不新增依赖），只读取不修改；用 Get-AppxPackage OpenAI.Codex 动态定位安装目录后传入 app.asar 路径。"
+    risk: "仅作为开发期一次性只读工具，不构成运行时依赖；Codex 更新后路径与哈希会变化，应重新动态定位。"
+
+  - path: "scripts/parse-themes.mjs"
+    purpose: "一次性只读脚本：从提取的主题 chunk 解析核心调色板（surface/ink/accent/sidebar/selection/diff/skill）。"
+    status: "active"
+    read_when:
+      - "Codex 主题 chunk 格式变化或需要重新提取核心配色。"
+    notes: "按 Codex 注册表 FSi 规则从 VS Code theme colors 推导核心调色板，输出 palette.json 供 derive-themes.mjs 使用。"
+    risk: "只读开发脚本，不构成运行时依赖。"
+
+  - path: "scripts/derive-themes.mjs"
+    purpose: "一次性脚本：把核心调色板派生为 ReadRayThemeV1 完整 28-token 并做对比度预检。"
+    status: "active"
+    read_when:
+      - "调整 Codex 主题派生规则或对比度修正覆盖。"
+    notes: "把带 alpha 前景合成到不透明表面后再线性插值派生；输出 core-palette.json 作为 gen-themes.mjs 的权威输入，并报告对比度低于 4.5:1 的主题。"
+    risk: "派生规则修改后必须重新生成两端数据并重跑验证；只读开发脚本。"
+
+  - path: "scripts/gen-themes.mjs"
+    purpose: "数据驱动内置主题生成器：从 core-palette.json 生成 Rust 与前端两份字节级一致的完整配色数据。"
+    status: "active"
+    read_when:
+      - "调整 Codex 内置主题配色、来源或许可证归属。"
+    notes: "输出 src-tauri/src/codex_themes_data.rs 与 src/codexThemeData.ts；生成后需运行 cargo fmt --check 与 pnpm test:settings 验证。"
+    risk: "生成数据改动会影响全部内置主题校验；不要手工编辑生成文件，改 core-palette.json 后重跑。"
 
 app_scaffold:
   - path: ".env.example"

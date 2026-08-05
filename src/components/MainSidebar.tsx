@@ -1,8 +1,10 @@
 import {
+  useCallback,
   useLayoutEffect,
   useRef,
   useState,
   type MouseEvent,
+  type PointerEvent,
 } from "react";
 import type {
   MainAppNavigationId,
@@ -11,8 +13,13 @@ import type {
 } from "../mainAppViewModel";
 import MainAppIcon from "./MainAppIcon";
 
+const SIDEBAR_MIN_WIDTH = 180;
+const SIDEBAR_MAX_WIDTH = 360;
+
 type MainSidebarProps = {
   collapsed: boolean;
+  width: number | null;
+  onWidthChange: (width: number) => void;
   navigation: MainAppNavigationItem[];
   recentConversations: RecentConversationItem[];
   recentStatus: "loading" | "ready" | "error";
@@ -67,6 +74,8 @@ function RecentConversationTitle({ title }: RecentConversationTitleProps) {
 
 function MainSidebar({
   collapsed,
+  width,
+  onWidthChange,
   navigation,
   recentConversations,
   recentStatus,
@@ -81,6 +90,30 @@ function MainSidebar({
   onRecentRetry,
 }: MainSidebarProps) {
   const settingsActive = activeNavigationId === "settings";
+  const dragState = useRef<{ startX: number; startWidth: number } | null>(null);
+
+  const handlePointerDown = useCallback((event: PointerEvent<HTMLDivElement>) => {
+    if (collapsed) return;
+    dragState.current = {
+      startX: event.clientX,
+      startWidth: width ?? 252,
+    };
+    event.currentTarget.setPointerCapture(event.pointerId);
+  }, [collapsed, width]);
+
+  const handlePointerMove = useCallback((event: PointerEvent<HTMLDivElement>) => {
+    const state = dragState.current;
+    if (!state) return;
+    const next = Math.round(
+      Math.min(SIDEBAR_MAX_WIDTH, Math.max(SIDEBAR_MIN_WIDTH, state.startWidth + (event.clientX - state.startX))),
+    );
+    onWidthChange(next);
+  }, [onWidthChange]);
+
+  const handlePointerUp = useCallback((event: PointerEvent<HTMLDivElement>) => {
+    dragState.current = null;
+    event.currentTarget.releasePointerCapture(event.pointerId);
+  }, []);
 
   return (
     <aside className="rr-main-sidebar" aria-label="全局导航">
@@ -169,6 +202,17 @@ function MainSidebar({
         <span className="rr-main-nav-icon"><MainAppIcon name="settings" /></span>
         <span className="rr-main-nav-label">设置</span>
       </button>
+
+      <div
+        className="rr-main-sidebar-resizer"
+        role="separator"
+        aria-orientation="vertical"
+        aria-label="调整侧边栏宽度"
+        onPointerDown={handlePointerDown}
+        onPointerMove={handlePointerMove}
+        onPointerUp={handlePointerUp}
+        onPointerCancel={handlePointerUp}
+      />
     </aside>
   );
 }

@@ -1,6 +1,7 @@
 import type { ThemePackageSelection } from "./themeRepository.ts";
 import type { ThemeService } from "./themeService.ts";
 import {
+  READRAY_BUILTIN_THEME_IDS,
   READRAY_DEFAULT_THEME_ID,
   type ReadRayThemeV1,
   type ThemeMode,
@@ -163,12 +164,12 @@ export class ThemeMutationCoordinator {
   }
 
   delete(authority: ThemeSnapshot, themeId: string) {
-    if (themeId === READRAY_DEFAULT_THEME_ID) {
+    if ((READRAY_BUILTIN_THEME_IDS as readonly string[]).includes(themeId)) {
       return Promise.resolve<ThemeMutationOutcome>({
         status: "failed",
         snapshot: authority,
         retry: { kind: "delete", themeId },
-        message: "ReadRay Default 是内置主题，不能删除。",
+        message: "ReadRay 内置主题不能删除。",
       });
     }
     const optimistic = authority.currentThemeId === themeId

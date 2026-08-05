@@ -1,0 +1,544 @@
+{
+ "ayu": {
+  "id": "ayu",
+  "name": "Ayu",
+  "dark": {
+   "surface": "#10141c",
+   "ink": "#bfbdb6",
+   "accent": "#e6b450",
+   "sidebar": "#0d1017",
+   "selection": "rgba(51, 136, 255, 0.251)",
+   "diffAdded": "#70bf56",
+   "diffRemoved": "#f26d78",
+   "skill": "#d0a1ff"
+  }
+ },
+ "catppuccin": {
+  "id": "catppuccin",
+  "name": "Catppuccin",
+  "dark": {
+   "surface": "#1e1e2e",
+   "ink": "#cdd6f4",
+   "accent": "#cba6f7",
+   "sidebar": "#181825",
+   "selection": "rgba(147, 153, 178, 0.251)",
+   "diffAdded": "#a6e3a1",
+   "diffRemoved": "#f38ba8",
+   "skill": "#cba6f7"
+  },
+  "light": {
+   "surface": "#eff1f5",
+   "ink": "#4c4f69",
+   "accent": "#8839ef",
+   "sidebar": "#e6e9ef",
+   "selection": "rgba(124, 127, 147, 0.302)",
+   "diffAdded": "#40a02b",
+   "diffRemoved": "#d20f39",
+   "skill": "#8839ef"
+  }
+ },
+ "absolutely": {
+  "id": "absolutely",
+  "name": "Absolutely",
+  "dark": {
+   "surface": "#2d2d2b",
+   "ink": "#f9f9f7",
+   "accent": "#cc7d5e",
+   "sidebar": "#373735",
+   "selection": null,
+   "diffAdded": "#cc7d5e",
+   "diffRemoved": "#cc7d5e",
+   "skill": "#cc7d5e"
+  },
+  "light": {
+   "surface": "#f9f9f7",
+   "ink": "#2d2d2b",
+   "accent": "#cc7d5e",
+   "sidebar": "#f4f4f2",
+   "selection": null,
+   "diffAdded": "#cc7d5e",
+   "diffRemoved": "#cc7d5e",
+   "skill": "#cc7d5e"
+  }
+ },
+ "codex": {
+  "id": "codex",
+  "name": "Codex",
+  "dark": {
+   "surface": "#111",
+   "ink": "#fcfcfc",
+   "accent": "#0169cc",
+   "sidebar": "#131313",
+   "selection": null,
+   "diffAdded": "#00a240",
+   "diffRemoved": "#e02e2a",
+   "skill": "#b06dff"
+  },
+  "light": {
+   "surface": "#fff",
+   "ink": "#0d0d0d",
+   "accent": "#0169cc",
+   "sidebar": "#fcfcfc",
+   "selection": null,
+   "diffAdded": "#00a240",
+   "diffRemoved": "#e02e2a",
+   "skill": "#751ed9"
+  }
+ },
+ "dracula": {
+  "id": "dracula",
+  "name": "Dracula",
+  "dark": {
+   "surface": "#282a36",
+   "ink": "#f8f8f2",
+   "accent": "#ff79c6",
+   "sidebar": "#21222c",
+   "selection": "#44475a",
+   "diffAdded": "#50fa7b",
+   "diffRemoved": "#f55",
+   "skill": "#ff79c6"
+  }
+ },
+ "everforest": {
+  "id": "everforest",
+  "name": "Everforest",
+  "dark": {
+   "surface": "#2d353b",
+   "ink": "#d3c6aa",
+   "accent": "#a7c080",
+   "sidebar": "#2d353b",
+   "selection": "rgba(71, 82, 88, 0.7529)",
+   "diffAdded": "rgba(167, 192, 128, 0.6275)",
+   "diffRemoved": "rgba(230, 126, 128, 0.6275)",
+   "skill": "#d699b6"
+  },
+  "light": {
+   "surface": "#fdf6e3",
+   "ink": "#5c6a72",
+   "accent": "#93b259",
+   "sidebar": "#fdf6e3",
+   "selection": "rgba(230, 226, 204, 0.6275)",
+   "diffAdded": "rgba(141, 161, 1, 0.6275)",
+   "diffRemoved": "rgba(248, 85, 82, 0.6275)",
+   "skill": "#df69ba"
+  }
+ },
+ "github": {
+  "id": "github",
+  "name": "GitHub",
+  "dark": {
+   "surface": "#0d1117",
+   "ink": "#e6edf3",
+   "accent": "#1f6feb",
+   "sidebar": "#010409",
+   "selection": null,
+   "diffAdded": "#3fb950",
+   "diffRemoved": "#f85149",
+   "skill": "#bc8cff"
+  },
+  "light": {
+   "surface": "#fff",
+   "ink": "#1f2328",
+   "accent": "#0969da",
+   "sidebar": "#f6f8fa",
+   "selection": null,
+   "diffAdded": "#1a7f37",
+   "diffRemoved": "#cf222e",
+   "skill": "#8250df"
+  }
+ },
+ "gruvbox": {
+  "id": "gruvbox",
+  "name": "Gruvbox",
+  "dark": {
+   "surface": "#282828",
+   "ink": "#ebdbb2",
+   "accent": "#458588",
+   "sidebar": "#282828",
+   "selection": "rgba(104, 157, 106, 0.251)",
+   "diffAdded": "#ebdbb2",
+   "diffRemoved": "#cc241d",
+   "skill": "#b16286"
+  },
+  "light": {
+   "surface": "#fbf1c7",
+   "ink": "#3c3836",
+   "accent": "#458588",
+   "sidebar": "#fbf1c7",
+   "selection": "rgba(104, 157, 106, 0.251)",
+   "diffAdded": "#3c3836",
+   "diffRemoved": "#cc241d",
+   "skill": "#b16286"
+  }
+ },
+ "linear": {
+  "id": "linear",
+  "name": "Linear",
+  "dark": {
+   "surface": "#17181d",
+   "ink": "#e6e9ef",
+   "accent": "#5e6ad2",
+   "sidebar": "#080a0f",
+   "selection": null,
+   "diffAdded": "#5e6ad2",
+   "diffRemoved": "#5e6ad2",
+   "skill": "#5e6ad2"
+  },
+  "light": {
+   "surface": "#f7f8fa",
+   "ink": "#2a3140",
+   "accent": "#5e6ad2",
+   "sidebar": "#f2f4f8",
+   "selection": null,
+   "diffAdded": "#5e6ad2",
+   "diffRemoved": "#5e6ad2",
+   "skill": "#5e6ad2"
+  }
+ },
+ "lobster": {
+  "id": "lobster",
+  "name": "Lobster",
+  "dark": {
+   "surface": "#111827",
+   "ink": "#e4e4e7",
+   "accent": "#ff5c5c",
+   "sidebar": "#111827",
+   "selection": null,
+   "diffAdded": "#ff5c5c",
+   "diffRemoved": "#ff5c5c",
+   "skill": "#ff5c5c"
+  }
+ },
+ "material": {
+  "id": "material",
+  "name": "Material",
+  "dark": {
+   "surface": "#212121",
+   "ink": "#eff",
+   "accent": "#80cbc4",
+   "sidebar": "#212121",
+   "selection": "rgba(97, 97, 97, 0.3137)",
+   "diffAdded": "rgba(195, 232, 141, 0.5647)",
+   "diffRemoved": "rgba(240, 113, 120, 0.5647)",
+   "skill": "#c792ea"
+  }
+ },
+ "matrix": {
+  "id": "matrix",
+  "name": "Matrix",
+  "dark": {
+   "surface": "#040805",
+   "ink": "#b8ffca",
+   "accent": "#1eff5a",
+   "sidebar": "#020402",
+   "selection": null,
+   "diffAdded": "#1eff5a",
+   "diffRemoved": "#1eff5a",
+   "skill": "#1eff5a"
+  }
+ },
+ "monokai": {
+  "id": "monokai",
+  "name": "Monokai",
+  "dark": {
+   "surface": "#272822",
+   "ink": "#f8f8f2",
+   "accent": "#f8f8f0",
+   "sidebar": "#1e1f1c",
+   "selection": "rgba(135, 139, 145, 0.502)",
+   "diffAdded": "#86b42b",
+   "diffRemoved": "#c4265e",
+   "skill": "#8c6bc8"
+  }
+ },
+ "night-owl": {
+  "id": "night-owl",
+  "name": "Night Owl",
+  "dark": {
+   "surface": "#011627",
+   "ink": "#d6deeb",
+   "accent": "#44596b",
+   "sidebar": "#011627",
+   "selection": "#1d3b53",
+   "diffAdded": "#c5e478",
+   "diffRemoved": "rgba(239, 83, 80, 0.5647)",
+   "skill": "#c792ea"
+  }
+ },
+ "nord": {
+  "id": "nord",
+  "name": "Nord",
+  "dark": {
+   "surface": "#2e3440",
+   "ink": "#d8dee9",
+   "accent": "#88c0d0",
+   "sidebar": "#2e3440",
+   "selection": "rgba(67, 76, 94, 0.8)",
+   "diffAdded": "#a3be8c",
+   "diffRemoved": "#bf616a",
+   "skill": "#b48ead"
+  }
+ },
+ "notion": {
+  "id": "notion",
+  "name": "Notion",
+  "dark": {
+   "surface": "#191919",
+   "ink": "#d9d9d8",
+   "accent": "#3183d8",
+   "sidebar": "#151515",
+   "selection": null,
+   "diffAdded": "#3183d8",
+   "diffRemoved": "#3183d8",
+   "skill": "#3183d8"
+  },
+  "light": {
+   "surface": "#fff",
+   "ink": "#37352f",
+   "accent": "#3183d8",
+   "sidebar": "#f7f6f3",
+   "selection": null,
+   "diffAdded": "#3183d8",
+   "diffRemoved": "#3183d8",
+   "skill": "#3183d8"
+  }
+ },
+ "oscurange": {
+  "id": "oscurange",
+  "name": "Oscurange",
+  "dark": {
+   "surface": "#0b0b0f",
+   "ink": "#e6e6e6",
+   "accent": "#f9b98c",
+   "sidebar": "#0b0b0f",
+   "selection": null,
+   "diffAdded": "#f9b98c",
+   "diffRemoved": "#f9b98c",
+   "skill": "#f9b98c"
+  }
+ },
+ "one": {
+  "id": "one",
+  "name": "One",
+  "dark": {
+   "surface": "#282c34",
+   "ink": "#abb2bf",
+   "accent": "#4d78cc",
+   "sidebar": "#21252b",
+   "selection": "rgba(103, 118, 150, 0.3765)",
+   "diffAdded": "#8cc265",
+   "diffRemoved": "#e05561",
+   "skill": "#c162de"
+  },
+  "light": {
+   "surface": "#fafafa",
+   "ink": "#383a42",
+   "accent": "#526fff",
+   "sidebar": "#eaeaeb",
+   "selection": "#e5e5e6",
+   "diffAdded": "#526fff",
+   "diffRemoved": "#526fff",
+   "skill": "#526fff"
+  }
+ },
+ "proof": {
+  "id": "proof",
+  "name": "Proof",
+  "light": {
+   "surface": "#f5f3ed",
+   "ink": "#2f312d",
+   "accent": "#3d755d",
+   "sidebar": "#efede6",
+   "selection": null,
+   "diffAdded": "#3d755d",
+   "diffRemoved": "#3d755d",
+   "skill": "#3d755d"
+  }
+ },
+ "raycast": {
+  "id": "raycast",
+  "name": "Raycast",
+  "dark": {
+   "surface": "#141414",
+   "ink": "#fff",
+   "accent": "#4fa3f8",
+   "sidebar": "#101010",
+   "selection": "#323232",
+   "diffAdded": "#59d499",
+   "diffRemoved": "#ff6363",
+   "skill": "#cf2f98"
+  },
+  "light": {
+   "surface": "#fff",
+   "ink": "#000",
+   "accent": "#138af2",
+   "sidebar": "#fcfcfc",
+   "selection": "#fdfdfd",
+   "diffAdded": "#006b4f",
+   "diffRemoved": "#b12424",
+   "skill": "#9a1b6e"
+  }
+ },
+ "rose-pine": {
+  "id": "rose-pine",
+  "name": "Rose Pine",
+  "dark": {
+   "surface": "#232136",
+   "ink": "#e0def4",
+   "accent": "#ea9a97",
+   "sidebar": "#232136",
+   "selection": "rgba(129, 124, 156, 0.149)",
+   "diffAdded": "#9ccfd8",
+   "diffRemoved": "#908caa",
+   "skill": "#c4a7e7"
+  },
+  "light": {
+   "surface": "#faf4ed",
+   "ink": "#575279",
+   "accent": "#d7827e",
+   "sidebar": "#faf4ed",
+   "selection": "rgba(110, 106, 134, 0.0784)",
+   "diffAdded": "#56949f",
+   "diffRemoved": "#797593",
+   "skill": "#907aa9"
+  }
+ },
+ "sentry": {
+  "id": "sentry",
+  "name": "Sentry",
+  "dark": {
+   "surface": "#2d2935",
+   "ink": "#e6dff9",
+   "accent": "#7055f6",
+   "sidebar": "#26222d",
+   "selection": null,
+   "diffAdded": "#7055f6",
+   "diffRemoved": "#7055f6",
+   "skill": "#7055f6"
+  }
+ },
+ "solarized": {
+  "id": "solarized",
+  "name": "Solarized",
+  "dark": {
+   "surface": "#002b36",
+   "ink": "#839496",
+   "accent": "#d30102",
+   "sidebar": "#00212b",
+   "selection": "#274642",
+   "diffAdded": "#859900",
+   "diffRemoved": "#dc322f",
+   "skill": "#d33682"
+  },
+  "light": {
+   "surface": "#fdf6e3",
+   "ink": "#586e75",
+   "accent": "#b58900",
+   "sidebar": "#fdf6e3",
+   "selection": "#eee8d5",
+   "diffAdded": "#859900",
+   "diffRemoved": "#dc322f",
+   "skill": "#d33682"
+  }
+ },
+ "tokyo-night": {
+  "id": "tokyo-night",
+  "name": "Tokyo Night",
+  "dark": {
+   "surface": "#1a1b26",
+   "ink": "#a9b1d6",
+   "accent": "#3d59a1",
+   "sidebar": "#16161e",
+   "selection": "rgba(81, 92, 126, 0.302)",
+   "diffAdded": "#449dab",
+   "diffRemoved": "#914c54",
+   "skill": "#9d7cd8"
+  }
+ },
+ "temple": {
+  "id": "temple",
+  "name": "Temple",
+  "dark": {
+   "surface": "#02120c",
+   "ink": "#c7e6da",
+   "accent": "#e4f222",
+   "sidebar": "#1d2d0f",
+   "selection": null,
+   "diffAdded": "#e4f222",
+   "diffRemoved": "#e4f222",
+   "skill": "#e4f222"
+  }
+ },
+ "vercel": {
+  "id": "vercel",
+  "name": "Vercel",
+  "dark": {
+   "surface": "#000",
+   "ink": "#ededed",
+   "accent": "#006efe",
+   "sidebar": "#000",
+   "selection": null,
+   "diffAdded": "#006efe",
+   "diffRemoved": "#006efe",
+   "skill": "#006efe"
+  },
+  "light": {
+   "surface": "#fff",
+   "ink": "#171717",
+   "accent": "#006aff",
+   "sidebar": "#fff",
+   "selection": null,
+   "diffAdded": "#006aff",
+   "diffRemoved": "#006aff",
+   "skill": "#006aff"
+  }
+ },
+ "vscode-plus": {
+  "id": "vscode-plus",
+  "name": "VS Code Plus",
+  "dark": {
+   "surface": "#1e1e1e",
+   "ink": "#d4d4d4",
+   "accent": "#007acc",
+   "sidebar": "#1e1e1e",
+   "selection": null,
+   "diffAdded": "#007acc",
+   "diffRemoved": "#007acc",
+   "skill": "#007acc"
+  },
+  "light": {
+   "surface": "#fff",
+   "ink": "#000",
+   "accent": "#007acc",
+   "sidebar": "#fff",
+   "selection": null,
+   "diffAdded": "#007acc",
+   "diffRemoved": "#007acc",
+   "skill": "#007acc"
+  }
+ },
+ "xcode": {
+  "id": "xcode",
+  "name": "Xcode",
+  "dark": {
+   "surface": "#1f1f24",
+   "ink": "rgba(255, 255, 255, 0.851)",
+   "accent": "#5482ff",
+   "sidebar": "#1f1f24",
+   "selection": "#515b70",
+   "diffAdded": "#5482ff",
+   "diffRemoved": "#5482ff",
+   "skill": "#5482ff"
+  },
+  "light": {
+   "surface": "#fff",
+   "ink": "rgba(0, 0, 0, 0.851)",
+   "accent": "#0e0eff",
+   "sidebar": "#fff",
+   "selection": "#a4cdff",
+   "diffAdded": "#0e0eff",
+   "diffRemoved": "#0e0eff",
+   "skill": "#0e0eff"
+  }
+ }
+}

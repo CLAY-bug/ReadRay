@@ -1,5 +1,17 @@
 export const READRAY_THEME_FORMAT_VERSION = 1 as const;
 export const READRAY_DEFAULT_THEME_ID = "readray-default";
+export const FLEXOKI_THEME_ID = "flexoki";
+
+import {
+  CODEX_BUILTIN_FULL_THEMES,
+  type CodexThemeFull,
+} from "./codexThemeData.ts";
+
+export const READRAY_BUILTIN_THEME_IDS = [
+  READRAY_DEFAULT_THEME_ID,
+  FLEXOKI_THEME_ID,
+  ...CODEX_BUILTIN_FULL_THEMES.map((theme) => theme.manifest.id),
+] as const;
 
 export type ThemeMode = "light" | "dark";
 
@@ -115,11 +127,105 @@ export const READRAY_DEFAULT_THEME: ReadRayThemeV1 = {
   warnings: [],
 };
 
+export const FLEXOKI_THEME: ReadRayThemeV1 = {
+  manifest: {
+    formatVersion: READRAY_THEME_FORMAT_VERSION,
+    id: FLEXOKI_THEME_ID,
+    name: "Flexoki",
+    version: "1.1.0",
+    author: "Steph Ango",
+    modes: ["light", "dark"],
+    license: "MIT",
+    sourceUrl: "https://stephango.com/flexoki",
+  },
+  light: {
+    canvas: "#fffcf0",
+    sidebar: "#f2f0e5",
+    surface: "#f2f0e5",
+    surfaceElevated: "#f2f0e5",
+    surfaceSubtle: "#fffcf0",
+    surfaceContrast: "#e6e4d9",
+    textPrimary: "#100f0f",
+    textSecondary: "#575653",
+    textMuted: "#878580",
+    textSubtle: "#b7b5ac",
+    border: "#dad8ce",
+    borderSoft: "#e6e4d9",
+    accent: "#24837b",
+    accentHover: "#24837b",
+    accentText: "#fffcf0",
+    success: "#66800b",
+    successSoft: "#f2f0e5",
+    warning: "#ad8301",
+    warningSoft: "#f2f0e5",
+    warningStrong: "#ad8301",
+    danger: "#af3029",
+    dangerSoft: "#f2f0e5",
+    dangerStrong: "#af3029",
+    selection: "#f2f0e5",
+    diffAdded: "#66800b",
+    diffRemoved: "#af3029",
+    scrim: "#100f0f",
+    shadow: "#100f0f",
+  },
+  dark: {
+    canvas: "#100f0f",
+    sidebar: "#1c1b1a",
+    surface: "#1c1b1a",
+    surfaceElevated: "#1c1b1a",
+    surfaceSubtle: "#100f0f",
+    surfaceContrast: "#282726",
+    textPrimary: "#cecdc3",
+    textSecondary: "#878580",
+    textMuted: "#6f6e69",
+    textSubtle: "#575653",
+    border: "#343331",
+    borderSoft: "#282726",
+    accent: "#3aa99f",
+    accentHover: "#3aa99f",
+    accentText: "#100f0f",
+    success: "#879a39",
+    successSoft: "#1c1b1a",
+    warning: "#d0a215",
+    warningSoft: "#1c1b1a",
+    warningStrong: "#d0a215",
+    danger: "#d14d41",
+    dangerSoft: "#1c1b1a",
+    dangerStrong: "#d14d41",
+    selection: "#282726",
+    diffAdded: "#879a39",
+    diffRemoved: "#d14d41",
+    scrim: "#000",
+    shadow: "#000",
+  },
+  builtin: true,
+  warnings: [],
+};
+
+export const CODEX_BUILTIN_THEMES: ReadRayThemeV1[] = CODEX_BUILTIN_FULL_THEMES.map(
+  (entry: CodexThemeFull) => ({
+    manifest: {
+      formatVersion: READRAY_THEME_FORMAT_VERSION,
+      id: entry.manifest.id,
+      name: entry.manifest.name,
+      version: entry.manifest.version,
+      author: entry.manifest.author,
+      modes: [...entry.manifest.modes],
+      license: entry.manifest.license,
+      sourceUrl: entry.manifest.sourceUrl,
+    },
+    light: entry.light ? { ...entry.light } : null,
+    dark: entry.dark ? { ...entry.dark } : null,
+    builtin: true,
+    warnings: [],
+  }),
+);
+
 export const DEFAULT_THEME_SNAPSHOT: ThemeSnapshot = {
   revision: 0,
   currentThemeId: READRAY_DEFAULT_THEME_ID,
   currentMode: "light",
-  themes: [READRAY_DEFAULT_THEME],
+  themes: [READRAY_DEFAULT_THEME, FLEXOKI_THEME, ...CODEX_BUILTIN_THEMES],
 };
 
 const colorFields = [
@@ -219,7 +325,7 @@ export function validateThemeSnapshot(value: ThemeSnapshot): ThemeSnapshot {
   if (!Number.isSafeInteger(value.revision) || value.revision < 0) {
     throw new Error("主题版本无效，请重新读取后重试。");
   }
-  if (!Array.isArray(value.themes) || value.themes.length < 1 || value.themes.length > 65) {
+  if (!Array.isArray(value.themes) || value.themes.length < 1 || value.themes.length > 94) {
     throw new Error("主题列表数量无效。");
   }
   if (!(["light", "dark"] as const).includes(value.currentMode)) {
@@ -283,13 +389,22 @@ export function validateThemeSnapshot(value: ThemeSnapshot): ThemeSnapshot {
   if (!current || !current.manifest.modes.includes(value.currentMode)) {
     throw new Error("当前主题不存在或不支持已保存的模式。");
   }
-  const builtin = themes.find((theme) => theme.manifest.id === READRAY_DEFAULT_THEME_ID);
-  if (
-    !builtin?.builtin ||
-    themes.filter((theme) => theme.builtin).length !== 1 ||
-    JSON.stringify(builtin) !== JSON.stringify(READRAY_DEFAULT_THEME)
-  ) {
-    throw new Error("ReadRay Default 主题缺失或无效。");
+  const builtinById = new Map(
+    [READRAY_DEFAULT_THEME, FLEXOKI_THEME, ...CODEX_BUILTIN_THEMES].map(
+      (theme) => [theme.manifest.id, theme],
+    ),
+  );
+  for (const [builtinId, canonical] of builtinById) {
+    const found = themes.find((theme) => theme.manifest.id === builtinId);
+    if (!found?.builtin || JSON.stringify(found) !== JSON.stringify(canonical)) {
+      throw new Error(`${builtinId} 内置主题缺失或无效。`);
+    }
+  }
+  const unknownBuiltin = themes.filter(
+    (theme) => theme.builtin && !builtinById.has(theme.manifest.id),
+  );
+  if (unknownBuiltin.length > 0) {
+    throw new Error("主题列表包含未知内置主题。");
   }
   return {
     revision: value.revision,
@@ -302,10 +417,10 @@ export function validateThemeSnapshot(value: ThemeSnapshot): ThemeSnapshot {
 export function validateCustomTheme(value: ReadRayThemeV1): ReadRayThemeV1 {
   const validated = validateThemeSnapshot({
     ...DEFAULT_THEME_SNAPSHOT,
-    themes: [READRAY_DEFAULT_THEME, value],
+    themes: [...DEFAULT_THEME_SNAPSHOT.themes, value],
   });
   const theme = validated.themes.find(
-    (candidate) => candidate.manifest.id !== READRAY_DEFAULT_THEME_ID,
+    (candidate) => candidate.manifest.id === value.manifest.id,
   );
   if (!theme || theme.builtin) throw new Error("待导入的自定义主题无效。");
   return theme;

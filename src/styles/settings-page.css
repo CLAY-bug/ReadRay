@@ -15,8 +15,8 @@
 }
 
 .rr-settings-nav {
-  width: 192px;
-  flex: 0 0 192px;
+  width: 160px;
+  flex: 0 0 160px;
   border-right: 1px solid var(--rr-main-border);
   background: color-mix(in oklab, var(--rr-main-bg), var(--rr-main-surface) 10%);
 }
@@ -264,16 +264,36 @@
   border: 1px solid var(--rr-main-border);
   border-radius: var(--rr-radius-md);
   outline: 0;
-  padding: 0 30px 0 11px;
+  padding: 0 26px 0 11px;
   color: var(--rr-main-fg);
-  background: var(--rr-main-bg);
+  background-color: var(--rr-main-bg);
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%23808080' stroke-width='2.4' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 9px center;
   font-size: calc(12px * var(--rr-ui-font-scale));
+  appearance: none;
+  -webkit-appearance: none;
+  cursor: pointer;
+  transition:
+    border-color 150ms ease,
+    box-shadow 150ms ease,
+    background-color 150ms ease;
+}
+
+.rr-settings-select:hover:not(:disabled) {
+  border-color: color-mix(in oklab, var(--rr-main-accent), var(--rr-main-border) 55%);
+}
+
+.rr-settings-select:focus-visible {
+  border-color: color-mix(in oklab, var(--rr-main-accent), var(--rr-main-border) 68%);
+  box-shadow: 0 0 0 3px color-mix(in oklab, var(--rr-main-accent), transparent 76%);
 }
 
 .rr-settings-select:disabled {
   opacity: 1;
   color: var(--rr-main-fg-secondary);
   -webkit-text-fill-color: var(--rr-main-fg-secondary);
+  cursor: default;
 }
 
 .rr-settings-language-select {
@@ -306,12 +326,12 @@
 }
 
 .rr-settings-theme-mode-select {
-  width: 82px;
+  width: 88px;
 }
 
 .rr-settings-font-field {
   justify-self: end;
-  padding-right: 30px;
+  padding-right: 26px;
 }
 
 .rr-settings-ui-font {

@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type MouseEvent } from "react";
+import { useEffect, useRef, useState, type CSSProperties, type MouseEvent } from "react";
 import type {
   ConversationOperationIdentity,
   ConversationRequest,
@@ -98,6 +98,7 @@ function MainAppShell({
   onClose = noop,
 }: MainAppShellProps) {
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+  const [sidebarWidth, setSidebarWidth] = useState<number | null>(null);
   const [activePageId, setActivePageId] =
     useState<MainAppNavigationId | "conversation" | "conversation-history">(
       "today",
@@ -423,6 +424,11 @@ function MainAppShell({
       className={`rr-main-app${sidebarCollapsed ? " is-sidebar-collapsed" : ""}${
         activePageId === "conversation" ? " is-conversation-page" : ""
       }`}
+      style={
+        sidebarWidth === null
+          ? undefined
+          : ({ "--rr-main-sidebar-width": `${sidebarWidth}px` } as CSSProperties)
+      }
     >
       <header
         className="rr-main-titlebar"
@@ -468,6 +474,8 @@ function MainAppShell({
       <div className="rr-main-workspace">
         <MainSidebar
           collapsed={sidebarCollapsed}
+          width={sidebarWidth}
+          onWidthChange={setSidebarWidth}
           navigation={viewModel.navigation}
           recentConversations={recentConversations}
           recentStatus={recentStatus}

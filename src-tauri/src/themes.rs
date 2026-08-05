@@ -6,14 +6,29 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use tauri::{AppHandle, Emitter};
 
+#[path = "codex_themes_data.rs"]
+mod codex_themes_data;
+use codex_themes_data::CODEX_BUILTIN_FULL_THEMES;
+
 const THEME_FORMAT_VERSION: i64 = 1;
 const DEFAULT_THEME_ID: &str = "readray-default";
+const FLEXOKI_THEME_ID: &str = "flexoki";
 const MAX_MANIFEST_BYTES: u64 = 16 * 1024;
 const MAX_CSS_BYTES: u64 = 64 * 1024;
 const MAX_CUSTOM_THEMES: i64 = 64;
 const MAX_DECLARATIONS: usize = 128;
 const MAX_THEME_VARIABLES: usize = 64;
 const MIN_TEXT_CONTRAST: f64 = 4.5;
+
+fn builtin_theme_ids() -> Vec<&'static str> {
+    let mut ids = vec![DEFAULT_THEME_ID, FLEXOKI_THEME_ID];
+    ids.extend(
+        CODEX_BUILTIN_FULL_THEMES
+            .iter()
+            .map(|(manifest, _, _)| manifest.id),
+    );
+    ids
+}
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
 #[serde(rename_all = "lowercase")]
@@ -224,6 +239,187 @@ fn default_theme() -> ReadRayThemeV1 {
     }
 }
 
+fn flexoki_theme() -> ReadRayThemeV1 {
+    ReadRayThemeV1 {
+        manifest: ReadRayThemeManifestV1 {
+            format_version: THEME_FORMAT_VERSION,
+            id: FLEXOKI_THEME_ID.to_string(),
+            name: "Flexoki".to_string(),
+            version: "1.1.0".to_string(),
+            author: "Steph Ango".to_string(),
+            modes: vec![ThemeMode::Light, ThemeMode::Dark],
+            license: Some("MIT".to_string()),
+            source_url: Some("https://stephango.com/flexoki".to_string()),
+        },
+        light: Some(ReadRayThemeColors {
+            canvas: "#fffcf0".to_string(),
+            sidebar: "#f2f0e5".to_string(),
+            surface: "#f2f0e5".to_string(),
+            surface_elevated: "#f2f0e5".to_string(),
+            surface_subtle: "#fffcf0".to_string(),
+            surface_contrast: "#e6e4d9".to_string(),
+            text_primary: "#100f0f".to_string(),
+            text_secondary: "#575653".to_string(),
+            text_muted: "#878580".to_string(),
+            text_subtle: "#b7b5ac".to_string(),
+            border: "#dad8ce".to_string(),
+            border_soft: "#e6e4d9".to_string(),
+            accent: "#24837b".to_string(),
+            accent_hover: "#24837b".to_string(),
+            accent_text: "#fffcf0".to_string(),
+            success: "#66800b".to_string(),
+            success_soft: "#f2f0e5".to_string(),
+            warning: "#ad8301".to_string(),
+            warning_soft: "#f2f0e5".to_string(),
+            warning_strong: "#ad8301".to_string(),
+            danger: "#af3029".to_string(),
+            danger_soft: "#f2f0e5".to_string(),
+            danger_strong: "#af3029".to_string(),
+            selection: "#f2f0e5".to_string(),
+            diff_added: "#66800b".to_string(),
+            diff_removed: "#af3029".to_string(),
+            scrim: "#100f0f".to_string(),
+            shadow: "#100f0f".to_string(),
+        }),
+        dark: Some(ReadRayThemeColors {
+            canvas: "#100f0f".to_string(),
+            sidebar: "#1c1b1a".to_string(),
+            surface: "#1c1b1a".to_string(),
+            surface_elevated: "#1c1b1a".to_string(),
+            surface_subtle: "#100f0f".to_string(),
+            surface_contrast: "#282726".to_string(),
+            text_primary: "#cecdc3".to_string(),
+            text_secondary: "#878580".to_string(),
+            text_muted: "#6f6e69".to_string(),
+            text_subtle: "#575653".to_string(),
+            border: "#343331".to_string(),
+            border_soft: "#282726".to_string(),
+            accent: "#3aa99f".to_string(),
+            accent_hover: "#3aa99f".to_string(),
+            accent_text: "#100f0f".to_string(),
+            success: "#879a39".to_string(),
+            success_soft: "#1c1b1a".to_string(),
+            warning: "#d0a215".to_string(),
+            warning_soft: "#1c1b1a".to_string(),
+            warning_strong: "#d0a215".to_string(),
+            danger: "#d14d41".to_string(),
+            danger_soft: "#1c1b1a".to_string(),
+            danger_strong: "#d14d41".to_string(),
+            selection: "#282726".to_string(),
+            diff_added: "#879a39".to_string(),
+            diff_removed: "#d14d41".to_string(),
+            scrim: "#000".to_string(),
+            shadow: "#000".to_string(),
+        }),
+        builtin: true,
+        warnings: Vec::new(),
+    }
+}
+
+/// 随包 Codex 内置主题的完整展开配色（&'static str，满足 const 静态表）。
+/// 由 scripts/gen-themes.mjs 从 scripts/codex-theme-extract/core-palette.json 生成，
+/// 与前端 src/codexThemeData.ts 保持字节级一致（避免运行时派生的浮点分叉）。
+#[derive(Clone, Debug)]
+struct CodexThemeFullColors {
+    canvas: &'static str,
+    sidebar: &'static str,
+    surface: &'static str,
+    surface_elevated: &'static str,
+    surface_subtle: &'static str,
+    surface_contrast: &'static str,
+    text_primary: &'static str,
+    text_secondary: &'static str,
+    text_muted: &'static str,
+    text_subtle: &'static str,
+    border: &'static str,
+    border_soft: &'static str,
+    accent: &'static str,
+    accent_hover: &'static str,
+    accent_text: &'static str,
+    success: &'static str,
+    success_soft: &'static str,
+    warning: &'static str,
+    warning_soft: &'static str,
+    warning_strong: &'static str,
+    danger: &'static str,
+    danger_soft: &'static str,
+    danger_strong: &'static str,
+    selection: &'static str,
+    diff_added: &'static str,
+    diff_removed: &'static str,
+    scrim: &'static str,
+    shadow: &'static str,
+}
+
+impl CodexThemeFullColors {
+    fn to_colors(&self) -> ReadRayThemeColors {
+        ReadRayThemeColors {
+            canvas: self.canvas.to_string(),
+            sidebar: self.sidebar.to_string(),
+            surface: self.surface.to_string(),
+            surface_elevated: self.surface_elevated.to_string(),
+            surface_subtle: self.surface_subtle.to_string(),
+            surface_contrast: self.surface_contrast.to_string(),
+            text_primary: self.text_primary.to_string(),
+            text_secondary: self.text_secondary.to_string(),
+            text_muted: self.text_muted.to_string(),
+            text_subtle: self.text_subtle.to_string(),
+            border: self.border.to_string(),
+            border_soft: self.border_soft.to_string(),
+            accent: self.accent.to_string(),
+            accent_hover: self.accent_hover.to_string(),
+            accent_text: self.accent_text.to_string(),
+            success: self.success.to_string(),
+            success_soft: self.success_soft.to_string(),
+            warning: self.warning.to_string(),
+            warning_soft: self.warning_soft.to_string(),
+            warning_strong: self.warning_strong.to_string(),
+            danger: self.danger.to_string(),
+            danger_soft: self.danger_soft.to_string(),
+            danger_strong: self.danger_strong.to_string(),
+            selection: self.selection.to_string(),
+            diff_added: self.diff_added.to_string(),
+            diff_removed: self.diff_removed.to_string(),
+            scrim: self.scrim.to_string(),
+            shadow: self.shadow.to_string(),
+        }
+    }
+}
+
+/// 数据驱动注册表用的精简 manifest（&'static str，满足 const 静态表）。
+#[derive(Clone, Copy, Debug)]
+struct CodexThemeManifest {
+    id: &'static str,
+    name: &'static str,
+    version: &'static str,
+    author: &'static str,
+    modes: &'static [ThemeMode],
+    license: Option<&'static str>,
+    source_url: Option<&'static str>,
+}
+
+fn codex_builtin_themes() -> Vec<ReadRayThemeV1> {
+    CODEX_BUILTIN_FULL_THEMES
+        .iter()
+        .map(|(manifest, dark, light)| ReadRayThemeV1 {
+            manifest: ReadRayThemeManifestV1 {
+                format_version: THEME_FORMAT_VERSION,
+                id: manifest.id.to_string(),
+                name: manifest.name.to_string(),
+                version: manifest.version.to_string(),
+                author: manifest.author.to_string(),
+                modes: manifest.modes.to_vec(),
+                license: manifest.license.map(str::to_string),
+                source_url: manifest.source_url.map(str::to_string),
+            },
+            light: light.as_ref().map(CodexThemeFullColors::to_colors),
+            dark: dark.as_ref().map(CodexThemeFullColors::to_colors),
+            builtin: true,
+            warnings: Vec::new(),
+        })
+        .collect()
+}
+
 fn validate_text_field(value: &str, label: &str, maximum: usize) -> Result<(), String> {
     if value.trim().is_empty() || value.chars().count() > maximum {
         return Err(format!("{label}不能为空且不能超过 {maximum} 个字符。"));
@@ -253,8 +449,11 @@ fn validate_manifest(manifest: &ReadRayThemeManifestV1) -> Result<(), String> {
             "主题 ID 只能使用小写 ASCII 字母、数字和连字符，且必须以字母或数字开头。".to_string(),
         );
     }
-    if manifest.id == DEFAULT_THEME_ID {
-        return Err("自定义主题不能使用内置 ReadRay Default 的 ID。".to_string());
+    if builtin_theme_ids().contains(&manifest.id.as_str()) {
+        return Err(format!(
+            "自定义主题不能使用内置主题 {} 的 ID。",
+            manifest.id
+        ));
     }
     validate_text_field(&manifest.name, "主题名称", 80)?;
     validate_text_field(&manifest.version, "主题版本", 32)?;
@@ -1008,7 +1207,8 @@ fn read_preference(connection: &Connection) -> Result<(i64, String, ThemeMode), 
 
 fn read_theme_snapshot(connection: &Connection) -> Result<ThemeSnapshot, String> {
     let (revision, current_theme_id, current_mode) = read_preference(connection)?;
-    let mut themes = vec![default_theme()];
+    let mut themes = vec![default_theme(), flexoki_theme()];
+    themes.extend(codex_builtin_themes());
     themes.extend(load_custom_themes(connection)?);
     let current = themes
         .iter()
@@ -1130,8 +1330,14 @@ fn select_theme_in_database(
         .transaction()
         .map_err(|error| format!("无法开始选择主题：{error}"))?;
     ensure_revision(&transaction, expected_revision)?;
-    let supports_mode = if theme_id == DEFAULT_THEME_ID {
-        mode == ThemeMode::Light
+    let supports_mode = if builtin_theme_ids().contains(&theme_id) {
+        // 内置主题按自身 manifest 校验模式
+        let builtin = std::iter::once(default_theme())
+            .chain(std::iter::once(flexoki_theme()))
+            .chain(codex_builtin_themes())
+            .find(|theme| theme.manifest.id == theme_id)
+            .ok_or_else(|| "所选主题不存在，当前主题未改变。".to_string())?;
+        builtin.manifest.modes.contains(&mode)
     } else {
         let manifest_json = transaction
             .query_row(
@@ -1172,8 +1378,8 @@ fn delete_theme_in_database(
     expected_revision: i64,
 ) -> Result<ThemeSnapshot, String> {
     validate_text_field(theme_id, "主题 ID", 64)?;
-    if theme_id == DEFAULT_THEME_ID {
-        return Err("ReadRay Default 是内置主题，不能删除。".to_string());
+    if builtin_theme_ids().contains(&theme_id) {
+        return Err("ReadRay 内置主题不能删除。".to_string());
     }
     let transaction = connection
         .transaction()
@@ -1436,6 +1642,138 @@ mod tests {
     }
 
     #[test]
+    fn flexoki_builtin_theme_provides_light_and_dark_modes_and_is_protected() {
+        let theme = flexoki_theme();
+        assert!(theme.builtin);
+        assert_eq!(theme.manifest.id, FLEXOKI_THEME_ID);
+        assert_eq!(theme.manifest.name, "Flexoki");
+        assert_eq!(theme.manifest.author, "Steph Ango");
+        assert_eq!(theme.manifest.license.as_deref(), Some("MIT"));
+        assert_eq!(
+            theme.manifest.source_url.as_deref(),
+            Some("https://stephango.com/flexoki")
+        );
+        assert!(theme.light.is_some());
+        assert!(theme.dark.is_some());
+        let light = theme.light.unwrap();
+        assert_eq!(light.canvas, "#fffcf0");
+        assert_eq!(light.accent, "#24837b");
+        let dark = theme.dark.unwrap();
+        assert_eq!(dark.canvas, "#100f0f");
+        assert_eq!(dark.accent, "#3aa99f");
+
+        // 随包主题不能被自定义主题 ID 冲突覆盖。
+        assert!(validate_manifest(&flexoki_theme().manifest).is_err());
+        // 随包主题不可删除。
+        assert!(delete_theme_in_database(
+            &mut test_database("flexoki-delete").1,
+            FLEXOKI_THEME_ID,
+            0,
+        )
+        .is_err());
+        // 随包主题支持的模式选择。
+        let (_, mut connection) = test_database("flexoki-select");
+        let selected_dark =
+            select_theme_in_database(&mut connection, FLEXOKI_THEME_ID, ThemeMode::Dark, 0)
+                .unwrap();
+        assert_eq!(selected_dark.current_theme_id, FLEXOKI_THEME_ID);
+        assert_eq!(selected_dark.current_mode, ThemeMode::Dark);
+        let selected_light =
+            select_theme_in_database(&mut connection, FLEXOKI_THEME_ID, ThemeMode::Light, 1)
+                .unwrap();
+        assert_eq!(selected_light.current_theme_id, FLEXOKI_THEME_ID);
+        assert_eq!(selected_light.current_mode, ThemeMode::Light);
+    }
+
+    #[test]
+    fn codex_builtin_themes_are_unique_complete_mode_aware_and_protected() {
+        let themes = codex_builtin_themes();
+        assert_eq!(themes.len(), 28);
+
+        // 主题 ID 唯一，且不与既有内置主题冲突。
+        let mut ids = std::collections::HashSet::new();
+        for theme in &themes {
+            assert!(theme.builtin);
+            assert!(
+                ids.insert(theme.manifest.id.as_str()),
+                "重复 ID：{}",
+                theme.manifest.id
+            );
+            assert_ne!(theme.manifest.id, DEFAULT_THEME_ID);
+            assert_ne!(theme.manifest.id, FLEXOKI_THEME_ID);
+            // 至少一个模式
+            assert!(theme.light.is_some() || theme.dark.is_some());
+        }
+
+        // 每个声明模式都有完整 28 token 配色，且通过规范化与可读性校验。
+        for theme in &themes {
+            // 内置 manifest 不被 validate_manifest 校验（那是自定义导入校验器），
+            // 直接核对必填文本字段非空。
+            assert!(!theme.manifest.name.trim().is_empty());
+            assert!(!theme.manifest.author.trim().is_empty());
+            if let Some(light) = &theme.light {
+                validate_normalized_colors(light).unwrap();
+                validate_readability(light, ThemeMode::Light).unwrap();
+            }
+            if let Some(dark) = &theme.dark {
+                validate_normalized_colors(dark).unwrap();
+                validate_readability(dark, ThemeMode::Dark).unwrap();
+            }
+            assert_eq!(
+                theme.manifest.modes.contains(&ThemeMode::Light),
+                theme.light.is_some()
+            );
+            assert_eq!(
+                theme.manifest.modes.contains(&ThemeMode::Dark),
+                theme.dark.is_some()
+            );
+        }
+
+        // 内置主题不可删除、不可被自定义 ID 冲突覆盖。
+        assert!(delete_theme_in_database(&mut test_database("codex-delete").1, "ayu", 0,).is_err());
+        // validate_manifest 对内置 ID 返回冲突错误（自定义主题不能用内置 ID）。
+        let ayu_manifest = themes
+            .iter()
+            .find(|theme| theme.manifest.id == "ayu")
+            .unwrap()
+            .manifest
+            .clone();
+        assert!(validate_manifest(&ayu_manifest).is_err());
+
+        // 模式选择：单模式主题选择不支持的模式被拒绝。
+        let (_, mut connection) = test_database("codex-select");
+        let selected_dark =
+            select_theme_in_database(&mut connection, "ayu", ThemeMode::Dark, 0).unwrap();
+        assert_eq!(selected_dark.current_theme_id, "ayu");
+        assert_eq!(selected_dark.current_mode, ThemeMode::Dark);
+        assert!(
+            select_theme_in_database(&mut connection, "ayu", ThemeMode::Light, 1).is_err(),
+            "ayu 只有 dark 模式，不应能选择 light"
+        );
+        // 双模式主题两种模式都可用。
+        let cat_selected =
+            select_theme_in_database(&mut connection, "catppuccin", ThemeMode::Light, 1).unwrap();
+        assert_eq!(cat_selected.current_mode, ThemeMode::Light);
+
+        // 重启恢复：Codex 主题随快照恢复且仍是内置。
+        let (root, mut connection) = test_database("codex-restart");
+        let _ =
+            select_theme_in_database(&mut connection, "tokyo-night", ThemeMode::Dark, 0).unwrap();
+        drop(connection);
+        let reopened = learning_records::open_database(&root.join("readray.sqlite3")).unwrap();
+        let restored = read_theme_snapshot(&reopened).unwrap();
+        assert_eq!(restored.current_theme_id, "tokyo-night");
+        assert_eq!(restored.current_mode, ThemeMode::Dark);
+        let restored_theme = restored
+            .themes
+            .iter()
+            .find(|theme| theme.manifest.id == "tokyo-night")
+            .unwrap();
+        assert!(restored_theme.builtin);
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
     fn import_select_delete_revision_and_restart_recovery_are_authoritative() {
         let (root, mut connection) = test_database("lifecycle");
         let theme =
@@ -1448,6 +1786,7 @@ mod tests {
             .unwrap_err()
             .contains("已存在"));
         assert_eq!(read_theme_snapshot(&connection).unwrap().revision, 1);
+        assert_eq!(read_theme_snapshot(&connection).unwrap().themes.len(), 31);
 
         let selected =
             select_theme_in_database(&mut connection, "stored-theme", ThemeMode::Light, 1).unwrap();
@@ -1471,13 +1810,14 @@ mod tests {
         assert_eq!(deleted.revision, 3);
         assert_eq!(deleted.current_theme_id, DEFAULT_THEME_ID);
         assert_eq!(deleted.current_mode, ThemeMode::Light);
+        assert_eq!(deleted.themes.len(), 30);
         drop(connection);
 
         let reopened = learning_records::open_database(&root.join("readray.sqlite3")).unwrap();
         let restored = read_theme_snapshot(&reopened).unwrap();
         assert_eq!(restored.revision, 3);
         assert_eq!(restored.current_theme_id, DEFAULT_THEME_ID);
-        assert_eq!(restored.themes.len(), 1);
+        assert_eq!(restored.themes.len(), 30);
         drop(reopened);
         let _ = fs::remove_dir_all(root);
     }

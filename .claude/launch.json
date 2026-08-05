@@ -1,0 +1,11 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "readray-dev",
+      "runtimeExecutable": "D:/Application/nvm/nodejs/pnpm.cmd",
+      "runtimeArgs": ["dev"],
+      "port": 1420
+    }
+  ]
+}

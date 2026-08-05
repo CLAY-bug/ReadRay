@@ -7,6 +7,7 @@ import { ThemeMutationCoordinator } from "../src/themeMutationCoordinator.ts";
 import {
   applyThemeVariables,
   DEFAULT_THEME_SNAPSHOT,
+  FLEXOKI_THEME,
   READRAY_DEFAULT_THEME,
   themeCssVariables,
   validateThemeSnapshot,
@@ -31,9 +32,13 @@ function customTheme(id = "custom-theme") {
 function snapshot(overrides = {}) {
   return {
     ...clone(DEFAULT_THEME_SNAPSHOT),
-    themes: [clone(READRAY_DEFAULT_THEME), customTheme()],
+    themes: [...clone(DEFAULT_THEME_SNAPSHOT.themes), customTheme()],
     ...overrides,
   };
+}
+
+function customThemeIndex() {
+  return DEFAULT_THEME_SNAPSHOT.themes.length;
 }
 
 function styleTarget(initial = {}) {
@@ -119,60 +124,63 @@ test("ThemeService 严格校验当前 themeId、模式和内置默认主题", as
   assert.equal(prepared.theme.manifest.id, "custom-theme");
   assert.equal((await service.importPreparedPackage(prepared, 0)).revision, 1);
   assert.equal((await service.select("custom-theme", "light", 1)).revision, 2);
-  assert.equal((await service.delete("custom-theme", 2)).themes.length, 1);
+  assert.equal((await service.delete("custom-theme", 2)).themes.length, DEFAULT_THEME_SNAPSHOT.themes.length);
   assert.throws(() =>
     validateThemeSnapshot(snapshot({ currentThemeId: "missing-theme" })),
   );
   assert.throws(() =>
     validateThemeSnapshot(snapshot({ currentMode: "dark" })),
   );
-  const missingDefault = snapshot({ themes: [customTheme()] });
-  assert.throws(() => validateThemeSnapshot(missingDefault));
+  const missingBuiltin = snapshot({ themes: [customTheme()] });
+  assert.throws(() => validateThemeSnapshot(missingBuiltin));
+  const flexokiTampered = snapshot();
+  flexokiTampered.themes[1].light.accent = "#123456";
+  assert.throws(() => validateThemeSnapshot(flexokiTampered));
   const extraBuiltin = snapshot();
-  extraBuiltin.themes[1].builtin = true;
+  extraBuiltin.themes[customThemeIndex()].builtin = true;
   assert.throws(() => validateThemeSnapshot(extraBuiltin));
 });
 
 test("前端按 Unicode code point 计数字符串长度，与 Rust 一致", () => {
   const within = snapshot();
-  within.themes[1].manifest.name = "😀".repeat(80);
-  assert.equal([...within.themes[1].manifest.name].length, 80);
+  within.themes[customThemeIndex()].manifest.name = "😀".repeat(80);
+  assert.equal([...within.themes[customThemeIndex()].manifest.name].length, 80);
   assert.equal(
-    [...validateThemeSnapshot(within).themes[1].manifest.name].length,
+    [...validateThemeSnapshot(within).themes[customThemeIndex()].manifest.name].length,
     80,
   );
 
   const over = snapshot();
-  over.themes[1].manifest.name = "😀".repeat(81);
-  assert.equal([...over.themes[1].manifest.name].length, 81);
+  over.themes[customThemeIndex()].manifest.name = "😀".repeat(81);
+  assert.equal([...over.themes[customThemeIndex()].manifest.name].length, 81);
   assert.throws(() => validateThemeSnapshot(over), /主题名称无效/);
 
   const sourceWithin = snapshot();
-  sourceWithin.themes[1].manifest.sourceUrl = "https://" + "😀".repeat(2_040);
-  assert.equal([...sourceWithin.themes[1].manifest.sourceUrl].length, 2_048);
+  sourceWithin.themes[customThemeIndex()].manifest.sourceUrl = "https://" + "😀".repeat(2_040);
+  assert.equal([...sourceWithin.themes[customThemeIndex()].manifest.sourceUrl].length, 2_048);
   assert.equal(
-    [...validateThemeSnapshot(sourceWithin).themes[1].manifest.sourceUrl].length,
+    [...validateThemeSnapshot(sourceWithin).themes[customThemeIndex()].manifest.sourceUrl].length,
     2_048,
   );
 
   const sourceOver = snapshot();
-  sourceOver.themes[1].manifest.sourceUrl = "https://" + "😀".repeat(2_041);
-  assert.equal([...sourceOver.themes[1].manifest.sourceUrl].length, 2_049);
+  sourceOver.themes[customThemeIndex()].manifest.sourceUrl = "https://" + "😀".repeat(2_041);
+  assert.equal([...sourceOver.themes[customThemeIndex()].manifest.sourceUrl].length, 2_049);
   assert.throws(() => validateThemeSnapshot(sourceOver), /主题来源无效/);
 });
 
 test("前端只接受 Rust 输出的规范颜色格式", () => {
   const invalidAlpha = snapshot();
-  invalidAlpha.themes[1].light.border = "rgba(38, 37, 30, 00.5)";
+  invalidAlpha.themes[customThemeIndex()].light.border = "rgba(38, 37, 30, 00.5)";
   assert.throws(() => validateThemeSnapshot(invalidAlpha), /不是规范化颜色/);
 
   const invalidHex = snapshot();
-  invalidHex.themes[1].light.accentText = "#ffffff";
+  invalidHex.themes[customThemeIndex()].light.accentText = "#ffffff";
   assert.throws(() => validateThemeSnapshot(invalidHex), /不是规范化颜色/);
 
   const canonical = snapshot();
-  canonical.themes[1].light.border = "rgba(38, 37, 30, 0.5)";
-  assert.equal(validateThemeSnapshot(canonical).themes[1].light.border, "rgba(38, 37, 30, 0.5)");
+  canonical.themes[customThemeIndex()].light.border = "rgba(38, 37, 30, 0.5)";
+  assert.equal(validateThemeSnapshot(canonical).themes[customThemeIndex()].light.border, "rgba(38, 37, 30, 0.5)");
 });
 
 test("ReadRay Default 应用前后保留原有主应用 CSS 变量值", async () => {
@@ -198,6 +206,100 @@ test("ReadRay Default 应用前后保留原有主应用 CSS 变量值", async ()
     assert.equal(runtime[name], value);
     assert.equal(target.values.get(name), value);
   }
+});
+
+test("Flexoki 内置主题默认可见、支持双模式切换，且运行时变量随模式映射", async () => {
+  const lightSnapshot = {
+    ...clone(DEFAULT_THEME_SNAPSHOT),
+    currentThemeId: "flexoki",
+    currentMode: "light",
+  };
+  const lightRuntime = themeCssVariables(lightSnapshot);
+  assert.equal(lightRuntime["--rr-main-bg"], "#fffcf0");
+  assert.equal(lightRuntime["--rr-main-accent"], "#24837b");
+
+  const darkSnapshot = {
+    ...clone(DEFAULT_THEME_SNAPSHOT),
+    currentThemeId: "flexoki",
+    currentMode: "dark",
+  };
+  const darkRuntime = themeCssVariables(darkSnapshot);
+  assert.equal(darkRuntime["--rr-main-bg"], "#100f0f");
+  assert.equal(darkRuntime["--rr-main-accent"], "#3aa99f");
+  assert.equal(darkRuntime["--rr-main-fg"], "#cecdc3");
+
+  // 主题列表默认包含全部随包内置主题（ReadRay Default、Flexoki 与 28 个 Codex 主题），且都不可删除。
+  const list = validateThemeSnapshot(DEFAULT_THEME_SNAPSHOT).themes;
+  assert.equal(list.length, 30);
+  assert.ok(list.every((theme) => theme.builtin));
+  const coordinator = new ThemeMutationCoordinator({
+    service: {
+      load: async () => DEFAULT_THEME_SNAPSHOT,
+      prepareImport: async () => null,
+      importPreparedPackage: async () => DEFAULT_THEME_SNAPSHOT,
+      select: async () => DEFAULT_THEME_SNAPSHOT,
+      delete: async () => DEFAULT_THEME_SNAPSHOT,
+    },
+    apply: () => undefined,
+  });
+  const outcome = await coordinator.delete(DEFAULT_THEME_SNAPSHOT, "flexoki");
+  assert.equal(outcome.status, "failed");
+  assert.match(outcome.message, /内置主题不能删除/);
+});
+
+test("Codex 内置主题清单、模式支持、唯一 ID、删除限制与运行时变量映射", async () => {
+  const themes = validateThemeSnapshot(DEFAULT_THEME_SNAPSHOT).themes;
+  const codexThemes = themes.filter((theme) => theme.manifest.id !== "readray-default" && theme.manifest.id !== "flexoki");
+  assert.equal(codexThemes.length, 28);
+
+  // 唯一 ID
+  const ids = new Set(codexThemes.map((theme) => theme.manifest.id));
+  assert.equal(ids.size, 28);
+
+  // 模式支持：单模式主题不虚构另一模式
+  const ayu = codexThemes.find((t) => t.manifest.id === "ayu");
+  assert.deepEqual(ayu.manifest.modes, ["dark"]);
+  assert.equal(ayu.light, null);
+  assert.ok(ayu.dark);
+
+  const proof = codexThemes.find((t) => t.manifest.id === "proof");
+  assert.deepEqual(proof.manifest.modes, ["light"]);
+  assert.equal(proof.dark, null);
+  assert.ok(proof.light);
+
+  const catppuccin = codexThemes.find((t) => t.manifest.id === "catppuccin");
+  assert.deepEqual(catppuccin.manifest.modes, ["dark", "light"]);
+  assert.ok(catppuccin.dark);
+  assert.ok(catppuccin.light);
+
+  // 每个主题 token 完整（28 个颜色字段），且颜色规范
+  const colorFieldCount = Object.keys(ayu.dark).length;
+  assert.equal(colorFieldCount, 28);
+
+  // 内置主题删除限制
+  const coordinator = new ThemeMutationCoordinator({
+    service: {
+      load: async () => DEFAULT_THEME_SNAPSHOT,
+      prepareImport: async () => null,
+      importPreparedPackage: async () => DEFAULT_THEME_SNAPSHOT,
+      select: async () => DEFAULT_THEME_SNAPSHOT,
+      delete: async () => DEFAULT_THEME_SNAPSHOT,
+    },
+    apply: () => undefined,
+  });
+  const outcome = await coordinator.delete(DEFAULT_THEME_SNAPSHOT, "ayu");
+  assert.equal(outcome.status, "failed");
+  assert.match(outcome.message, /内置主题不能删除/);
+
+  // 运行时变量映射：ayu dark 应用后背景/前景/强调
+  const ayuDark = themeCssVariables({
+    ...clone(DEFAULT_THEME_SNAPSHOT),
+    currentThemeId: "ayu",
+    currentMode: "dark",
+  });
+  assert.equal(ayuDark["--rr-main-bg"], "#10141c");
+  assert.equal(ayuDark["--rr-main-fg"], "#bfbdb6");
+  assert.equal(ayuDark["--rr-main-accent"], "#e6b450");
 });
 
 test("主题选择失败会恢复数据库权威主题并保留可重试请求", async () => {
@@ -284,7 +386,7 @@ test("导入响应丢失只确认精确目标，任意并发新主题判为冲�
   const importedAuthority = {
     ...clone(DEFAULT_THEME_SNAPSHOT),
     revision: 13,
-    themes: [clone(READRAY_DEFAULT_THEME), intended],
+    themes: [...clone(DEFAULT_THEME_SNAPSHOT.themes), intended],
   };
   const committed = new ThemeMutationCoordinator({
     service: {
@@ -303,7 +405,7 @@ test("导入响应丢失只确认精确目标，任意并发新主题判为冲�
   const concurrentAuthority = {
     ...clone(DEFAULT_THEME_SNAPSHOT),
     revision: 13,
-    themes: [clone(READRAY_DEFAULT_THEME), customTheme("unrelated-theme")],
+    themes: [...clone(DEFAULT_THEME_SNAPSHOT.themes), customTheme("unrelated-theme")],
   };
   const conflicted = new ThemeMutationCoordinator({
     service: {
@@ -332,7 +434,7 @@ test("CSS 变量应用中途失败会回滚，原始主题保持不变", () => {
     originalSet(name, value);
   };
   const candidate = snapshot({ currentThemeId: "custom-theme" });
-  candidate.themes[1].light.accent = "#123456";
+  candidate.themes[customThemeIndex()].light.accent = "#123456";
   assert.throws(() => applyThemeVariables(target, candidate), /style rejected/);
   assert.deepEqual(Object.fromEntries(target.values), initial);
 });

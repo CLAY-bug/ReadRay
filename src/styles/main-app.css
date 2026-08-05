@@ -227,6 +227,7 @@
 }
 
 .rr-main-sidebar {
+  position: relative;
   display: flex;
   width: var(--rr-main-sidebar-width);
   min-height: 0;
@@ -241,6 +242,38 @@
   transition:
     width 200ms ease,
     flex-basis 200ms ease;
+}
+
+.rr-main-sidebar-resizer {
+  position: absolute;
+  z-index: 5;
+  top: 0;
+  right: -3px;
+  bottom: 0;
+  width: 6px;
+  cursor: col-resize;
+  touch-action: none;
+}
+
+.rr-main-sidebar-resizer::after {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 2px;
+  width: 2px;
+  border-radius: 2px;
+  content: "";
+  background: transparent;
+  transition: background 150ms ease;
+}
+
+.rr-main-sidebar-resizer:hover::after,
+.rr-main-sidebar-resizer:active::after {
+  background: color-mix(in oklab, var(--rr-main-accent), transparent 55%);
+}
+
+.rr-main-app.is-sidebar-collapsed .rr-main-sidebar-resizer {
+  display: none;
 }
 
 .rr-main-new-chat,
