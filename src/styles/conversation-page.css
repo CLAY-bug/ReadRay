@@ -61,7 +61,7 @@ button.rr-conversation-title:not(:disabled) {
   padding: 0 8px;
   color: var(--rr-main-fg);
   background: var(--rr-main-bg);
-  box-shadow: 0 0 0 2px rgba(245, 78, 0, 0.12);
+  box-shadow: 0 0 0 2px var(--rr-main-selection);
   font-size: var(--rr-ui-font-size);
   font-weight: 630;
 }
@@ -137,7 +137,7 @@ button.rr-conversation-title:not(:disabled) {
 }
 
 .rr-conversation-menu-item.is-danger {
-  color: #a2382a !important;
+  color: var(--rr-main-danger-strong) !important;
 }
 
 .rr-conversation-menu-item:disabled {
@@ -505,7 +505,7 @@ button.rr-conversation-title:not(:disabled) {
   height: 38px;
   place-items: center;
   border-radius: 8px !important;
-  color: #fff !important;
+  color: var(--rr-main-accent-text) !important;
   background: var(--rr-main-accent) !important;
   cursor: pointer;
 }
@@ -519,7 +519,7 @@ button.rr-conversation-title:not(:disabled) {
 .rr-conversation-send:hover:not(:disabled),
 .rr-conversation-send:focus-visible:not(:disabled) {
   outline: 0;
-  background: #e84800 !important;
+  background: var(--rr-main-accent-hover) !important;
 }
 
 .rr-conversation-drawer-backdrop {
@@ -820,12 +820,12 @@ button.rr-conversation-title:not(:disabled) {
 
 .rr-conversation-dialog input:focus {
   border-color: var(--rr-main-accent);
-  box-shadow: 0 0 0 2px rgba(245, 78, 0, 0.12);
+  box-shadow: 0 0 0 2px var(--rr-main-selection);
 }
 
 .rr-conversation-dialog .rr-conversation-dialog-error {
   margin: 10px 0 0;
-  color: #a2382a;
+  color: var(--rr-main-danger-strong);
   font-size: calc(12px * var(--rr-ui-font-scale));
 }
 
@@ -849,14 +849,14 @@ button.rr-conversation-title:not(:disabled) {
 
 .rr-conversation-dialog-actions button.is-primary {
   border-color: var(--rr-main-accent) !important;
-  color: #fff !important;
+  color: var(--rr-main-accent-text) !important;
   background: var(--rr-main-accent) !important;
 }
 
 .rr-conversation-dialog-actions button.is-danger {
-  border-color: #a2382a !important;
-  color: #fff !important;
-  background: #a2382a !important;
+  border-color: var(--rr-main-danger-strong) !important;
+  color: var(--rr-main-accent-text) !important;
+  background: var(--rr-main-danger-strong) !important;
 }
 
 .rr-conversation-dialog-actions button:disabled {

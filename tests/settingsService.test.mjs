@@ -843,7 +843,10 @@ test("正式设置页保持五类设计结构，确定性操作已接线且不�
   assert.match(page, /\["ai", "AI 服务"\]/);
   assert.match(page, /\["data", "数据"\]/);
   assert.match(page, /\["about", "关于"\]/);
-  assert.match(page, /function UnavailableButton[\s\S]*?disabled/);
+  assert.match(page, /themeController\.importPackage/);
+  assert.match(page, /themeController\.select/);
+  assert.match(page, /themeController\.delete/);
+  assert.match(page, /ReadRay Default 是内置主题，不能删除/);
   assert.match(page, /录制新快捷键/);
   assert.match(page, /shortcutFromKeyEvent/);
   assert.match(page, /恢复默认快捷键/);

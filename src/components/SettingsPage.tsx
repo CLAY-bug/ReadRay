@@ -7,6 +7,12 @@ import {
 } from "react";
 import type { SettingsService } from "../settingsService";
 import type { AppPreferenceSaveOutcome } from "../appPreferenceSaveCoordinator";
+import type { AppThemeController } from "../useAppTheme";
+import type {
+  ThemeMutationOutcome,
+  ThemeMutationRetry,
+} from "../themeMutationCoordinator";
+import type { ThemeMode } from "../themeProtocol";
 import {
   desktopSaveCoordinator,
   shortcutFromKeyEvent,
@@ -48,6 +54,7 @@ type RequestStatus = "idle" | "loading" | "success" | "error";
 
 type SettingsPageProps = {
   service: SettingsService | null;
+  themeController: AppThemeController;
   onPreferencesSave?: (
     candidate: AppPreferences,
     previousAuthority: AppPreferences,
@@ -194,25 +201,6 @@ function FutureNote({ children }: { children: ReactNode }) {
   );
 }
 
-function UnavailableButton({
-  children,
-  className = "",
-}: {
-  children: ReactNode;
-  className?: string;
-}) {
-  return (
-    <button
-      className={`rr-settings-button rr-settings-unavailable ${className}`.trim()}
-      type="button"
-      disabled
-      title="留给后续独立任务，本轮不可操作"
-    >
-      {children}
-    </button>
-  );
-}
-
 function ShortcutRow({
   name,
   value,
@@ -283,6 +271,7 @@ function SettingsLoading() {
 
 function SettingsPage({
   service,
+  themeController,
   onPreferencesSave,
 }: SettingsPageProps) {
   const [activeSection, setActiveSection] = useState<SettingsSection>("general");
@@ -324,6 +313,10 @@ function SettingsPage({
   const [shortcutError, setShortcutError] = useState<string>();
   const [autostartStatus, setAutostartStatus] = useState<RequestStatus>("idle");
   const [autostartMessage, setAutostartMessage] = useState<string>();
+  const [themeStatus, setThemeStatus] = useState<RequestStatus>("idle");
+  const [themeMessage, setThemeMessage] = useState<string>();
+  const [themeRetry, setThemeRetry] = useState<ThemeMutationRetry>();
+  const [confirmingThemeDelete, setConfirmingThemeDelete] = useState<string>();
   const mountedRef = useRef(false);
   const operationKeyRef = useRef(0);
   const balanceControllerRef = useRef<{
@@ -336,6 +329,7 @@ function SettingsPage({
   const backupKeyRef = useRef(0);
   const preferenceKeyRef = useRef(0);
   const autostartKeyRef = useRef(0);
+  const themeKeyRef = useRef(0);
   const scrollRef = useRef<HTMLDivElement>(null);
   function trackSettingsOperation<T>(label: string, start: () => Promise<T>) {
     return desktopSaveCoordinator.runMutation(label, start);
@@ -351,6 +345,7 @@ function SettingsPage({
       backupKeyRef.current += 1;
       preferenceKeyRef.current += 1;
       autostartKeyRef.current += 1;
+      themeKeyRef.current += 1;
     };
   }, []);
 
@@ -934,6 +929,132 @@ function SettingsPage({
     }
   }
 
+  async function runThemeMutation(
+    label: string,
+    retry: ThemeMutationRetry,
+    start: () => Promise<ThemeMutationOutcome>,
+    successMessage: (outcome: Extract<ThemeMutationOutcome, { status: "saved" }>) => string,
+  ) {
+    if (themeStatus === "loading") return;
+    const requestKey = themeKeyRef.current + 1;
+    themeKeyRef.current = requestKey;
+    setThemeStatus("loading");
+    setThemeMessage(undefined);
+    setThemeRetry(undefined);
+    try {
+      const outcome = await trackSettingsOperation(label, start);
+      if (!isSettingsOperationCurrent(mountedRef.current, requestKey, themeKeyRef.current)) {
+        return;
+      }
+      switch (outcome.status) {
+        case "saved":
+          setThemeStatus("success");
+          setThemeMessage(successMessage(outcome));
+          setConfirmingThemeDelete(undefined);
+          break;
+        case "failed":
+          setThemeStatus("error");
+          setThemeMessage(outcome.message);
+          setThemeRetry(outcome.retry);
+          break;
+        case "conflict":
+          setThemeStatus("error");
+          setThemeMessage(outcome.message);
+          break;
+        case "cancelled":
+          setThemeStatus("idle");
+          break;
+        case "superseded":
+          setThemeStatus("idle");
+          break;
+      }
+    } catch (error) {
+      if (!isSettingsOperationCurrent(mountedRef.current, requestKey, themeKeyRef.current)) {
+        return;
+      }
+      setThemeStatus("error");
+      setThemeMessage(`${label}失败：${errorMessage(error)}`);
+      setThemeRetry(retry);
+    } finally {
+      if (!isSettingsOperationCurrent(mountedRef.current, requestKey, themeKeyRef.current)) {
+        return;
+      }
+      setThemeStatus((current) => current === "loading" ? "error" : current);
+    }
+  }
+
+  function importTheme() {
+    void runThemeMutation(
+      "主题导入",
+      { kind: "import" },
+      () => themeController.importPackage(),
+      (outcome) => {
+        const imported = outcome.mutation.kind === "import"
+          ? outcome.snapshot.themes.find(
+              (theme) => theme.manifest.id === outcome.mutation.themeId,
+            )
+          : undefined;
+        const warningCopy = imported?.warnings.length
+          ? ` 已安全忽略：${imported.warnings.slice(0, 3).join("；")}${
+              imported.warnings.length > 3 ? "；其余警告已省略" : ""
+            }。`
+          : "";
+        return imported
+          ? `已导入 ${imported.manifest.name}，当前主题未改变。${warningCopy}`
+          : "主题已导入，当前主题未改变。";
+      },
+    );
+  }
+
+  function selectTheme(themeId: string, mode?: ThemeMode) {
+    const theme = themeController.snapshot.themes.find(
+      (candidate) => candidate.manifest.id === themeId,
+    );
+    if (!theme) return;
+    const selectedMode = mode ?? (
+      theme.manifest.modes.includes(themeController.snapshot.currentMode)
+        ? themeController.snapshot.currentMode
+        : theme.manifest.modes[0]
+    );
+    if (
+      themeId === themeController.snapshot.currentThemeId &&
+      selectedMode === themeController.snapshot.currentMode
+    ) return;
+    void runThemeMutation(
+      "主题选择",
+      { kind: "select", themeId, mode: selectedMode },
+      () => themeController.select(themeId, selectedMode),
+      () => `已应用 ${theme.manifest.name} · ${selectedMode === "light" ? "浅色" : "深色"}。`,
+    );
+  }
+
+  function deleteTheme(themeId: string) {
+    const theme = themeController.snapshot.themes.find(
+      (candidate) => candidate.manifest.id === themeId,
+    );
+    if (!theme || theme.builtin) return;
+    void runThemeMutation(
+      "主题删除",
+      { kind: "delete", themeId },
+      () => themeController.delete(themeId),
+      () => `已删除 ${theme.manifest.name}${
+        themeController.snapshot.currentThemeId === themeId
+          ? "，并恢复 ReadRay Default"
+          : ""
+      }。`,
+    );
+  }
+
+  function retryThemeMutation() {
+    if (!themeRetry) return;
+    void runThemeMutation(
+      "主题操作重试",
+      themeRetry,
+      () => themeController.retry(themeRetry),
+      () => "主题操作重试成功。",
+    );
+  }
+
   if (!service) {
     return (
       <main className="rr-main-panel rr-settings-page" aria-label="ReadRay 设置">
@@ -976,6 +1097,11 @@ function SettingsPage({
   const balanceStatus = balanceState.status;
   const balance = balanceState.value;
   const balanceError = balanceState.error;
+  const selectedTheme = themeController.snapshot.themes.find(
+    (theme) => theme.manifest.id === themeController.snapshot.currentThemeId,
+  );
+  const themeBusy =
+    themeStatus === "loading" || themeController.status === "loading";
 
   return (
     <main className="rr-main-panel rr-settings-page" aria-label="ReadRay 设置">
@@ -1175,25 +1301,128 @@ function SettingsPage({
                 />
 
                 <div className="rr-settings-group">
-                  <GroupHeading title="主题" meta="当前主题只读显示" />
+                  <GroupHeading title="主题" meta="本地安全主题包" />
                   <div className="rr-settings-panel">
                     <div className="rr-settings-row">
-                      <SettingsCopy label="当前主题" />
+                      <SettingsCopy
+                        label="当前主题"
+                        help={selectedTheme
+                          ? `${selectedTheme.manifest.author} · ${selectedTheme.manifest.version}`
+                          : "数据库主题暂不可用"}
+                      />
                       <div className="rr-settings-stack-control">
                         <div className="rr-settings-appearance-actions">
                           <select
                             className="rr-settings-select rr-settings-theme-select"
                             aria-label="主题"
-                            value="light"
-                            disabled
+                            value={themeController.snapshot.currentThemeId}
+                            disabled={themeBusy || themeController.status === "error"}
+                            onChange={(event) => selectTheme(event.target.value)}
                           >
-                            <option value="light">ReadRay 浅色</option>
+                            {themeController.snapshot.themes.map((theme) => (
+                              <option key={theme.manifest.id} value={theme.manifest.id}>
+                                {theme.manifest.name}
+                              </option>
+                            ))}
                           </select>
-                          <UnavailableButton>导入主题</UnavailableButton>
+                          <select
+                            className="rr-settings-select rr-settings-theme-mode-select"
+                            aria-label="主题模式"
+                            value={themeController.snapshot.currentMode}
+                            disabled={
+                              themeBusy ||
+                              themeController.status === "error" ||
+                              (selectedTheme?.manifest.modes.length ?? 0) <= 1
+                            }
+                            onChange={(event) => selectTheme(
+                              themeController.snapshot.currentThemeId,
+                              event.target.value as ThemeMode,
+                            )}
+                          >
+                            {selectedTheme?.manifest.modes.map((mode) => (
+                              <option key={mode} value={mode}>
+                                {mode === "light" ? "浅色" : "深色"}
+                              </option>
+                            ))}
+                          </select>
+                          <button
+                            className="rr-settings-button"
+                            type="button"
+                            disabled={themeBusy || themeController.status === "error"}
+                            onClick={importTheme}
+                          >
+                            导入主题
+                          </button>
+                          {selectedTheme?.builtin ? (
+                            <button
+                              className="rr-settings-button rr-settings-unavailable"
+                              type="button"
+                              disabled
+                              title="ReadRay Default 是内置主题，不能删除"
+                            >
+                              删除主题
+                            </button>
+                          ) : confirmingThemeDelete === selectedTheme?.manifest.id ? (
+                            <>
+                              <button
+                                className="rr-settings-button is-danger"
+                                type="button"
+                                disabled={themeBusy}
+                                onClick={() => {
+                                  if (selectedTheme) deleteTheme(selectedTheme.manifest.id);
+                                }}
+                              >
+                                确认删除
+                              </button>
+                              <button
+                                className="rr-settings-restore"
+                                type="button"
+                                disabled={themeBusy}
+                                onClick={() => setConfirmingThemeDelete(undefined)}
+                              >
+                                取消
+                              </button>
+                            </>
+                          ) : (
+                            <button
+                              className="rr-settings-button"
+                              type="button"
+                              disabled={themeBusy || !selectedTheme}
+                              onClick={() => setConfirmingThemeDelete(selectedTheme?.manifest.id)}
+                            >
+                              删除主题
+                            </button>
+                          )}
                         </div>
                       </div>
                     </div>
                   </div>
+                  {themeController.status === "error" ? (
+                    <div className="rr-settings-inline-message is-error" role="alert">
+                      <span>主题读取失败，已保持当前配色：{themeController.error}</span>
+                      <button type="button" onClick={() => void themeController.reload()}>
+                        重试读取
+                      </button>
+                    </div>
+                  ) : null}
+                  {themeMessage ? (
+                    <div
+                      className={`rr-settings-inline-message ${
+                        themeStatus === "error" ? "is-error" : "is-success"
+                      }`}
+                      role={themeStatus === "error" ? "alert" : "status"}
+                    >
+                      <span>{themeMessage}</span>
+                      {themeStatus === "error" && themeRetry ? (
+                        <button type="button" onClick={retryThemeMutation}>
+                          重试
+                        </button>
+                      ) : null}
+                    </div>
+                  ) : null}
+                  <FutureNote>
+                    仅支持 ReadRayThemeV1 的 manifest.json 与 theme.css；原始 CSS 不会执行，外部主题需经独立适配器转换。
+                  </FutureNote>
                 </div>
 
                 <div className="rr-settings-group">

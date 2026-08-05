@@ -9,7 +9,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use tauri::{AppHandle, Manager};
 
 const DATABASE_FILE_NAME: &str = "readray.sqlite3";
-const DATABASE_SCHEMA_VERSION: i64 = 7;
+const DATABASE_SCHEMA_VERSION: i64 = 8;
 pub const EXPLANATION_CARD_SCHEMA_VERSION: i64 = 1;
 const DEFAULT_PAGE: u32 = 1;
 const DEFAULT_PAGE_SIZE: u32 = 20;
@@ -208,6 +208,27 @@ ALTER TABLE app_preferences
   ADD COLUMN selection_explanation_shortcut TEXT NOT NULL DEFAULT 'Ctrl+Alt+U';
 "#;
 
+const MIGRATION_8: &str = r#"
+CREATE TABLE custom_themes (
+  id TEXT PRIMARY KEY,
+  manifest_json TEXT NOT NULL,
+  light_colors_json TEXT,
+  dark_colors_json TEXT,
+  warnings_json TEXT NOT NULL,
+  imported_at_unix_ms INTEGER NOT NULL
+);
+
+CREATE TABLE theme_preferences (
+  id INTEGER PRIMARY KEY CHECK (id = 1),
+  revision INTEGER NOT NULL DEFAULT 0 CHECK (revision >= 0),
+  theme_id TEXT NOT NULL DEFAULT 'readray-default',
+  mode TEXT NOT NULL DEFAULT 'light' CHECK (mode IN ('light', 'dark'))
+);
+
+INSERT INTO theme_preferences (id, revision, theme_id, mode)
+VALUES (1, 0, 'readray-default', 'light');
+"#;
+
 const MIGRATIONS: &[(i64, &str)] = &[
     (1, MIGRATION_1),
     (2, MIGRATION_2),
@@ -215,7 +236,8 @@ const MIGRATIONS: &[(i64, &str)] = &[
     (4, MIGRATION_4),
     (5, MIGRATION_5),
     (6, MIGRATION_6),
-    (DATABASE_SCHEMA_VERSION, MIGRATION_7),
+    (7, MIGRATION_7),
+    (DATABASE_SCHEMA_VERSION, MIGRATION_8),
 ];
 
 #[derive(Clone, Debug, Serialize)]
@@ -1210,6 +1232,13 @@ mod tests {
                 },
             )
             .unwrap();
+        let theme_defaults: (i64, String, String) = upgraded
+            .query_row(
+                "SELECT revision, theme_id, mode FROM theme_preferences WHERE id = 1",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .unwrap();
         assert_eq!(
             values,
             (
@@ -1221,6 +1250,10 @@ mod tests {
                 "Ctrl+Alt+R".to_string(),
                 "Ctrl+Alt+U".to_string(),
             )
+        );
+        assert_eq!(
+            theme_defaults,
+            (0, "readray-default".to_string(), "light".to_string())
         );
         drop(upgraded);
         let _ = fs::remove_dir_all(root);

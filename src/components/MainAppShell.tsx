@@ -24,6 +24,7 @@ import type { WritingService } from "../writingService";
 import type { SettingsService } from "../settingsService";
 import type { AppPreferences } from "../appPreferences";
 import type { AppPreferenceSaveOutcome } from "../appPreferenceSaveCoordinator";
+import type { AppThemeController } from "../useAppTheme";
 import ConversationPage from "./ConversationPage";
 import ConversationHistoryPage from "./ConversationHistoryPage";
 import ConversationManagementMenu, {
@@ -47,6 +48,7 @@ type MainAppShellProps = {
   conversationService: ConversationService | null;
   writingService: WritingService | null;
   settingsService: SettingsService | null;
+  themeController: AppThemeController;
   preferences: AppPreferences;
   onPreferencesSave: (
     candidate: AppPreferences,
@@ -79,6 +81,7 @@ function MainAppShell({
   conversationService,
   writingService,
   settingsService,
+  themeController,
   preferences,
   onPreferencesSave,
   interactionBlocked = false,
@@ -535,6 +538,7 @@ function MainAppShell({
         ) : activePageId === "settings" ? (
           <SettingsPage
             service={settingsService}
+            themeController={themeController}
             onPreferencesSave={onPreferencesSave}
           />
         ) : activePageId === "writing" ? null : (

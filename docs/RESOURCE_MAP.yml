@@ -4,8 +4,8 @@ project:
   repo_root: "."
 
 meta:
-  version: "1.28"
-  last_updated: "2026-08-04"
+  version: "1.31"
+  last_updated: "2026-08-05"
   updated_by: "Codex"
   source_of_truth: "docs/RESOURCE_MAP.yml"
   language: "zh-CN"
@@ -71,6 +71,15 @@ core_docs:
       - "在 Codex 中运行 pnpm 构建、启动 Tauri dev 或发布到 GitHub。"
     notes: "记录可复用环境经验和本机命令/发布基线，不写成每次操作流水账；已有基线应优先复用，不要先走通用工具探测。"
     risk: "不要手动移动 VS 或 SDK 目录；迁移前先确认安装器、缓存和 Junction 策略。"
+
+  - path: "docs/THEME_PROTOCOL.md"
+    purpose: "ReadRayThemeV1 的 manifest、语义颜色、回退、安全解析、持久化和外部 adapter 边界。"
+    status: "active"
+    read_when:
+      - "创建、导入或排查 ReadRay 主题包。"
+      - "以后设计 Codex、Obsidian 或其他外部主题 adapter。"
+    notes: "ReadRayThemeV1 是唯一稳定内部协议；theme.css 永远只作为文本解析，当前只内置 ReadRay Default 浅色模式。"
+    risk: "不得为兼容外部主题开放任意 CSS、布局、字体、图片、远程资源或网络下载。"
 
 competition_resources:
   directory: "resource/"
@@ -248,13 +257,61 @@ source_areas:
     risk: "该 service 不持久化 thread、不读取真实历史，也不请求 DeepSeek；不得由正式 Tauri 装配读取或实例化。"
 
   - path: "src/components/SettingsPage.tsx"
-    purpose: "主应用设置页的真实加载、DeepSeek 配置、字体字号、发送快捷键、余额、本地 Token 使用量、本地数据操作和运行时信息状态。"
+    purpose: "主应用设置页的真实加载、主题、DeepSeek 配置、字体字号、发送快捷键、余额、本地 Token 使用量、本地数据操作和运行时信息状态。"
     status: "active"
     read_when:
       - "调整设置页、DeepSeek Key 首次配置/更新/清除或失败重试。"
       - "排查设置页 loading、重启恢复或窄窗口布局。"
-    notes: "复用 MainAppShell、MainSidebar 和标题栏；页面只消费 SettingsService。除既有 Key、余额、Token、数据、字体字号和发送快捷键外，现已接通两组可录制全局快捷键、恢复默认、Windows 实际开机启动状态和主窗口关闭策略。快捷键、关闭策略继续走 SQLite revision 偏好；开机启动不写 SQLite。Key 保存/清除和开机启动写入只把 promise 提交给持续存活的应用级协调器，页面卸载后不再持有等待状态或更新旧组件。快捷键保存成功后重读运行时注册错误，因此双冲突可逐项恢复且未恢复项继续明确显示。"
-    risk: "不得直接 invoke、读取 localStorage/sessionStorage、显示或返回已保存 Key 明文；开机启动状态不得用页面缓存或 SQLite 值冒充 Windows 权威状态。"
+    notes: "复用 MainAppShell、MainSidebar 和标题栏；页面只消费 SettingsService 与应用级 AppThemeController。主题区真实支持本地 ReadRayThemeV1 导入、实际 mode 选择和自定义主题删除；内置默认不可删除，同 ID 明确拒绝。既有 Key、余额、Token、数据、字体字号、发送键、全局快捷键、开机启动和关闭策略保持原正式链路。"
+    risk: "不得直接 invoke、读主题文件、读取 localStorage/sessionStorage、显示或返回已保存 Key 明文；主题失败不得覆盖当前权威配色。"
+
+  - path: "src/themeProtocol.ts"
+    purpose: "ReadRayThemeV1 前端类型、严格快照校验、内置默认主题和白名单 CSS 变量应用。"
+    status: "active"
+    read_when:
+      - "调整主题语义 token、默认回退、运行时变量或 adapter 边界。"
+    notes: "只把规范化颜色逐项写入既有 rr-main 变量；应用中途失败会恢复全部旧值，ReadRay Default 保留当前浅色视觉。字符串长度按 Unicode code point 计数（Array.from().length），与 Rust chars().count() 一致，保证含 emoji 的 manifest 在前端校验与 Rust 安全预检结果相同。"
+    risk: "不得接收或插入原始 CSS，也不得把主题应用到 overlay、字体、字号或布局。"
+
+  - path: "src/themeRepository.ts"
+    purpose: "主题目录原生选择与 get/import/select/delete typed Tauri commands。"
+    status: "active"
+    read_when:
+      - "调整主题目录选择、command 参数或取消语义。"
+    notes: "只把用户明确选择的单个目录路径交给 Rust；导入先由 typed Rust command 安全预检并取得规范化目标，再按同一目录、目标 ID 和 expected revision 正式写入；取消时不调用任何主题文件 command。"
+    risk: "不得在前端读取 manifest/theme.css、扫描其他目录或下载主题。"
+
+  - path: "src/themeService.ts"
+    purpose: "主题 repository 返回快照的严格运行时校验与正式 service。"
+    status: "active"
+    read_when:
+      - "调整主题快照协议或 service/repository 映射。"
+    notes: "所有读取和 mutation 结果都必须经过 validateThemeSnapshot，当前 ID/mode 必须指向真实可用配色。"
+    risk: "不得让 SettingsPage 绕过 service 消费 Rust 原始响应。"
+
+  - path: "src/themeMutationCoordinator.ts"
+    purpose: "主题导入、选择、删除的 revision 竞态、全局应用、失败回滚和重试协调器。"
+    status: "active"
+    read_when:
+      - "排查主题保存冲突、迟到结果、删除恢复或安全退出等待。"
+    notes: "选择可乐观应用规范化主题；失败会重读并恢复 SQLite 权威值，并按精确目标、选择/存在性和 revision 后置条件区分已提交成功、真正失败与并发冲突；generation 阻止旧失败覆盖新成功。"
+    risk: "不得把协调器下放到短生命周期页面、移除权威重读、用任意新增主题推断 import 成功或对冲突盲目重试。"
+
+  - path: "src/useAppTheme.ts"
+    purpose: "主窗口主题启动恢复、跨窗口事件、可见性重读、运行时应用和持久协调 hook。"
+    status: "active"
+    read_when:
+      - "排查主题重启恢复、即时应用、窗口重新显示或设置页卸载后的回滚。"
+    notes: "只在主应用实例化 ThemeService；主题变量仅写入 .rr-main-app，非 Tauri 预览使用 ReadRay Default。"
+    risk: "不得在 overlay 创建主题服务，不得使用 localStorage/sessionStorage 或直接 invoke。"
+
+  - path: "tests/themeService.test.mjs"
+    purpose: "主题前端 typed commands、快照校验、默认变量等价、失败回滚和正式安全边界测试。"
+    status: "active"
+    read_when:
+      - "修改主题前端协议、运行时应用或设置页正式路径。"
+    notes: "由 test:settings 统一运行；聚焦覆盖 Rust/前端规范颜色、按 code point 的字符串长度边界、导入精确目标、提交未确认对账、并发冲突、默认变量、运行时回滚和阴影 token 静态守卫；Rust 配套测试覆盖 CSS 文本解析、限制、可读性、SQLite lifecycle 和重启恢复。"
+    risk: "自动测试不替代真实 Tauri 的原生目录选择、即时视觉和重启人工验收。"
 
   - path: "src/settingsBalanceRefresh.ts"
     purpose: "设置页余额自动刷新、可见性暂停、请求代次隔离和保留旧值的状态控制器。"
@@ -749,6 +806,14 @@ source_areas:
     notes: "返回无明文的 Key configured/source、实际模型、数据目录、三类计数、版本、Windows 实际开机启动状态、可选快捷键注册错误和非敏感偏好。偏好更新除既有校验外还校验关闭策略与两组全局快捷键；先阶段化运行时注册，再按 revision 保存 SQLite，提交模糊错误会回读权威值决定确认或回滚。开机启动 command 直接读写官方插件状态，不写 SQLite。"
     risk: "失败不得替换现有 Key 或报告保存成功；不得记录、序列化返回或在错误消息中拼接候选 Key。备份失败必须清理临时数据库及 sidecar，不得覆盖源库或把残缺文件当成成功结果。"
 
+  - path: "src-tauri/src/themes.rs"
+    purpose: "ReadRayThemeV1 manifest/theme.css 安全解析、规范化、SQLite repository 和 typed Tauri commands。"
+    status: "active"
+    read_when:
+      - "调整主题协议、安全白名单、路径限制、可读性或导入/选择/删除持久化。"
+    notes: "只读所选目录直属普通文件；拒绝 at-rule、URL、脚本、嵌套和超限输入，忽略未知选择器/变量并返回警告；颜色输出为前后端共用的唯一规范形式；导入支持只读安全预检并在写入时重新解析核对目标 ID；数据库只保存规范化主题，不保存原始 CSS。"
+    risk: "不得执行 CSS、联网下载、静默覆盖同 ID、放宽目录边界或把内置默认主题重复写入数据库。"
+
   - path: "src-tauri/src/conversations.rs"
     purpose: "Quick AI conversation/message SQLite 仓库和序列化协议。"
     status: "active"
@@ -783,7 +848,7 @@ source_areas:
       - "调整学习记录 schema、迁移或存储字段。"
       - "实现学习记录窗口、搜索、筛选、单条读取或删除。"
       - "排查自动保存或应用数据目录中的 SQLite 问题。"
-    notes: "使用 rusqlite bundled，在 Tauri 应用数据目录创建 readray.sqlite3；v1 为学习记录、v2 为 Quick AI、v3/v4 为写作、v5 为 Token usage、v6 新建 app_preferences，v7 只追加关闭策略和两组全局快捷键列。开机启动不进入数据库；v6 升级保留 revision 与既有偏好。"
+    notes: "使用 rusqlite bundled，在 Tauri 应用数据目录创建 readray.sqlite3；v1 为学习记录、v2 为 Quick AI、v3/v4 为写作、v5 为 Token usage、v6 新建 app_preferences，v7 追加桌面生命周期偏好，v8 新建 custom_themes/theme_preferences。内置默认主题不写数据库，旧设置升级保持既有 revision 和偏好。"
     risk: "学习记录仍只做事件存储，不做去重、聚合、remembered/forgotten、趋势或历史 UI；新增 schema 必须继续追加 migration，不能改写已发布迁移。"
 
   - path: "scripts/"
@@ -819,7 +884,7 @@ app_scaffold:
     read_when:
       - "调整 npm/pnpm 脚本。"
       - "排查前端构建或 Tauri CLI 调用。"
-    notes: "包管理器使用 pnpm；当前脚本包含 dev、build、preview、test:conversation、test:writing、test:settings 和 tauri。阶段六使用官方 @tauri-apps/plugin-dialog 提供原生 Markdown 保存路径选择和取消语义。"
+    notes: "包管理器使用 pnpm；当前脚本包含 dev、build、preview、test:conversation、test:writing、test:settings 和 tauri。官方 @tauri-apps/plugin-dialog 同时提供 Markdown 保存路径与本地主题目录选择；test:settings 包含主题聚焦测试。"
     risk: "不要无依据新增运行时依赖。"
 
   - path: "pnpm-lock.yaml"
@@ -855,7 +920,7 @@ app_scaffold:
     read_when:
       - "调整主窗口插件权限。"
       - "排查原生保存对话框权限。"
-    notes: "主窗口允许 dialog:allow-save 和既有 opener 权限；备份内容仍由受控 Rust command 写入用户选择的路径，数据目录由 Rust 自行解析后打开。"
+    notes: "主窗口只开放主题目录选择所需的 dialog:allow-open、导出/备份所需的 dialog:allow-save 和既有 opener 权限；主题文件仍由受控 Rust command 读取，备份内容由受控 Rust command 写入用户选择的路径，数据目录由 Rust 自行解析后打开。"
     risk: "只开放当前功能需要的权限，不使用 dialog:default 或无关文件系统权限扩大范围。"
 
 external_refs:

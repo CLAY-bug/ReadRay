@@ -52,6 +52,9 @@ import {
   type SettingsService,
 } from "./settingsService";
 import { useAppPreferences } from "./useAppPreferences";
+import { TauriThemeRepository } from "./themeRepository";
+import { RepositoryThemeService, type ThemeService } from "./themeService";
+import { useAppTheme } from "./useAppTheme";
 import {
   desktopSaveCoordinator,
   runForcedExit,
@@ -1041,7 +1044,13 @@ function MainAppWindow() {
       ? new RepositorySettingsService(new TauriSettingsRepository())
       : null,
   );
+  const [themeService] = useState<ThemeService | null>(() =>
+    isTauriRuntime
+      ? new RepositoryThemeService(new TauriThemeRepository())
+      : null,
+  );
   const { preferences, savePreferences } = useAppPreferences(settingsService);
+  const themeController = useAppTheme(themeService);
   const [safeExitFailure, setSafeExitFailure] = useState<SafeExitFailure>();
   const safeExitGenerationRef = useRef(0);
   const handledSafeExitRequestRef = useRef<number | undefined>(undefined);
@@ -1367,6 +1376,7 @@ function MainAppWindow() {
       conversationService={conversationService}
       writingService={writingService}
       settingsService={settingsService}
+      themeController={themeController}
       preferences={preferences}
       onPreferencesSave={savePreferences}
       interactionBlocked={safeExitFailure?.retrying === true}

@@ -18,8 +18,11 @@
 
 .rr-main-app {
   --rr-main-bg: #f2f1ed;
+  --rr-main-sidebar: #ebeae5;
   --rr-main-surface: #e6e5e0;
   --rr-main-surface-warm: #ebeae5;
+  --rr-main-surface-subtle: #f0efeb;
+  --rr-main-surface-contrast: #fff;
   --rr-main-fg: #26251e;
   --rr-main-fg-secondary: rgba(38, 37, 30, 0.9);
   --rr-main-muted: rgba(38, 37, 30, 0.55);
@@ -27,7 +30,21 @@
   --rr-main-border: rgba(38, 37, 30, 0.1);
   --rr-main-border-soft: rgba(38, 37, 30, 0.06);
   --rr-main-accent: #f54e00;
+  --rr-main-accent-hover: #e84800;
+  --rr-main-accent-text: #fff;
+  --rr-main-success: #277250;
+  --rr-main-success-soft: rgba(39, 114, 80, 0.11);
+  --rr-main-warning: #9a6400;
+  --rr-main-warning-soft: rgba(154, 100, 0, 0.11);
+  --rr-main-warning-strong: #eab308;
   --rr-main-danger: #cf2d56;
+  --rr-main-danger-soft: rgba(207, 45, 86, 0.09);
+  --rr-main-danger-strong: #a2382a;
+  --rr-main-selection: rgba(245, 78, 0, 0.12);
+  --rr-main-diff-added: #1f8a65;
+  --rr-main-diff-removed: #cf2d56;
+  --rr-main-scrim: rgba(28, 27, 23, 0.32);
+  --rr-main-shadow: rgba(38, 37, 30, 0.1);
   --rr-main-design-scale: 1;
   --rr-main-sidebar-width: calc(252px * var(--rr-main-design-scale));
   --rr-main-titlebar-height: calc(44px * var(--rr-main-design-scale));
@@ -109,7 +126,7 @@
   border-right: calc(1px * var(--rr-main-design-scale)) solid var(--rr-main-border);
   padding-right: calc(10px * var(--rr-main-design-scale));
   padding-left: calc(16px * var(--rr-main-design-scale));
-  background: var(--rr-main-surface-warm);
+  background: var(--rr-main-sidebar);
   transition:
     width 200ms ease,
     flex-basis 200ms ease;
@@ -191,7 +208,7 @@
 
 .rr-main-window-control.is-close:hover,
 .rr-main-window-control.is-close:focus-visible {
-  color: #fff !important;
+  color: var(--rr-main-accent-text) !important;
   background: var(--rr-main-danger) !important;
 }
 
@@ -218,7 +235,7 @@
   border-right: calc(1px * var(--rr-main-design-scale)) solid var(--rr-main-border);
   padding: calc(14px * var(--rr-main-design-scale)) calc(10px * var(--rr-main-design-scale))
     calc(10px * var(--rr-main-design-scale));
-  background: var(--rr-main-surface-warm);
+  background: var(--rr-main-sidebar);
   font-family: var(--rr-main-sidebar-font-display);
   line-height: normal;
   transition:
@@ -591,7 +608,11 @@
   z-index: 5;
   flex: 0 0 auto;
   padding: clamp(11px, 1.1111cqw, 16px) 0 clamp(19px, 1.9444cqw, 28px);
-  background: linear-gradient(to bottom, rgba(242, 241, 237, 0.88), var(--rr-main-bg) 30%);
+  background: linear-gradient(
+    to bottom,
+    color-mix(in srgb, var(--rr-main-bg) 88%, transparent),
+    var(--rr-main-bg) 30%
+  );
 }
 
 .rr-main-composer {
@@ -604,12 +625,12 @@
   border-radius: 8px;
   padding: clamp(6px, 0.625cqw, 9px) clamp(6px, 0.625cqw, 9px)
     clamp(6px, 0.625cqw, 9px) clamp(11px, 1.1111cqw, 16px);
-  background: #f0efeb;
+  background: var(--rr-main-surface-subtle);
 }
 
 .rr-main-composer:focus-within {
-  border-color: rgba(245, 78, 0, 0.32);
-  box-shadow: 0 4px 12px rgba(38, 37, 30, 0.1);
+  border-color: color-mix(in srgb, var(--rr-main-accent) 32%, transparent);
+  box-shadow: 0 4px 12px var(--rr-main-shadow);
 }
 
 .rr-main-composer textarea {
@@ -642,7 +663,7 @@
   height: clamp(27px, 2.6389cqw, 38px);
   place-items: center;
   border-radius: 8px !important;
-  color: #fff !important;
+  color: var(--rr-main-accent-text) !important;
   background: var(--rr-main-accent) !important;
   cursor: pointer;
 }
@@ -650,8 +671,8 @@
 .rr-main-send:hover,
 .rr-main-send:focus-visible {
   outline: 0;
-  background: #e84800 !important;
-  box-shadow: 0 4px 12px rgba(38, 37, 30, 0.1);
+  background: var(--rr-main-accent-hover) !important;
+  box-shadow: 0 4px 12px var(--rr-main-shadow);
 }
 
 .rr-main-send:active {
@@ -1503,7 +1524,7 @@
   inset: 0;
   display: grid;
   place-items: center;
-  background: rgba(28, 27, 23, 0.32);
+  background: var(--rr-main-scrim);
 }
 
 .rr-safe-exit-dialog {
@@ -1512,7 +1533,7 @@
   border-radius: 14px;
   padding: 24px;
   background: var(--rr-main-bg);
-  box-shadow: 0 18px 48px rgba(38, 37, 30, 0.2);
+  box-shadow: 0 18px 48px color-mix(in oklab, var(--rr-main-fg), transparent 80%);
   color: var(--rr-main-text);
 }
 
@@ -1543,7 +1564,7 @@
 }
 
 .rr-safe-exit-actions button.is-danger {
-  color: #9f3a2f;
+  color: var(--rr-main-danger-strong);
 }
 
 .rr-safe-exit-dialog small {

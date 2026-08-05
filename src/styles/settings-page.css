@@ -1,9 +1,9 @@
 .rr-settings-page {
-  --rr-settings-success: #277250;
-  --rr-settings-success-soft: rgba(39, 114, 80, 0.11);
-  --rr-settings-warn: #9a6400;
-  --rr-settings-warn-soft: rgba(154, 100, 0, 0.11);
-  --rr-settings-danger-soft: rgba(207, 45, 86, 0.09);
+  --rr-settings-success: var(--rr-main-success);
+  --rr-settings-success-soft: var(--rr-main-success-soft);
+  --rr-settings-warn: var(--rr-main-warning);
+  --rr-settings-warn-soft: var(--rr-main-warning-soft);
+  --rr-settings-danger-soft: var(--rr-main-danger-soft);
   overflow: hidden;
 }
 
@@ -228,7 +228,7 @@
 .rr-settings-button:focus-visible:not(:disabled) {
   outline: 0;
   color: var(--rr-main-danger) !important;
-  box-shadow: 0 4px 12px rgba(38, 37, 30, 0.1);
+  box-shadow: 0 4px 12px var(--rr-main-shadow);
 }
 
 .rr-settings-button:disabled {
@@ -294,6 +294,7 @@
 .rr-settings-appearance-actions {
   display: flex;
   min-width: 0;
+  flex-wrap: wrap;
   align-items: center;
   justify-content: flex-end;
   justify-self: end;
@@ -302,6 +303,10 @@
 
 .rr-settings-theme-select {
   width: 148px;
+}
+
+.rr-settings-theme-mode-select {
+  width: 82px;
 }
 
 .rr-settings-font-field {
@@ -371,7 +376,7 @@
   justify-content: flex-end;
   gap: 10px;
   padding: 7px 2px 0;
-  color: #23745a;
+  color: var(--rr-settings-success);
   font-size: calc(11px * var(--rr-ui-font-scale));
 }
 
@@ -406,7 +411,7 @@
   height: 16px;
   border-radius: 50%;
   background: var(--rr-main-bg);
-  box-shadow: 0 1px 4px rgba(38, 37, 30, 0.18);
+  box-shadow: 0 1px 4px color-mix(in oklab, var(--rr-main-fg), transparent 82%);
   content: "";
 }
 
@@ -417,7 +422,7 @@
 
 .rr-settings-switch.is-on::after {
   left: 19px;
-  background: #fff;
+  background: var(--rr-main-surface-contrast);
 }
 
 .rr-settings-future-note {
@@ -567,7 +572,7 @@
 
 .rr-settings-text-input:focus-visible {
   border-color: color-mix(in oklab, var(--rr-main-accent), var(--rr-main-border) 68%);
-  box-shadow: 0 4px 12px rgba(38, 37, 30, 0.1);
+  box-shadow: 0 4px 12px var(--rr-main-shadow);
 }
 
 .rr-settings-text-input::placeholder {

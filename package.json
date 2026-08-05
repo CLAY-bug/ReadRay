@@ -9,7 +9,7 @@
     "preview": "vite preview",
     "test:conversation": "node --test tests/conversationService.test.mjs",
     "test:writing": "node --test tests/writing*.test.mjs",
-    "test:settings": "node --test tests/settingsService.test.mjs tests/desktopLifecycle.test.mjs",
+    "test:settings": "node --test tests/settingsService.test.mjs tests/themeService.test.mjs tests/desktopLifecycle.test.mjs",
     "tauri": "tauri"
   },
   "dependencies": {

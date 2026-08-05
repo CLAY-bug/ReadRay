@@ -18,6 +18,7 @@ pub mod model_usage;
 pub mod quick_ai;
 pub mod secret_store;
 pub mod settings;
+pub mod themes;
 #[cfg(target_os = "windows")]
 pub mod windows_uia;
 pub mod writing;
@@ -929,6 +930,11 @@ pub fn run() {
             settings::get_deepseek_balance,
             settings::open_readray_data_directory,
             settings::backup_readray_database,
+            themes::get_theme_snapshot,
+            themes::inspect_theme_package,
+            themes::import_theme_package,
+            themes::select_theme,
+            themes::delete_custom_theme,
             model_usage::get_model_usage_summary,
             writing::create_writing_document,
             writing::list_writing_documents,

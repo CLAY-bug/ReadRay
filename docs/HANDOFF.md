@@ -5,8 +5,9 @@
 ## TL;DR
 
 - 当前状态：阶段一至阶段七已经完成；阶段七设置与桌面生命周期已通过复审和真实 Tauri 人工验收。
+- 主题状态：ReadRayThemeV1、安全解析、SQLite v8、设置页导入/选择/删除和主窗口恢复已完成自动验证；尚待独立审核与真实 Tauri 人工验收，本轮不改变 DEVELOPMENT_PLAN 阶段状态。
 - 当前路线：Windows 原生，Tauri + React + TypeScript + Rust + SQLite。
-- 下一步：按 `docs/DEVELOPMENT_PLAN.md` 先讨论阶段八复习对象、优先级信号和反馈语义；本次提交不进入阶段八实现。
+- 下一步：先独立审核并按清单完成人工主题验收；通过后再按 `docs/DEVELOPMENT_PLAN.md` 讨论阶段八复习对象、优先级信号和反馈语义。
 - 后续顺序：完成阶段八产品讨论后再实现复习闭环；其后的阶段顺序以 `docs/DEVELOPMENT_PLAN.md` 为准。
 - 当前约束：不使用通用 Agent 框架，不内置商业词典，不做 OCR、本地大模型或跨平台支持。
 - 交接原则：`HANDOFF.md` 只记录会影响下一次恢复上下文的信息，小型文档措辞和格式调整不记录。
@@ -19,6 +20,7 @@
 - `docs/DEVELOPMENT_PLAN.md`：项目方向、阶段边界和验收标准的权威来源。
 - `docs/RESOURCE_MAP.yml`：完整资源索引；未在本节列出的文件从这里查找。
 - `docs/WINDOWS_ENVIRONMENT.md`：本机 pnpm、Rust、Tauri、构建和发布命令基线。
+- `docs/THEME_PROTOCOL.md` / `src-tauri/src/themes.rs` / `src/themeProtocol.ts`：ReadRayThemeV1、安全解析、规范化持久化和主窗口应用边界。
 - `src/App.tsx` / `src/components/MainAppShell.tsx` / `src/components/MainSidebar.tsx`：设置入口、主窗口装配和页面导航边界。
 - `src-tauri/src/lib.rs` / `src-tauri/tauri.conf.json`：主窗口与 overlay 的命令、快捷键、关闭/隐藏和生命周期入口。
 - `.env.example` / `src-tauri/src/deepseek_client.rs` / `src-tauri/src/secret_store.rs`：DeepSeek 开发环境回退、共享请求和 Windows 安全存储边界；不得把真实密钥写入仓库、SQLite、前端持久化或普通日志。
@@ -31,6 +33,8 @@
 - UI 使用 React + TypeScript。
 - 原生桌面能力通过 Rust / Tauri commands 实现。
 - 本地存储使用 SQLite。
+- ReadRayThemeV1 是唯一稳定内部主题协议；Codex、Obsidian 或其他来源以后只能通过各自独立 adapter 转换，不能把外部 CSS 直接交给浏览器。
+- 主题只影响主应用配色，不改变 overlay、划词卡、UIA、布局、字体、字号或业务交互；当前内置 ReadRay Default 只有真实浅色模式。
 - 第一版 LLM 供应商使用 DeepSeek OpenAI-compatible API。
 - MVP 阶段不使用 LangChain、LangGraph、Pi、Agno 等通用 Agent 框架。
 - 自己实现 ReadRay 专属的轻量 Agent 层。
@@ -160,9 +164,22 @@
 - 本轮复审修复后自动验证通过：设置/生命周期前端 25 项、会话前端回归 18 项、写作前端回归 26 项；完整 Rust 103 项通过，2 项真实 DeepSeek 联网测试按既有 ignored 标记跳过；`pnpm build`、`cargo fmt --check`、`cargo check`、RESOURCE_MAP YAML 解析和 `git diff --check` 均通过。自动测试未修改本机开机启动项，也没有使用浏览器、Computer Use 或真实 Tauri 窗口替代人工验收。
 - 阶段七复审与真实 Tauri 人工验收已经通过：托盘左右键与菜单、两种关闭策略、安全退出成功/失败/取消/强制退出、开机启动注册/注销及隐藏启动、第二次手动启动恢复、快捷键录制/冲突/逐项恢复/重启恢复，以及隐藏主窗口后的快捷键和后台自动保存均已验收；阶段七正式收口。
 
+### ReadRayThemeV1 主题基础设施（待重新审核与人工验收）
+
+- `docs/THEME_PROTOCOL.md` 定义版本化 manifest、light/dark 模式、语义配色、必填/可选 token 和确定性回退；内置 `ReadRay Default` 保留当前浅色变量并留在代码资源中，不写 SQLite。真实 Flexoki Obsidian/Codex 样本只用于核对表达能力，本轮没有实现或导入任何外部主题 adapter。
+- 正式路径为 `SettingsPage -> AppThemeController -> ThemeService -> ThemeRepository -> typed Rust commands`。repository 只打开原生单目录选择器；Rust 只读取该目录直属的普通 `manifest.json` / `theme.css`，符号链接和目录外路径拒绝。页面不直接 invoke、读文件、写 SQLite 或使用 localStorage/sessionStorage。
+- `theme.css` 只作文本解析：仅允许 `:root`、`body`、`.theme-light`、`.theme-dark` 中的白名单颜色变量；未知选择器、未知变量和普通属性不进入运行时并返回警告。所有 at-rule、`url()`、远程字体/图片、脚本、嵌套规则、非法颜色、超限、重复声明和低可读性主题均拒绝；浏览器只接收规范化后的逐项 CSS 变量，不接收原始 CSS。
+- Rust 与 TypeScript 现共用严格的规范颜色语法：十六进制颜色使用小写最短形式，RGB 整数不保留前导零，rgba alpha 收敛为 `0`、`1` 或无尾随零的 `0.x`；Rust 不再把 `00.5` 一类前端会拒绝的值写入 SQLite。
+- SQLite v8 新建 `custom_themes` 与单行 `theme_preferences`，只保存规范化 manifest、完整 light/dark 颜色、警告、当前 themeId/mode 和 revision；不保存原始 CSS。导入、选择、删除均按 expected revision 事务更新；同 ID 明确拒绝，默认主题不可删除，删除正在使用的自定义主题会原子恢复默认浅色。
+- 导入先由 typed Rust command 对用户所选目录执行只读安全预检，取得规范化的精确目标，再重新解析并核对 ID 后写入；前端仍不读取主题文件。应用级 `ThemeMutationCoordinator` 和 `useAppTheme` 负责即时应用、跨事件/可见性重读、启动恢复、安全退出 flush、generation 隔离和失败后重读 SQLite 权威值。报错后的对账只有在 revision 恰好推进一次且目标主题、选择和存在性满足完整后置条件时确认已提交；数据库未变化才允许显式重试，并发冲突不自动重试，任意新增主题不能冒充本次 import。主题变量只写入主窗口 `.rr-main-app`；overlay 不实例化 ThemeService。
+- 主应用中会随主题变化的输入区渐变、焦点边框、成功/危险状态色及写作页对比表面已改用既有语义 token 或基于 token 的 `color-mix`；功能性遮罩和中性阴影保留，未改变布局、字体、overlay 或交互。
+- 自动验证通过：设置/主题/生命周期前端 31 项、会话前端回归 18 项、写作前端回归 26 项；完整 Rust 109 项通过，2 项真实 DeepSeek 联网测试按既有 ignored 标记跳过；`pnpm build`、`cargo fmt --check` 和 `cargo check` 通过。没有使用浏览器、Computer Use 或真实 Tauri 窗口替代人工验收。
+- 本次三项审核返修验证通过：设置/主题/生命周期前端 35 项、Rust themes 专项 7 项，以及 `pnpm build`、`cargo fmt --check`、`cargo check`、RESOURCE_MAP YAML 解析和 `git diff --check`；完整 Rust 测试沿用上一轮 109 项基线，本次按审核要求未扩跑。没有使用浏览器、Computer Use 或真实 Tauri 窗口替代人工验收。
+- 本轮审核返修统一了字符串长度语义：前端 `assertString` 与警告长度按 Unicode code point 计数（`Array.from(value).length`），与 Rust `chars().count()` 一致，含 emoji 等非 BMP 字符的 manifest 在安全预检与前端校验得到一致结果，并补了上限内通过/超限拒绝边界测试。设置、主应用和写作 CSS 中绕过主题协议的固定石墨色阴影（`rgba(38, 37, 30, …)` / `rgb(38 37 30 / …)`）已改用 `--rr-main-shadow` 或基于 `--rr-main-fg` / `--rr-writing-fg` 的 `color-mix` 派生语义变量，并扩充静态测试防止默认阴影色重新进入正式主题区域。聚焦验证：设置/主题/生命周期前端 36 项、Rust themes 8 项通过，`pnpm build` 通过；仍待独立审核与真实 Tauri 人工验收。
+
 ## 下一步
 
-阶段一至阶段七已经完成。下一步进入阶段八前的产品讨论，本交接不代表已授权阶段八实现。
+阶段一至阶段七已经完成，主题基础设施不改变既有阶段状态。下一步先完成本轮独立审核和真实 Tauri 人工验收；通过后再进入阶段八前的产品讨论，本交接不代表已授权阶段八实现。
 
 - 阶段八实现前先讨论复习对象、真实优先级信号、“记得/忘了”的反馈语义，以及复习与历史浏览的边界。
 - 新环境仍可复制 `.env.example` 为 `.env` 填写开发期 `DEEPSEEK_API_KEY`；用户在设置页保存或清除后，以 Windows 安全存储中的持久化决定为准。真实 `.env` 不提交。
@@ -179,6 +196,7 @@
 - **解释体验限制**：CaptureInput 和 ExplanationCard 当前上限为 4096 字符，长段落还受模型 JSON 稳定性与浮窗最大高度约束，不代表整页翻译能力。
 - **阶段八边界**：记忆页还不能可靠生成重复出现次数或时间线，“过去的出现”入口保持隐藏；复习、去重和长期记忆留到对应阶段统一设计。
 - **后续体验优化**：Quick AI 当前按纯文本、非流式展示，模型仍可能返回 Markdown 标记；Markdown 渲染/规范化、真正流式输出和更可靠的对话策略不自动并入阶段六。
+- **主题后续边界**：当前不包含 Flexoki、Codex、Obsidian adapter、社区商店、在线下载或自动更新；新增 adapter 仍必须转换到 ReadRayThemeV1 并通过同一安全校验，不能放宽任意 CSS、字体、图片或网络资源边界。
 - **对话后续边界**：阶段六的查看全部、重命名、删除和原生导出已经完成；回答重生成和记忆引用聚合属于更后续能力，当前 UI 继续诚实禁用。
 - **阶段七范围**：三批设置功能与桌面生命周期已经通过复审和真实 Tauri 人工验收，阶段七已完成；本次收口未进入阶段八。
 

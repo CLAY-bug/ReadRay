@@ -1,6 +1,7 @@
 .rr-writing-page {
   --rr-writing-bg: var(--rr-main-bg);
   --rr-writing-surface: var(--rr-main-surface);
+  --rr-writing-contrast: var(--rr-main-surface-contrast);
   --rr-writing-warm: var(--rr-main-surface-warm);
   --rr-writing-fg: var(--rr-main-fg);
   --rr-writing-fg-2: var(--rr-main-fg-secondary);
@@ -10,8 +11,8 @@
   --rr-writing-border-soft: var(--rr-main-border-soft);
   --rr-writing-accent: var(--rr-main-accent);
   --rr-writing-danger: var(--rr-main-danger);
-  --rr-writing-success: #1f8a65;
-  --rr-writing-warn: #eab308;
+  --rr-writing-success: var(--rr-main-diff-added);
+  --rr-writing-warn: var(--rr-main-warning-strong);
 
   position: relative;
   display: flex;
@@ -342,7 +343,7 @@
   border: 1px solid var(--rr-writing-border-soft);
   border-radius: 4px;
   padding: 50px 56px 72px;
-  background: color-mix(in oklab, var(--rr-writing-bg), #fff 28%);
+  background: color-mix(in oklab, var(--rr-writing-bg), var(--rr-writing-contrast) 28%);
   box-shadow: 0 16px 38px color-mix(in oklab, var(--rr-writing-fg), transparent 94%);
 }
 
@@ -975,7 +976,7 @@
 .rr-writing-agent-input {
   border: 1px solid var(--rr-writing-border);
   border-radius: 10px;
-  background: color-mix(in oklab, var(--rr-writing-bg), #fff 24%);
+  background: color-mix(in oklab, var(--rr-writing-bg), var(--rr-writing-contrast) 24%);
 }
 
 .rr-writing-agent-input:focus-within {
@@ -1712,7 +1713,7 @@
     width: 320px;
     border-left: 1px solid var(--rr-writing-border);
     background: var(--rr-writing-bg);
-    box-shadow: -18px 0 34px rgb(38 37 30 / 8%);
+    box-shadow: -18px 0 34px color-mix(in oklab, var(--rr-writing-fg), transparent 92%);
   }
 
   .rr-writing-page.is-draft:not(.has-assist) .rr-writing-editor-column,
