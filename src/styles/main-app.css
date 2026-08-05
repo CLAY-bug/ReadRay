@@ -9,6 +9,7 @@
 }
 
 .rr-main-preview-canvas .rr-main-app {
+  position: static;
   width: 1440px;
   height: 900px;
   flex: 0 0 auto;
@@ -54,10 +55,11 @@
   --rr-main-font-body: var(--rr-font-body);
   --rr-main-font-mono: var(--rr-font-mono);
 
-  position: relative;
+  position: absolute;
+  inset: 16px;
   container-type: size;
-  width: 100vw;
-  height: 100vh;
+  width: auto;
+  height: auto;
   min-width: 560px;
   min-height: 520px;
   overflow: hidden;
@@ -65,7 +67,10 @@
   border-radius: calc(8px * var(--rr-main-design-scale));
   color: var(--rr-main-fg);
   background: var(--rr-main-bg);
-  box-shadow: none;
+  box-shadow:
+    0 1px 2px color-mix(in oklab, var(--rr-main-fg), transparent 94%),
+    0 4px 12px color-mix(in oklab, var(--rr-main-fg), transparent 92%),
+    0 12px 30px color-mix(in oklab, var(--rr-main-fg), transparent 90%);
   font-family: var(--rr-main-font-display);
   font-size: calc(16px * var(--rr-ui-font-scale));
   -webkit-font-smoothing: antialiased;
@@ -274,6 +279,66 @@
 
 .rr-main-app.is-sidebar-collapsed .rr-main-sidebar-resizer {
   display: none;
+}
+
+.rr-main-resize-handle {
+  position: absolute;
+  z-index: 30;
+  touch-action: none;
+}
+
+.rr-main-resize-handle.is-n,
+.rr-main-resize-handle.is-s {
+  right: 8px;
+  left: 8px;
+  height: 6px;
+  cursor: ns-resize;
+}
+
+.rr-main-resize-handle.is-e,
+.rr-main-resize-handle.is-w {
+  top: 8px;
+  bottom: 8px;
+  width: 6px;
+  cursor: ew-resize;
+}
+
+.rr-main-resize-handle.is-nw,
+.rr-main-resize-handle.is-se {
+  width: 14px;
+  height: 14px;
+  cursor: nwse-resize;
+}
+
+.rr-main-resize-handle.is-ne,
+.rr-main-resize-handle.is-sw {
+  width: 14px;
+  height: 14px;
+  cursor: nesw-resize;
+}
+
+.rr-main-resize-handle.is-n,
+.rr-main-resize-handle.is-ne,
+.rr-main-resize-handle.is-nw {
+  top: 0;
+}
+
+.rr-main-resize-handle.is-s,
+.rr-main-resize-handle.is-se,
+.rr-main-resize-handle.is-sw {
+  bottom: 0;
+}
+
+.rr-main-resize-handle.is-e,
+.rr-main-resize-handle.is-ne,
+.rr-main-resize-handle.is-se {
+  right: 0;
+}
+
+.rr-main-resize-handle.is-w,
+.rr-main-resize-handle.is-nw,
+.rr-main-resize-handle.is-sw {
+  left: 0;
 }
 
 .rr-main-new-chat,

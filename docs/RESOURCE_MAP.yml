@@ -4,7 +4,7 @@ project:
   repo_root: "."
 
 meta:
-  version: "1.35"
+  version: "1.37"
   last_updated: "2026-08-05"
   updated_by: "Codex"
   source_of_truth: "docs/RESOURCE_MAP.yml"
@@ -160,7 +160,7 @@ source_areas:
     read_when:
       - "调整正常主应用壳、标题栏、侧栏折叠或首页装配。"
       - "将主应用接入独立 Tauri 窗口。"
-    notes: "当前通过 ?view=main 进入主应用，并在同一外壳内切换“今天”“写作”“记忆”“对话”“全部对话”和“设置”；由装配层加载 TodayService、MemoryService、ConversationService、WritingService、SettingsService 与最近 Quick AI 对话，页面组件不直接读取数据库。侧栏和全部历史的右键管理统一由外壳装配，成功后复用既有刷新令牌同步列表；只有实时页面、请求键和目标 ID 仍匹配时才同步当前标题或删除后进入空会话。写作页保持挂载并在离开时隐藏，使失败草稿仍可返回重试。"
+    notes: "当前通过 ?view=main 进入主应用，并在同一外壳内切换“今天”“写作”“记忆”“对话”“全部对话”和“设置”；由装配层加载 TodayService、MemoryService、ConversationService、WritingService、SettingsService 与最近 Quick AI 对话，页面组件不直接读取数据库。侧栏和全部历史的右键管理统一由外壳装配，成功后复用既有刷新令牌同步列表；只有实时页面、请求键和目标 ID 仍匹配时才同步当前标题或删除后进入空会话。写作页保持挂载并在离开时隐藏，使失败草稿仍可返回重试。外壳在应用四周渲染 8 个方向的自定义 resize 手柄（.rr-main-resize-handle），透明窗口下替代系统 resize 命中区，pointerdown 经 onStartResize 调用前端 getCurrentWindow().startResizeDragging。"
     risk: "不要把快捷 overlay 状态机或 invoke 迁入页面组件；正式 Tauri 对话、写作和设置必须使用真实 service。"
 
   - path: "src/components/MainSidebar.tsx"
@@ -607,7 +607,7 @@ source_areas:
     status: "active"
     read_when:
       - "调整 readray-today-2 主应用视觉、响应式布局或侧栏状态。"
-    notes: "样式全部使用 rr-main-* / rr-memory-* 作用域；全局外壳、今天页和记忆页统一使用 1440×900 / scale 1 设计坐标。浏览器预览排版固定 1440×900 画布后整体等比缩放，响应式规则按应用容器尺寸触发；侧栏只允许手动折叠。"
+    notes: "样式全部使用 rr-main-* / rr-memory-* 作用域；全局外壳、今天页和记忆页统一使用 1440×900 / scale 1 设计坐标。浏览器预览排版固定 1440×900 画布后整体等比缩放，响应式规则按应用容器尺寸触发；侧栏只允许手动折叠。主窗口主体使用 position:absolute + inset:20px 留白 + 三层 color-mix 派生阴影实现自绘窗口层次感（不用 Windows 系统阴影）；侧栏右缘提供拖拽调整手柄。"
     risk: "不要把主应用浅色 token 写回 overlay 的 tokens.css。"
 
   - path: "src/styles/conversation-page.css"
@@ -737,7 +737,7 @@ source_areas:
     read_when:
       - "调整窗口 label、入口 URL、初始尺寸、任务栏或无边框行为。"
       - "排查启动时主应用和快捷 overlay 的显示策略。"
-    notes: "main 仍为 1440×900、最小 840×600 的可缩放无边框主窗口，但静态配置先隐藏，由 Rust setup 在手动启动时显示，避免开机启动闪窗。overlay 保留透明、置顶、跳过任务栏且启动隐藏的浮窗配置。"
+    notes: "main 仍为 1440×900、最小 840×600 的可缩放无边框主窗口，但静态配置先隐藏，由 Rust setup 在手动启动时显示，避免开机启动闪窗。main 开启 transparent 以支持前端自绘窗口阴影（shadow:false，不用 Windows 系统阴影）。overlay 保留透明、置顶、跳过任务栏且启动隐藏的浮窗配置。"
     risk: "两类窗口必须保持独立 URL、尺寸和生命周期；不要把 main 的位置或显示状态写入 overlay 的进程内位置缓存。"
 
   - path: "src-tauri/src/windows_uia.rs"
@@ -968,7 +968,7 @@ app_scaffold:
     read_when:
       - "调整主窗口插件权限。"
       - "排查原生保存对话框权限。"
-    notes: "主窗口只开放主题目录选择所需的 dialog:allow-open、导出/备份所需的 dialog:allow-save 和既有 opener 权限；主题文件仍由受控 Rust command 读取，备份内容由受控 Rust command 写入用户选择的路径，数据目录由 Rust 自行解析后打开。"
+    notes: "主窗口只开放主题目录选择所需的 dialog:allow-open、导出/备份所需的 dialog:allow-save 和既有 opener 权限；主题文件仍由受控 Rust command 读取，备份内容由受控 Rust command 写入用户选择的路径，数据目录由 Rust 自行解析后打开。透明窗口自绘边缘 resize 需要 core:window:allow-start-resize-dragging 权限（前端 getCurrentWindow().startResizeDragging 调用）。"
     risk: "只开放当前功能需要的权限，不使用 dialog:default 或无关文件系统权限扩大范围。"
 
 external_refs:

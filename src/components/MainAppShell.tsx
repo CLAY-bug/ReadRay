@@ -37,6 +37,16 @@ import SettingsPage from "./SettingsPage";
 import TodayPage from "./TodayPage";
 import WritingPage from "./WritingPage";
 
+export type MainResizeDirection =
+  | "n"
+  | "ne"
+  | "e"
+  | "se"
+  | "s"
+  | "sw"
+  | "w"
+  | "nw";
+
 type MainAppShellProps = {
   viewModel: MainAppViewModel;
   memoryViewModel: MemoryPageViewModel;
@@ -63,6 +73,7 @@ type MainAppShellProps = {
   onSubmitPrompt?: (value: string) => void;
   isMaximized?: boolean;
   onStartDragging?: () => void;
+  onStartResize?: (direction: MainResizeDirection) => void;
   onMinimize?: () => void;
   onToggleMaximize?: () => void;
   onClose?: () => void;
@@ -93,6 +104,7 @@ function MainAppShell({
   onSubmitPrompt = noop,
   isMaximized = false,
   onStartDragging = noop,
+  onStartResize = noop,
   onMinimize = noop,
   onToggleMaximize = noop,
   onClose = noop,
@@ -416,6 +428,17 @@ function MainAppShell({
     </button>
   );
 
+  const resizeDirections: MainResizeDirection[] = [
+    "n",
+    "ne",
+    "e",
+    "se",
+    "s",
+    "sw",
+    "w",
+    "nw",
+  ];
+
   return (
     <div
       ref={appRootRef}
@@ -425,11 +448,22 @@ function MainAppShell({
         activePageId === "conversation" ? " is-conversation-page" : ""
       }`}
       style={
-        sidebarWidth === null
+        sidebarCollapsed || sidebarWidth === null
           ? undefined
           : ({ "--rr-main-sidebar-width": `${sidebarWidth}px` } as CSSProperties)
       }
     >
+      {resizeDirections.map((direction) => (
+        <div
+          key={direction}
+          className={`rr-main-resize-handle is-${direction}`}
+          aria-hidden="true"
+          onMouseDown={(event) => {
+            if (event.button !== 0) return;
+            onStartResize(direction);
+          }}
+        />
+      ))}
       <header
         className="rr-main-titlebar"
         aria-label="ReadRay 窗口标题栏"

@@ -7,6 +7,7 @@ import {
 } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { emit, listen } from "@tauri-apps/api/event";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 import { readText, writeText } from "@tauri-apps/plugin-clipboard-manager";
 import AnchoredResultPopover, {
   type AnchorRect,
@@ -15,7 +16,9 @@ import CenteredCommandInput from "./components/CenteredCommandInput";
 import CenteredResultPanel, {
   type CenteredResult,
 } from "./components/CenteredResultPanel";
-import MainAppShell from "./components/MainAppShell";
+import MainAppShell, {
+  type MainResizeDirection,
+} from "./components/MainAppShell";
 import QuickAiPanel from "./components/QuickAiPanel";
 import { TauriConversationRepository } from "./conversationRepository";
 import { RepositoryConversationService } from "./conversationService";
@@ -89,6 +92,24 @@ type SafeExitFailure = {
 const MAIN_APP_DESIGN_WIDTH = 1440;
 const MAIN_APP_DESIGN_HEIGHT = 900;
 const MAIN_APP_PREVIEW_GUTTER = 48;
+
+type TauriResizeDirection = Parameters<
+  ReturnType<typeof getCurrentWindow>["startResizeDragging"]
+>[0];
+
+const MAIN_RESIZE_DIRECTION_MAP: Record<
+  MainResizeDirection,
+  TauriResizeDirection
+> = {
+  n: "North",
+  ne: "NorthEast",
+  e: "East",
+  se: "SouthEast",
+  s: "South",
+  sw: "SouthWest",
+  w: "West",
+  nw: "NorthWest",
+};
 
 type DeepSeekSmokeResult = {
   configured: boolean;
@@ -1383,6 +1404,14 @@ function MainAppWindow() {
       isMaximized={isMaximized}
       onStartDragging={() => {
         void runMainWindowCommand("start_main_window_drag");
+      }}
+      onStartResize={(direction) => {
+        if (!isTauriRuntime) return;
+        void getCurrentWindow()
+          .startResizeDragging(MAIN_RESIZE_DIRECTION_MAP[direction])
+          .catch((error) => {
+            console.error("ReadRay 主窗口缩放失败：", error);
+          });
       }}
       onMinimize={() => {
         void runMainWindowCommand("minimize_main_window");
