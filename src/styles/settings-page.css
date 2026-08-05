@@ -8,35 +8,48 @@
 }
 
 .rr-settings-shell {
-  display: flex;
+  display: block;
+  overflow: hidden;
   min-width: 0;
   min-height: 0;
   flex: 1;
 }
 
 .rr-settings-nav {
-  width: 160px;
-  flex: 0 0 160px;
-  border-right: 1px solid var(--rr-main-border);
+  position: relative;
+  z-index: 6;
+  width: auto;
+  height: 52px;
+  border-bottom: 1px solid var(--rr-main-border);
+  overflow: hidden;
   background: color-mix(in oklab, var(--rr-main-bg), var(--rr-main-surface) 10%);
 }
 
 .rr-settings-nav-inner {
-  position: sticky;
-  top: 0;
-  padding: 42px 16px;
+  display: flex;
+  height: 100%;
+  align-items: center;
+  gap: 2px;
+  overflow-x: auto;
+  padding: 7px 14px;
+  scrollbar-width: none;
+}
+
+.rr-settings-nav-inner::-webkit-scrollbar {
+  display: none;
 }
 
 .rr-settings-nav button {
   position: relative;
   display: flex;
-  width: 100%;
-  min-height: 38px !important;
+  width: auto;
+  min-width: max-content;
+  min-height: 34px !important;
   align-items: center;
   border-radius: var(--rr-radius-sm) !important;
-  padding: 0 11px !important;
+  padding: 0 10px !important;
   color: var(--rr-main-muted) !important;
-  text-align: left;
+  font-size: calc(11px * var(--rr-ui-font-scale)) !important;
   cursor: pointer;
 }
 
@@ -55,10 +68,9 @@
 
 .rr-settings-nav button.is-active::before {
   position: absolute;
-  top: 10px;
-  bottom: 10px;
-  left: 0;
-  width: 2px;
+  inset: auto 10px 0;
+  width: auto;
+  height: 2px;
   border-radius: 999px;
   background: var(--rr-main-fg);
   content: "";
@@ -68,6 +80,7 @@
   min-width: 0;
   min-height: 0;
   flex: 1;
+  height: calc(100% - 52px);
   overflow-y: auto;
   overscroll-behavior: contain;
   scrollbar-color: var(--rr-main-border) transparent;
@@ -1319,53 +1332,6 @@
 }
 
 @container (max-width: 1100px) {
-  .rr-settings-shell {
-    display: block;
-    overflow: hidden;
-  }
-
-  .rr-settings-nav {
-    position: relative;
-    z-index: 6;
-    width: auto;
-    height: 52px;
-    border-right: 0;
-    border-bottom: 1px solid var(--rr-main-border);
-    overflow: hidden;
-  }
-
-  .rr-settings-nav-inner {
-    display: flex;
-    height: 100%;
-    align-items: center;
-    gap: 2px;
-    overflow-x: auto;
-    padding: 7px 14px;
-    scrollbar-width: none;
-  }
-
-  .rr-settings-nav-inner::-webkit-scrollbar {
-    display: none;
-  }
-
-  .rr-settings-nav button {
-    width: auto;
-    min-width: max-content;
-    min-height: 34px !important;
-    padding: 0 10px !important;
-    font-size: calc(11px * var(--rr-ui-font-scale)) !important;
-  }
-
-  .rr-settings-nav button.is-active::before {
-    inset: auto 10px 0;
-    width: auto;
-    height: 2px;
-  }
-
-  .rr-settings-scroll {
-    height: calc(100% - 52px);
-  }
-
   .rr-settings-content {
     width: calc(100% - 40px);
     padding-top: 30px;
