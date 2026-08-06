@@ -155,8 +155,7 @@ button.rr-conversation-title:not(:disabled) {
   scrollbar-width: thin;
 }
 
-.rr-conversation-message-column,
-.rr-conversation-composer-inner {
+.rr-conversation-message-column {
   width: min(736px, calc(100% - 64px));
   margin-inline: auto;
 }
@@ -449,77 +448,6 @@ button.rr-conversation-title:not(:disabled) {
 .rr-conversation-quiet-button:focus-visible {
   outline: 0;
   color: var(--rr-main-fg) !important;
-}
-
-.rr-conversation-composer-area {
-  position: relative;
-  z-index: 10;
-  flex: 0 0 auto;
-  padding: 12px 0 18px;
-  background: var(--rr-main-bg);
-}
-
-.rr-conversation-composer {
-  display: grid;
-  min-height: 64px;
-  grid-template-columns: minmax(0, 1fr) 38px;
-  align-items: end;
-  gap: 8px;
-  border: 1px solid var(--rr-main-border);
-  border-radius: 8px;
-  padding: 8px 9px 8px 14px;
-  background: color-mix(
-    in oklab,
-    var(--rr-main-bg),
-    var(--rr-main-surface) 10%
-  );
-}
-
-.rr-conversation-composer:focus-within {
-  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
-}
-
-.rr-conversation-composer textarea {
-  width: 100%;
-  min-height: 44px;
-  max-height: 148px;
-  resize: none;
-  overflow-y: hidden;
-  border: 0;
-  outline: 0;
-  padding: 9px 0 6px;
-  color: var(--rr-main-fg);
-  background: transparent;
-  font-size: calc(16px * var(--rr-ui-font-scale));
-  line-height: 1.625;
-  scrollbar-width: thin;
-}
-
-.rr-conversation-composer textarea::placeholder {
-  color: var(--rr-main-meta);
-}
-
-.rr-conversation-send {
-  display: grid !important;
-  width: 38px;
-  height: 38px;
-  place-items: center;
-  border-radius: 8px !important;
-  color: var(--rr-main-accent-text) !important;
-  background: var(--rr-main-accent) !important;
-  cursor: pointer;
-}
-
-.rr-conversation-send:disabled {
-  color: var(--rr-main-meta) !important;
-  background: var(--rr-main-surface) !important;
-  cursor: default;
-}
-
-.rr-conversation-send:hover:not(:disabled),
-.rr-conversation-send:focus-visible:not(:disabled) {
-  outline: 0;
-  background: var(--rr-main-accent-hover) !important;
 }
 
 .rr-conversation-drawer-backdrop {
@@ -871,8 +799,7 @@ button.rr-conversation-title:not(:disabled) {
     padding-left: 14px;
   }
 
-  .rr-conversation-message-column,
-  .rr-conversation-composer-inner {
+  .rr-conversation-message-column {
     width: calc(100% - 32px);
   }
 
@@ -904,10 +831,6 @@ button.rr-conversation-title:not(:disabled) {
     padding-bottom: 32px;
   }
 
-  .rr-conversation-composer-area {
-    padding-top: 10px;
-    padding-bottom: 12px;
-  }
 }
 
 @media (prefers-reduced-motion: reduce) {

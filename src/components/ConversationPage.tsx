@@ -334,6 +334,11 @@ function ConversationPage({
   const generationTokenRef = useRef(0);
   const toastTimerRef = useRef<number | undefined>(undefined);
   const messageIdRef = useRef(0);
+  const conversationCreationRef = useRef<{
+    requestKey: number;
+    service: ConversationService;
+    promise: Promise<ConversationThread>;
+  } | null>(null);
   requestKeyRef.current = request.key;
 
   const operationIsCurrent = useCallback(
@@ -606,7 +611,26 @@ function ConversationPage({
           return;
         }
 
-        const nextThread = await service.createConversation();
+        const cachedCreation = conversationCreationRef.current;
+        let creationPromise =
+          cachedCreation?.requestKey === request.key &&
+          cachedCreation.service === service
+            ? cachedCreation.promise
+            : undefined;
+        if (!creationPromise) {
+          creationPromise = service.createConversation();
+          conversationCreationRef.current = {
+            requestKey: request.key,
+            service,
+            promise: creationPromise,
+          };
+          void creationPromise.catch(() => {
+            if (conversationCreationRef.current?.promise === creationPromise) {
+              conversationCreationRef.current = null;
+            }
+          });
+        }
+        const nextThread = await creationPromise;
         if (ignore || requestToken !== generationTokenRef.current) {
           return;
         }
@@ -1166,9 +1190,18 @@ function ConversationPage({
         </div>
       </div>
 
-      <form className="rr-conversation-composer-area" onSubmit={submit}>
-        <div className="rr-conversation-composer-inner">
-          <div className="rr-conversation-composer">
+      <form className="rr-main-composer-area" onSubmit={submit}>
+        <div className="rr-main-composer-inner">
+          <div
+            className="rr-main-composer"
+            onClick={(event) => {
+              const target = event.target;
+              if (target instanceof Element && target.closest("button")) {
+                return;
+              }
+              inputRef.current?.focus();
+            }}
+          >
             <textarea
               ref={inputRef}
               rows={1}
@@ -1193,14 +1226,16 @@ function ConversationPage({
                 }
               }}
             />
-            <button
-              className="rr-conversation-send"
-              type="submit"
-              aria-label="发送"
-              disabled={!draft.trim() || generation !== null}
-            >
-              <MainAppIcon name="send" />
-            </button>
+            <div className="rr-main-composer-actions">
+              <button
+                className="rr-main-send"
+                type="submit"
+                aria-label="发送"
+                disabled={!draft.trim() || generation !== null}
+              >
+                <MainAppIcon name="send-up" />
+              </button>
+            </div>
           </div>
         </div>
       </form>

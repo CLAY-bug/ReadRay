@@ -550,24 +550,25 @@ function MemoryPage({
                     </span>
                   </header>
 
-                  <section className="rr-memory-detail-section">
-                    <h3>基础释义</h3>
+                  <section className="rr-memory-detail-meaning">
+                    <h3>核心理解</h3>
                     <p className="rr-memory-definition">
                       {selectedRecord.definition}
                     </p>
+                    {selectedRecord.meaning ? (
+                      <div className="rr-memory-context-meaning-block">
+                        <span className="rr-memory-context-meaning-label">
+                          本次语境
+                        </span>
+                        <p className="rr-memory-context-meaning">
+                          {selectedRecord.meaning}
+                        </p>
+                      </div>
+                    ) : null}
                   </section>
 
-                  {selectedRecord.meaning ? (
-                    <section className="rr-memory-detail-section">
-                      <h3>在当时语境中的意思</h3>
-                      <p className="rr-memory-context-meaning">
-                        {selectedRecord.meaning}
-                      </p>
-                    </section>
-                  ) : null}
-
-                  <section className="rr-memory-detail-section">
-                    <h3>当时看到的内容</h3>
+                  <section className="rr-memory-detail-source">
+                    <h3>原文语境</h3>
                     <blockquote className="rr-memory-source-sentence" lang="en">
                       {selectedRecord.sentence}
                     </blockquote>

@@ -67,6 +67,27 @@ test("正式 Tauri 会话路径不读取 fixture 或 localStorage", async () => 
   assert.match(app, /new RepositoryConversationService\(\s*new TauriConversationRepository\(\)/);
 });
 
+test("主应用稳定会话身份回调并复用统一 composer", async () => {
+  const shell = await readFile("src/components/MainAppShell.tsx", "utf8");
+  const conversationPage = await readFile(
+    "src/components/ConversationPage.tsx",
+    "utf8",
+  );
+  const conversationStyles = await readFile(
+    "src/styles/conversation-page.css",
+    "utf8",
+  );
+
+  assert.match(shell, /const updateActiveConversation = useCallback\(/);
+  assert.match(shell, /onThreadIdentityChange=\{updateActiveConversation\}/);
+  assert.match(conversationPage, /className="rr-main-composer-area"/);
+  assert.match(conversationPage, /className="rr-main-composer"/);
+  assert.match(conversationPage, /conversationCreationRef/);
+  assert.match(conversationPage, /cachedCreation\?\.requestKey === request\.key/);
+  assert.doesNotMatch(conversationPage, /rr-conversation-composer/);
+  assert.doesNotMatch(conversationStyles, /rr-conversation-composer/);
+});
+
 test("Tauri repository 使用既有 Quick AI commands 和 camelCase 参数", async () => {
   const calls = [];
   const saveRequests = [];

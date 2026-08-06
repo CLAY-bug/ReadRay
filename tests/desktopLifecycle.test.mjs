@@ -171,8 +171,12 @@ test("桌面正式路径保持单实例优先、三项托盘菜单和隐藏式�
   assert.match(lifecycle, /AUTOSTART_ARGUMENT/);
   assert.match(settings, /autolaunch\(\)\.is_enabled/);
   assert.doesNotMatch(migrations, /autostart/i);
-  assert.equal(config.app.windows.find((window) => window.label === "main").visible, false);
-  assert.equal(config.app.windows.find((window) => window.label === "overlay").visible, false);
+  const mainWindow = config.app.windows.find((window) => window.label === "main");
+  const overlayWindow = config.app.windows.find((window) => window.label === "overlay");
+  assert.equal(mainWindow.visible, false);
+  assert.equal(overlayWindow.visible, false);
+  assert.equal(mainWindow.shadow, true);
+  assert.equal(overlayWindow.shadow, false);
 });
 
 test("安全退出只从应用装配层调用 typed Rust command，页面不直接 invoke", async () => {

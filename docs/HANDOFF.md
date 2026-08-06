@@ -1,6 +1,6 @@
 # ReadRay 交接记录
 
-最后更新：2026-08-04
+最后更新：2026-08-06
 
 ## TL;DR
 
@@ -95,14 +95,14 @@
 - Quick AI 使用独立普通 chat/completions 请求，不复用 ExplanationCard JSON；两者只共享 `.env`、模型/API key 和 HTTP 错误边界。`Ctrl+Alt+R` overlay 支持解释与 Quick AI 切换、新对话、多轮发送和隐藏，真实 DeepSeek 两轮上下文已验证。
 - SQLite v2 的 `quick_ai_conversations` / `quick_ai_messages` 与 `learning_records` 分表，消息保存 role、content、sequence 和时间，为完整对话和后续管理提供权威数据。
 - `main` 与 `overlay` 是独立窗口；overlay 的呼出意图先由 Rust 原子保存，再由前端在事件、获焦或挂载时领取，避免隐藏 WebView 漏事件或沿用错误模式。只有 overlay 失焦自动隐藏。
-- 主应用侧栏只允许用户手动在 252/72px 间折叠；“今天”“记忆”“写作”“对话”共享同一外壳。最近对话标题来自真实 SQLite，空标题排除，溢出时才渐隐。
+- 主应用侧栏默认宽 252px，用户可拖拽调整；手动折叠后主内容完全铺开，左缘 hover 可临时显示侧栏，移开自动隐藏，点击标题栏按钮恢复固定侧栏。“今天”“记忆”“写作”“对话”共享同一外壳。最近对话标题来自真实 SQLite，空标题排除，溢出时才渐隐。
 - 主应用统一以 1440×900 / scale 1 为设计基线，最小窗口 840×600；标题栏已接原生拖动、最小化、最大化/恢复和隐藏。本机 150% DPI 真实 Tauri WebView 已完成尺寸与字体验收。
 - 应用随包内嵌 Geist、Geist Mono、Newsreader、思源黑体和思源宋体及对应 OFL，正式 UI 不依赖联网或本机字体；浏览器预览按完整设计画布整体缩放，响应式断点由应用容器触发。
 
 ### 阶段五：写作正式接线
 
 - 已按 `design-open-design/readray-writing-2.html` 在现有 MainAppShell 中实现“写作”页：写作导航和“今天”页写作入口进入本地文章库，支持空白稿/已有稿、标题与正文编辑、文档切换、选区菜单、“问 ReadRay”多轮追问、真实写作教练问题、定位/修改/进一步提示/参考/忽略、多轮检查、双栏文本差异、随完成版本保存的“本次写作要点”、完成版本和继续修改；要点明确未加入复习，也没有全局模式库。
-- 写作编辑区沿用 1440×900 / scale 1：纸张宽 680px、正文 18px / 1.68 行高、编辑列上限 736px；草稿/完成稿未打开辅助栏时纸张视觉居中，检查或辅助打开后自然重排。900px 以下教练保持 320px 右侧覆盖层，正文列宽不变；全局侧栏仍只允许用户手动在 252/72px 间折叠。
+- 写作编辑区沿用 1440×900 / scale 1：纸张宽 680px、正文 18px / 1.68 行高、编辑列上限 736px；草稿/完成稿未打开辅助栏时纸张视觉居中，检查或辅助打开后自然重排。容器宽度不超过 1120px 时辅导区自动收起，宽窗口支持拖拽调整编辑区宽度。
 - 阶段五已追加 SQLite v3 migration：`writing_documents` 保存文章、当前草稿、完成稿、revision 和对比基线；`writing_versions` 保存不可变完成版本；`writing_analyses` 保存通过 schema/validator 的整篇检查；`writing_assistant_answers` 保存选区问答与追问。返修继续追加 v4，保存对比基线/分析 revision 元数据和回答目标 versionId；v3 旧数据无法可靠证明的基线 revision 与版本 analysis revision 均保持 `null`，不从 source revision 伪造来源。写作数据不写入 `learning_records` 或 Quick AI 表。
 - 正式 Tauri 写作路径使用 `TauriWritingRepository` / `RepositoryWritingService` 和 `src-tauri/src/writing.rs`；页面组件不直接 invoke。非 Tauri 预览通过动态 import 单独加载 `writingFixtureService.ts`，正式模块已静态检查不含 localStorage、演示文章、硬编码问题或演示回答。
 - 草稿自动保存使用每篇文章独立 revision 和已落盘快照的防抖串行协调器；调用失败后先读回文章对账：数据库已推进且目标快照一致则确认成功，仍为旧 revision 才允许安全重试。分析先提交且权威结果证明正文仍为送检基线时，在途 pending 会自动基于新 revision 重试；权威正文不同仍保留当前正文并阻止覆盖。切换文章和返回文章库前先 flush；应用卸载时仍会尝试落盘且不回写已卸载组件。
@@ -127,6 +127,8 @@
 - 完整对话页此前完成的是 fixture 路径的视觉与交互人工验收；本机 pnpm 构建与 Headless Playwright 回归均通过，覆盖生成中重复发送、连续两轮、生成中导出、完整 Markdown 下载、导出失败重试、停止/继续、重新生成和抽屉焦点。1440×900、840×600 与两档侧栏无页面级横纵溢出或重叠；`preview=responsive` 只用于浏览器真实容器验收，不改变默认等比预览和 Tauri。阶段四收口时已另行完成真实 Tauri/SQLite/DeepSeek 功能验收。
 - 阶段四返修自动验证：前端 repository/service 共 9 项测试通过；Rust 40 项通过、2 项需真实网络的 live test 按既有标记忽略。覆盖模型失败后重开仍有 pending user、重启重试只补一条 assistant、已提交但调用方未确认时不重复、assistant 保存失败保留 pending、旧版本/并发冲突拒绝写入，以及 41/43 条消息长对话截断后仍从 user 开始。
 - 阶段四真实 Tauri 功能验收已经完成：真实创建、最近对话加载、多轮续聊和侧栏会话身份均可用；用户接受当前对话体验作为后续优化项，不再阻塞阶段五。
+- 2026-08-06 对话回归修复：`MainAppShell` 以稳定回调向 `ConversationPage` 传递会话身份，避免父级重渲染重新启动创建/加载 effect；对话页 composer 复用今天页 `.rr-main-composer` 并移除旧的独立样式。会话前端回归 19 项、`pnpm build` 已通过；尚待真实 Tauri 窗口确认新对话不重复创建、输入可持续输入和侧栏历史不再被重复新会话顶出。已有数据库中的重复会话未自动删除。
+- 2026-08-06 对话创建幂等与历史数据修复：`ConversationPage` 按 request key/service 缓存创建 promise，避免 React StrictMode 的 effect 重放再次创建 SQLite 会话；创建失败会清除缓存，重试仍可重新创建。已对本机数据库完成精确备份和清理：备份为 `readray.sqlite3.before-conversation-repair-20260806-161736.bak`，删除 ID 966–14097 的 13,132 条已确认故障批次（331 条重复 `who are you?`、12,801 条空会话），保留旧历史和 ID 14098 之后的修复后记录；清理后 SQLite `integrity_check` 通过，剩 11 条有标题会话。
 
 ### 阶段六：会话管理闭环（已完成）
 
@@ -155,7 +157,7 @@
 - SQLite schema v6 新增单行 `app_preferences`，保存界面字体/14px 默认字号、学习内容字体/17px 默认字号、发送快捷键和 revision。字体枚举只允许随包的 Geist + 思源黑体或纯思源黑体、Newsreader + 思源宋体或纯思源宋体；界面字号限制 12–20px，学习内容字号限制 14–24px。Rust 在事务中按 expected revision 更新并拒绝陈旧写入；旧数据库升级后得到默认值，不改写既有数据。
 - 字体与字号通过 `--rr-ui-*` / `--rr-learning-*` 语义变量分开作用：界面字号按原有层级缩放主窗口与 overlay 的界面文字，学习变量只进入阅读、对话与写作内容，写作工具栏继续使用界面变量。字号候选必须先通过整数和范围校验才会乐观应用；保存协调由主窗口持久的 `AppPreferenceSaveCoordinator` 承担，设置页卸载后失败仍会读取并全局应用 SQLite 权威值，旧失败则由跨页面 generation 拒绝，不能覆盖后续成功设置。页面只在仍挂载且请求身份匹配时更新局部提示。主窗口与 overlay 都只经 SettingsService 读取偏好，监听提交事件，并在获焦或重新可见时重读，因此重启、隐藏后重新显示和跨窗口使用同一数据库状态；不使用 localStorage/sessionStorage。
 - 发送快捷键支持 Enter 发送/Shift+Enter 换行，或 Ctrl+Enter 发送/Enter 换行；今天、完整对话、overlay Quick AI 和写作辅导共用同一 `shouldSendMultilineMessage`，`nativeEvent.isComposing` 为真时始终不发送。单行解释查询未接入该偏好，继续固定 Enter。
-- 设置页响应式规则继续以应用容器为准：1440×900 使用 192px 分类栏；840×600 时分类改为顶部横向，900px 以下表单和数据行纵向排列；全局侧栏仍只按用户操作在 252/72px 间切换。
+- 设置页响应式规则继续以应用容器为准：分类导航默认是 52px 顶部横向导航；900px 以下表单和数据行纵向排列。
 - 第三批自动验证通过：设置前端 15 项、会话前端回归 18 项、写作前端回归 25 项；完整 Rust 91 项通过，2 项真实 DeepSeek 联网测试按既有 ignored 标记跳过；`pnpm build`、`cargo fmt --check`、`cargo check`、RESOURCE_MAP YAML 解析和 `git diff --check` 均通过。设置测试覆盖页面卸载后的全局回滚、旧失败与新成功隔离及卸载组件不更新状态；没有使用浏览器、Computer Use 或 Tauri 窗口替代人工验收。
 - 桌面生命周期新增官方 `tauri-plugin-single-instance`、`tauri-plugin-autostart` 和 `tauri` 的 `tray-icon` feature；替代方案分别是自建 Windows mutex/IPC、手写注册表和 Win32 Shell_NotifyIcon，均会复制平台能力。两个插件只在 Rust 使用，未新增前端依赖或 capability；single-instance 按官方要求最先注册，第二进程在 setup/SQLite/托盘前即被拦截，再次手动启动只恢复、显示并聚焦已有 main。
 - 托盘使用现有应用图标，左键恢复主窗口，右键菜单严格只有“打开 ReadRay”“快速查询”“退出 ReadRay”；快速查询复用既有 overlay intent/尺寸/聚焦链路。overlay 失焦/Esc 隐藏和锚定窗口边界未改。main 静态配置先隐藏，手动启动由 Rust setup 正常显示；仅携带专用 autostart 参数时 main/overlay 都保持隐藏。
@@ -180,8 +182,8 @@
 - 已接入全部 28 个 Codex 预设主题作为随包内置主题：通过一次性只读脚本（`scripts/extract-asar.mjs`）从当前 Codex app.asar 动态定位并提取主题注册表（`app-initial--9zpGYoP.js` 内 `hCi` 数组）与各主题 chunk，按注册表权威映射保留真实 light/dark 可用性（Ayu/Dracula/Lobster/Material/Matrix/Monokai/Night Owl/Nord/Oscurange/Sentry/Tokyo Night/Temple 仅 dark，Proof 仅 light，其余双模式）。核心调色板经 `scripts/derive-themes.mjs` 确定性展开为完整 28-token 并生成 `scripts/codex-theme-extract/core-palette.json`，再由 `scripts/gen-themes.mjs` 生成 Rust（`src-tauri/src/codex_themes_data.rs`）与前端（`src/codexThemeData.ts`）两份字节级一致的完整配色数据，避免运行时派生的浮点分叉；不执行或导入原始 CSS/JS/TextMate scope。每个主题标注来源与许可证：16 个社区 MIT 开源主题（Ayu、Catppuccin、Dracula、Everforest、GitHub、Gruvbox、Material、Monokai、Night Owl、Nord、One、Rose Pine、Solarized、Tokyo Night、VS Code Plus、Xcode），12 个 OpenAI Codex 产品内置主题（Absolutely、Codex、Linear、Lobster、Matrix、Notion、Oscurange、Proof、Raycast、Sentry、Temple、Vercel，再分发许可未从 ASAR 确认，仅供本地内置使用并在 README 归属中标注）。Rust `builtin_theme_ids()` 与前端 `READRAY_BUILTIN_THEME_IDS` 现包含全部 30 个内置主题；`validateThemeSnapshot` 要求所有内置主题与 canonical 完全一致；内置不可删除、不可被自定义 ID 冲突覆盖，重启恢复与模式切换走既有链路。聚焦验证：设置/主题/生命周期前端 38 项、Rust themes 10 项通过，`pnpm build`、`cargo fmt --check`、`cargo check`、RESOURCE_MAP YAML 解析和 `git diff --check` 通过；未使用浏览器或 Computer Use，真实 Tauri 视觉验收留给用户。
 - 主题区 UI 本轮收窄：鉴于已有 30 个随包内置主题，暂时移除设置页主题区的"导入主题"与"删除主题"按钮及对应说明文字，只保留随包主题的选择与 light/dark 模式切换，避免为导入/删除专门做额外检查。Rust 侧的导入/删除 command、前端 service/协调器与测试仍保留（未删除），仅不再暴露 UI 入口；相关静态测试已改为断言页面不直接调用 `themeController.importPackage`/`delete`。
 - UI 细节修复三项：① 设置页主题模式下拉框（"浅色/深色"）此前 82px 宽 + 41px padding 且用系统原生箭头，文字被挤压截断；已改为 88px、padding-right 收紧到 26px，并加 `appearance: none` + 自定义 chevron，实测内容区 51px 足够容纳文字。② 主侧边栏增加 180–360px 的可拖拽宽度手柄（MainSidebar 右缘 resizer，pointer 事件 + setPointerCapture，经 onWidthChange 上报外壳通过 `--rr-main-sidebar-width` 应用，折叠态隐藏），设置页功能导航栏从固定 192px 调窄到 160px。③ 设置页所有 select 统一 `appearance: none` + 自定义 chevron、hover 边框过渡、主题色 focus 光晕和 pointer 光标，与文本输入框风格一致。验证：设置/主题/生命周期前端 38 项通过、`pnpm build` 通过、类型检查与 RESOURCE_MAP YAML 解析通过；未使用真实 Tauri 窗口，拖拽手感与最终视觉需人工验收。
-- 侧边栏折叠冲突修复：此前拖拽宽度经内联 style 设置 `--rr-main-sidebar-width`，内联优先级高于 `.is-sidebar-collapsed` 的 72px，导致折叠后侧边栏只隐藏文字不收窄；已改为折叠时不再应用内联宽度（MainAppShell 仅在 `!sidebarCollapsed && sidebarWidth !== null` 时设置变量），折叠收到 72px、展开恢复拖拽宽度。浏览器实测确认折叠 72px / 展开 302px。
-- 主窗口自绘阴影方案：用户不喜欢 Windows 系统阴影（过大）和大圆角，主窗口 `tauri.conf.json` 改为 `transparent: true`（配合 `shadow: false`），`.rr-main-app` 从 `100vw/100vh` 改为 `position:absolute + inset:20px` 留白，保持恰到好处的 8px 圆角，并用三层 `color-mix(in oklab, var(--rr-main-fg), transparent …)` 派生柔和阴影（94%/92%/90% 透明度），阴影颜色随主题变化而非硬编码石墨色（通过既有"主应用主题敏感阴影不绕过语义 token"静态测试）。浏览器预览画布用固定 1440×900 覆盖规则（position:static）继续等比缩放。Rust 编译与前端 build/test 均通过；透明窗口下的最终阴影观感需真实 Tauri 人工验收。
+- 侧边栏折叠冲突已修复：折叠态不再沿用展开时的拖拽宽度，主内容完全铺开；左缘 hover 可临时显示侧栏，点击标题栏按钮恢复固定侧栏。
+- 主窗口边界已改为系统窗口语义：main 继续使用 `transparent: true`，但 `tauri.conf.json` 开启 `shadow: true` 使用 Windows 原生无装饰阴影；真实 `.rr-main-app` 改为 `position:absolute + inset:0`，不再在透明窗口内额外留 16px 阴影边界，最大化时由 `is-maximized` 去掉圆角。浏览器预览画布继续使用固定 1440×900、独立留白和柔和 CSS 阴影；overlay 仍保持 `shadow:false`。主窗口四周的自定义 resize 手柄保留。前端 build、Rust fmt/check 和桌面生命周期静态测试通过；最终截图选区、最大化贴边、还原和原生阴影观感仍需真实 Tauri 人工验收。
 - 透明窗口边缘 resize：`transparent: true` 后 Windows 系统 resize 命中区失效（透明区不参与 hit-test），因此外壳在 `.rr-main-app` 四周渲染 8 个方向的自定义 `.rr-main-resize-handle`（onMouseDown 触发 `onStartResize`，App.tsx 里 `getCurrentWindow().startResizeDragging(direction)`），鼠标移到主窗口边缘即可缩放。关键点：必须新增 `core:window:allow-start-resize-dragging` capability（否则前端调用被拒并静默 catch），且用 `onMouseDown` 而非 `onPointerDown` + `preventDefault`。浏览器实测 8 个手柄位置与光标正确；真实拖拽手感需 Tauri 人工验收。
 
 ## 下一步
@@ -203,7 +205,7 @@
 - **解释体验限制**：CaptureInput 和 ExplanationCard 当前上限为 4096 字符，长段落还受模型 JSON 稳定性与浮窗最大高度约束，不代表整页翻译能力。
 - **阶段八边界**：记忆页还不能可靠生成重复出现次数或时间线，“过去的出现”入口保持隐藏；复习、去重和长期记忆留到对应阶段统一设计。
 - **后续体验优化**：Quick AI 当前按纯文本、非流式展示，模型仍可能返回 Markdown 标记；Markdown 渲染/规范化、真正流式输出和更可靠的对话策略不自动并入阶段六。
-- **主题后续边界**：当前不包含 Flexoki、Codex、Obsidian adapter、社区商店、在线下载或自动更新；新增 adapter 仍必须转换到 ReadRayThemeV1 并通过同一安全校验，不能放宽任意 CSS、字体、图片或网络资源边界。
+- **主题后续边界**：Flexoki 与 Codex 主题已作为随包内置主题接入；当前不包含外部主题 adapter、社区商店、在线下载或自动更新。新增 adapter 仍必须转换到 ReadRayThemeV1 并通过同一安全校验，不能放宽任意 CSS、字体、图片或网络资源边界。
 - **对话后续边界**：阶段六的查看全部、重命名、删除和原生导出已经完成；回答重生成和记忆引用聚合属于更后续能力，当前 UI 继续诚实禁用。
 - **阶段七范围**：三批设置功能与桌面生命周期已经通过复审和真实 Tauri 人工验收，阶段七已完成；本次收口未进入阶段八。
 

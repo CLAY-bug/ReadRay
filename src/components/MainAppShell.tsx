@@ -1,4 +1,11 @@
-import { useEffect, useRef, useState, type CSSProperties, type MouseEvent } from "react";
+import {
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+  type CSSProperties,
+  type MouseEvent,
+} from "react";
 import type {
   ConversationOperationIdentity,
   ConversationRequest,
@@ -147,10 +154,13 @@ function MainAppShell({
     setActivePageId(nextPageId);
   }
 
-  function updateActiveConversation(nextConversationId?: string) {
-    activeConversationIdRef.current = nextConversationId;
-    setActiveConversationId(nextConversationId);
-  }
+  const updateActiveConversation = useCallback(
+    (nextConversationId?: string) => {
+      activeConversationIdRef.current = nextConversationId;
+      setActiveConversationId(nextConversationId);
+    },
+    [],
+  );
 
   function updateConversationRequest(nextRequest: ConversationRequest) {
     conversationRequestRef.current = nextRequest;
@@ -488,7 +498,9 @@ function MainAppShell({
       ref={appRootRef}
       inert={interactionBlocked ? true : undefined}
       aria-busy={interactionBlocked || undefined}
-      className={`rr-main-app${sidebarCollapsed ? " is-sidebar-collapsed" : ""}${
+      className={`rr-main-app${isMaximized ? " is-maximized" : ""}${
+        sidebarCollapsed ? " is-sidebar-collapsed" : ""
+      }${
         sidebarCollapsed && sidebarPeekOpen ? " is-sidebar-peeking" : ""
       }${activePageId === "conversation" ? " is-conversation-page" : ""}`}
       style={
