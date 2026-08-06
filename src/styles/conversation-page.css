@@ -17,6 +17,10 @@
 
 .rr-conversation-page {
   overflow: hidden;
+  --rr-conversation-content-width: min(
+    clamp(540px, 52.7778cqw, 760px),
+    calc(100% - clamp(44px, 4.4444cqw, 64px))
+  );
 }
 
 .rr-conversation-bar {
@@ -155,8 +159,9 @@ button.rr-conversation-title:not(:disabled) {
   scrollbar-width: thin;
 }
 
-.rr-conversation-message-column {
-  width: min(736px, calc(100% - 64px));
+.rr-conversation-page .rr-conversation-message-column,
+.rr-conversation-page .rr-main-composer-inner {
+  width: var(--rr-conversation-content-width);
   margin-inline: auto;
 }
 
@@ -191,10 +196,11 @@ button.rr-conversation-title:not(:disabled) {
   max-width: 80%;
   border: 1px solid var(--rr-main-border-soft);
   border-radius: 8px;
-  padding: 7px 12px;
+  padding: 6px 11px;
   background: var(--rr-main-surface-warm);
-  font-size: calc(16px * var(--rr-ui-font-scale));
-  line-height: 1.625;
+  font-size: calc(14px * var(--rr-ui-font-scale));
+  font-weight: 400;
+  line-height: 1.5;
 }
 
 .rr-conversation-user-copy {
@@ -258,8 +264,8 @@ button.rr-conversation-title:not(:disabled) {
 .rr-conversation-assistant-copy {
   color: var(--rr-main-fg);
   font-family: var(--rr-main-font-body);
-  font-size: calc(var(--rr-learning-font-size) - 1px);
-  line-height: 1.625;
+  font-size: calc(var(--rr-learning-font-size) - 2px);
+  line-height: 1.6;
   letter-spacing: 0.002em;
   text-wrap: pretty;
 }
@@ -274,7 +280,7 @@ button.rr-conversation-title:not(:disabled) {
 
 .rr-conversation-assistant-copy strong {
   color: var(--rr-main-fg);
-  font-weight: 620;
+  font-weight: 600;
 }
 
 .rr-conversation-assistant-copy code {
@@ -315,7 +321,7 @@ button.rr-conversation-title:not(:disabled) {
   margin: 4px 0 14px !important;
   color: var(--rr-main-fg-secondary);
   font-family: var(--rr-main-font-body);
-  font-size: var(--rr-learning-font-size);
+  font-size: calc(var(--rr-learning-font-size) - 1px);
   line-height: 1.6;
 }
 
@@ -1076,7 +1082,8 @@ button.rr-conversation-title:not(:disabled) {
     padding-left: 14px;
   }
 
-  .rr-conversation-message-column {
+  .rr-conversation-page .rr-conversation-message-column,
+  .rr-conversation-page .rr-main-composer-inner {
     width: calc(100% - 32px);
   }
 
@@ -1112,6 +1119,13 @@ button.rr-conversation-title:not(:disabled) {
     column-gap: 10px;
     padding-right: 12px !important;
     padding-left: 12px !important;
+  }
+}
+
+@container (max-width: 700px) {
+  .rr-conversation-page .rr-conversation-message-column,
+  .rr-conversation-page .rr-main-composer-inner {
+    width: calc(100% - 28px);
   }
 }
 

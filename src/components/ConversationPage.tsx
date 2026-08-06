@@ -508,6 +508,16 @@ function ConversationPage({
           messages: structuredClone(messages),
           prompt,
           mode,
+          onStreamDelta: (delta) => {
+            if (generationToken !== generationTokenRef.current) {
+              return;
+            }
+            setGeneration((current) =>
+              current
+                ? { ...current, phase: "generating", text: current.text + delta }
+                : current,
+            );
+          },
         });
         if (generationToken !== generationTokenRef.current) {
           return;
@@ -526,6 +536,11 @@ function ConversationPage({
         }
         if (!reply.chunks.length || !reply.chunks.some((chunk) => chunk.trim())) {
           throw new Error("对话服务返回了空回答。");
+        }
+        if (service.capabilities.delivery === "streaming") {
+          updateThread(reply.persistedThread!);
+          setGeneration(null);
+          return;
         }
         if (service.capabilities.delivery === "complete") {
           if (!reply.persistedThread) {
@@ -994,6 +1009,10 @@ function ConversationPage({
       return;
     }
     stopTimer();
+    const currentThread = threadRef.current;
+    if (currentThread && service.capabilities.delivery === "streaming") {
+      void service.stopGeneration?.(currentThread.id).catch(() => undefined);
+    }
     setGeneration((current) => {
       if (!current) {
         return current;
@@ -1020,7 +1039,8 @@ function ConversationPage({
     }
     if (
       generation.phase === "stopped" &&
-      generation.chunks.length > 0
+      generation.chunks.length > 0 &&
+      service.capabilities.delivery !== "streaming"
     ) {
       streamRemainingChunks(generation, generationTokenRef.current);
       return;

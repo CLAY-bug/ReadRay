@@ -1,10 +1,16 @@
-import { invoke } from "@tauri-apps/api/core";
+import { Channel, invoke } from "@tauri-apps/api/core";
 import { save } from "@tauri-apps/plugin-dialog";
 import type {
   QuickAiConversation,
   QuickAiConversationExport,
   RecentQuickAiConversation,
 } from "./types/quickAi";
+
+export type QuickAiStreamEvent =
+  | { type: "delta"; text: string }
+  | { type: "done" }
+  | { type: "stopped" }
+  | { type: "error"; message: string };
 
 export interface ConversationRepository {
   create(): Promise<QuickAiConversation>;
@@ -21,6 +27,13 @@ export interface ConversationRepository {
     expectedUserSequence: number,
     content: string,
   ): Promise<QuickAiConversation>;
+  sendStreaming(
+    conversationId: number,
+    expectedUserSequence: number,
+    content: string,
+    onEvent: (event: QuickAiStreamEvent) => void,
+  ): Promise<QuickAiConversation>;
+  abortStreaming(conversationId: number): Promise<void>;
 }
 
 export type ConversationInvoke = <T>(
@@ -103,6 +116,30 @@ export class TauriConversationRepository implements ConversationRepository {
       conversationId,
       expectedUserSequence,
       content,
+    });
+  }
+
+  async sendStreaming(
+    conversationId: number,
+    expectedUserSequence: number,
+    content: string,
+    onEvent: (event: QuickAiStreamEvent) => void,
+  ) {
+    const channel = new Channel<QuickAiStreamEvent>(onEvent);
+    return this.invokeCommand<QuickAiConversation>(
+      "send_quick_ai_message_streaming",
+      {
+        conversationId,
+        expectedUserSequence,
+        content,
+        channel,
+      },
+    );
+  }
+
+  abortStreaming(conversationId: number) {
+    return this.invokeCommand<void>("abort_quick_ai_streaming", {
+      conversationId,
     });
   }
 }

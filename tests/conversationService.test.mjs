@@ -39,6 +39,39 @@ function message(id, role, content, sequence) {
   };
 }
 
+// 注入式 repository 的流式实现：把 sendStreaming 转接到 send 语义，
+// 并保留 onEvent 回调以模拟 channel 事件。
+function withStreaming(repository, options = {}) {
+  return {
+    ...repository,
+    sendStreaming: async (
+      conversationId,
+      expectedUserSequence,
+      content,
+      onEvent,
+    ) => {
+      const result = await repository.send(
+        conversationId,
+        expectedUserSequence,
+        content,
+      );
+      if (options.emitDelta) {
+        for (const piece of options.emitDelta) {
+          onEvent({ type: "delta", text: piece });
+        }
+      }
+      if (options.stopped) {
+        onEvent({ type: "stopped" });
+      }
+      return result;
+    },
+    abortStreaming:
+      options.abortStreaming ??
+      repository.abortStreaming ??
+      (async () => undefined),
+  };
+}
+
 test("正式 Tauri 会话路径不读取 fixture 或 localStorage", async () => {
   const formalFiles = [
     "src/components/ConversationPage.tsx",
@@ -84,6 +117,18 @@ test("主应用稳定会话身份回调并复用统一 composer", async () => {
   assert.match(conversationPage, /className="rr-main-composer"/);
   assert.match(conversationPage, /conversationCreationRef/);
   assert.match(conversationPage, /cachedCreation\?\.requestKey === request\.key/);
+  assert.match(
+    conversationStyles,
+    /--rr-conversation-content-width:[\s\S]*?\.rr-conversation-page \.rr-main-composer-inner/,
+  );
+  assert.match(
+    conversationStyles,
+    /\.rr-conversation-user-bubble \{[\s\S]*?font-size: calc\(14px \* var\(--rr-ui-font-scale\)\);[\s\S]*?line-height: 1\.5/,
+  );
+  assert.match(
+    conversationStyles,
+    /\.rr-conversation-assistant-copy \{[\s\S]*?font-size: calc\(var\(--rr-learning-font-size\) - 2px\);[\s\S]*?line-height: 1\.6/,
+  );
   assert.doesNotMatch(conversationPage, /rr-conversation-composer/);
   assert.doesNotMatch(conversationStyles, /rr-conversation-composer/);
 });
@@ -351,7 +396,7 @@ test("发送成功返回数据库权威快照而不是前端复制消息", async
     message(42, "assistant", "第一答", 2),
   ]);
   const service = new RepositoryConversationService(
-    {
+    withStreaming({
       create: async () => snapshot(),
       get: async () => snapshot(),
       send: async (conversationId, expectedUserSequence, content) => {
@@ -360,7 +405,7 @@ test("发送成功返回数据库权威快照而不是前端复制消息", async
         assert.equal(content, "第一问");
         return saved;
       },
-    },
+    }),
     { onConversationUpdated: () => updated += 1 },
   );
 
@@ -392,7 +437,7 @@ test("请求失败可用同一输入重试且 service 不复制前端消息", as
     message(52, "assistant", "重试成功", 2),
   ]);
   const service = new RepositoryConversationService(
-    {
+    withStreaming({
       create: async () => snapshot(),
       get: async () => snapshot(),
       send: async (_conversationId, expectedUserSequence) => {
@@ -403,7 +448,7 @@ test("请求失败可用同一输入重试且 service 不复制前端消息", as
         }
         return saved;
       },
-    },
+    }),
     { onConversationUpdated: () => updated += 1 },
   );
   const request = {
@@ -438,13 +483,13 @@ test("IPC 报错但数据库已完成该轮时读取权威快照避免重复重�
     message(62, "assistant", "已经保存", 2),
   ]);
   const service = new RepositoryConversationService(
-    {
+    withStreaming({
       create: async () => snapshot(),
       get: async () => saved,
       send: async () => {
         throw new Error("响应回传失败");
       },
-    },
+    }),
     { onConversationUpdated: () => updated += 1 },
   );
 
@@ -473,13 +518,15 @@ test("模型失败后返回已持久化 pending，重启重试复用同一 seque
     message(81, "user", "失败后仍保留", 1),
     message(82, "assistant", "重启后完成", 2),
   ]);
-  const firstService = new RepositoryConversationService({
-    create: async () => snapshot(),
-    get: async () => pending,
-    send: async () => {
-      throw new Error("模型请求失败");
-    },
-  });
+  const firstService = new RepositoryConversationService(
+    withStreaming({
+      create: async () => snapshot(),
+      get: async () => pending,
+      send: async () => {
+        throw new Error("模型请求失败");
+      },
+    }),
+  );
   const firstResult = await firstService.generateReply({
     conversationId: "17",
     messages: [
@@ -496,14 +543,16 @@ test("模型失败后返回已持久化 pending，重启重试复用同一 seque
   assert.equal(firstResult.status, "pending");
   assert.equal(firstResult.persistedThread.messages[0].id, "quick-ai-message-81");
   const retriedSequences = [];
-  const restartedService = new RepositoryConversationService({
-    create: async () => snapshot(),
-    get: async () => pending,
-    send: async (_conversationId, expectedUserSequence) => {
-      retriedSequences.push(expectedUserSequence);
-      return completed;
-    },
-  });
+  const restartedService = new RepositoryConversationService(
+    withStreaming({
+      create: async () => snapshot(),
+      get: async () => pending,
+      send: async (_conversationId, expectedUserSequence) => {
+        retriedSequences.push(expectedUserSequence);
+        return completed;
+      },
+    }),
+  );
   const retryResult = await restartedService.generateReply({
     conversationId: "17",
     messages: firstResult.persistedThread.messages,
@@ -532,15 +581,17 @@ test("提交成功但 IPC 与随后读取均失败时再次重试仍使用原 se
     prompt: "模糊成功路径",
     mode: "append",
   };
-  const unconfirmedService = new RepositoryConversationService({
-    create: async () => snapshot(),
-    get: async () => {
-      throw new Error("随后读取也失败");
-    },
-    send: async () => {
-      throw new Error("IPC 回传失败");
-    },
-  });
+  const unconfirmedService = new RepositoryConversationService(
+    withStreaming({
+      create: async () => snapshot(),
+      get: async () => {
+        throw new Error("随后读取也失败");
+      },
+      send: async () => {
+        throw new Error("IPC 回传失败");
+      },
+    }),
+  );
   await assert.rejects(
     unconfirmedService.generateReply(request),
     /IPC 回传失败/,
@@ -551,14 +602,16 @@ test("提交成功但 IPC 与随后读取均失败时再次重试仍使用原 se
     message(92, "assistant", "数据库已经提交", 2),
   ]);
   const retrySequences = [];
-  const retryService = new RepositoryConversationService({
-    create: async () => snapshot(),
-    get: async () => committed,
-    send: async (_conversationId, expectedUserSequence) => {
-      retrySequences.push(expectedUserSequence);
-      return committed;
-    },
-  });
+  const retryService = new RepositoryConversationService(
+    withStreaming({
+      create: async () => snapshot(),
+      get: async () => committed,
+      send: async (_conversationId, expectedUserSequence) => {
+        retrySequences.push(expectedUserSequence);
+        return committed;
+      },
+    }),
+  );
   const result = await retryService.generateReply(request);
 
   assert.equal(result.status, "complete");
@@ -567,11 +620,13 @@ test("提交成功但 IPC 与随后读取均失败时再次重试仍使用原 se
 });
 
 test("缺失会话和真实后端不支持的重新生成会明确失败", async () => {
-  const service = new RepositoryConversationService({
-    create: async () => snapshot(),
-    get: async () => null,
-    send: async () => snapshot(),
-  });
+  const service = new RepositoryConversationService(
+    withStreaming({
+      create: async () => snapshot(),
+      get: async () => null,
+      send: async () => snapshot(),
+    }),
+  );
 
   await assert.rejects(
     service.loadConversation("17", "旧标题"),
@@ -734,4 +789,131 @@ test("正式导出只提交目标数据库 ID，取消不返回成功，失败�
     { conversationId: 17, suggestedFileName: "真实-会话.md" },
     { conversationId: 17, suggestedFileName: "真实-会话.md" },
   ]);
+});
+
+test("流式增量通过 onStreamDelta 转发且完成后返回已保存回答", async () => {
+  const deltas = [];
+  const saved = snapshot([
+    message(101, "user", "流式问题", 1),
+    message(102, "assistant", "边生成边显示", 2),
+  ]);
+  const service = new RepositoryConversationService(
+    withStreaming(
+      {
+        create: async () => snapshot(),
+        get: async () => saved,
+        send: async () => saved,
+      },
+      { emitDelta: ["边生成", "边显示"] },
+    ),
+  );
+
+  const reply = await service.generateReply({
+    conversationId: "17",
+    messages: [
+      { id: "temporary-user", role: "user", content: "流式问题" },
+    ],
+    prompt: "流式问题",
+    mode: "append",
+    onStreamDelta: (delta) => deltas.push(delta),
+  });
+
+  assert.equal(reply.status, "complete");
+  assert.equal(reply.assistantMessageId, "quick-ai-message-102");
+  assert.deepEqual(deltas, ["边生成", "边显示"]);
+  assert.deepEqual(reply.chunks, ["边生成边显示"]);
+  assert.equal(reply.persistedThread.messages.length, 2);
+});
+
+test("用户停止后 assistant 未落库时返回 pending 且可重试", async () => {
+  const pending = snapshot([message(111, "user", "停止后重试", 1)]);
+  const completed = snapshot([
+    message(111, "user", "停止后重试", 1),
+    message(112, "assistant", "重试完成", 2),
+  ]);
+  let streamAttempts = 0;
+  const stopService = new RepositoryConversationService(
+    withStreaming(
+      {
+        create: async () => snapshot(),
+        get: async () => pending,
+        send: async () => {
+          streamAttempts += 1;
+          throw new Error("回答已停止，已保留你的问题，可以直接重试。");
+        },
+      },
+      { emitDelta: ["部分内容"] },
+    ),
+  );
+
+  const stoppedResult = await stopService.generateReply({
+    conversationId: "17",
+    messages: [{ id: "temporary-user", role: "user", content: "停止后重试" }],
+    prompt: "停止后重试",
+    mode: "append",
+  });
+  assert.equal(stoppedResult.status, "pending");
+  assert.match(stoppedResult.errorMessage, /回答已停止/);
+
+  const retryService = new RepositoryConversationService(
+    withStreaming({
+      create: async () => snapshot(),
+      get: async () => pending,
+      send: async () => {
+        streamAttempts += 1;
+        return completed;
+      },
+    }),
+  );
+  const retryResult = await retryService.generateReply({
+    conversationId: "17",
+    messages: [
+      { id: "temporary-user", role: "user", content: "停止后重试" },
+    ],
+    prompt: "停止后重试",
+    mode: "append",
+  });
+
+  assert.equal(streamAttempts, 2);
+  assert.equal(retryResult.status, "complete");
+  assert.deepEqual(
+    retryResult.persistedThread.messages.map((item) => item.role),
+    ["user", "assistant"],
+  );
+});
+
+test("stopGeneration 通过 abort 命令请求后端停止", async () => {
+  let aborts = 0;
+  let abortConversationId;
+  const service = new RepositoryConversationService(
+    withStreaming({
+      create: async () => snapshot(),
+      get: async () => snapshot(),
+      send: async () => snapshot(),
+      abortStreaming: async (conversationId) => {
+        aborts += 1;
+        abortConversationId = conversationId;
+      },
+    }),
+  );
+
+  await service.stopGeneration?.("17");
+
+  assert.equal(aborts, 1);
+  assert.equal(abortConversationId, 17);
+});
+
+test("正式 service 能力为流式可停止且导出仍可用", async () => {
+  const service = new RepositoryConversationService(
+    withStreaming({
+      create: async () => snapshot(),
+      get: async () => snapshot(),
+      send: async () => snapshot(),
+    }),
+  );
+
+  assert.equal(service.capabilities.delivery, "streaming");
+  assert.equal(service.capabilities.canStop, true);
+  assert.equal(service.capabilities.canRegenerate, false);
+  assert.equal(service.capabilities.canExport, true);
 });

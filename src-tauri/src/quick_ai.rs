@@ -2,11 +2,18 @@ use crate::conversations::{
     export_snapshot_to_path, ConversationExportSummary, ConversationMessage, ConversationRole,
     ConversationSnapshot, ConversationStore, PreparedTurn, RecentConversationSummary,
 };
-use crate::deepseek_client::{configured_model, post_tracked_chat_completion};
-use crate::model_usage::ModelUsageCategory;
+use crate::deepseek_client::{
+    configured_model, parse_model_token_usage_value, post_tracked_chat_completion,
+    stream_chat_completion_events,
+};
+use crate::model_usage::{record_for_app, ModelUsageCategory};
+use futures_util::StreamExt;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Mutex;
 use std::{future::Future, path::PathBuf};
+use tauri::ipc::Channel;
 use tauri::AppHandle;
 
 const QUICK_AI_MAX_USER_MESSAGE_LEN: usize = 8_000;
@@ -21,6 +28,92 @@ const QUICK_AI_SYSTEM_PROMPT: &str = "You are Quick AI inside ReadRay, a general
 struct DeepSeekRequestMessage {
     role: String,
     content: String,
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+#[serde(tag = "type")]
+pub enum QuickAiStreamEvent {
+    Delta { text: String },
+    Done,
+    Stopped,
+    Error { message: String },
+}
+
+static STREAMING_ABORT_FLAGS: Mutex<Option<Vec<(i64, std::sync::Arc<AtomicBool>)>>> =
+    Mutex::new(None);
+static ACTIVE_STREAMING_CONVERSATIONS: Mutex<Option<Vec<i64>>> = Mutex::new(None);
+
+fn abort_flag_for(conversation_id: i64) -> std::sync::Arc<AtomicBool> {
+    let mut flags = STREAMING_ABORT_FLAGS
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
+    let slots = flags.get_or_insert_with(Vec::new);
+    if let Some((_, flag)) = slots.iter().find(|(id, _)| *id == conversation_id) {
+        return flag.clone();
+    }
+    let flag = std::sync::Arc::new(AtomicBool::new(false));
+    slots.push((conversation_id, flag.clone()));
+    flag
+}
+
+fn request_abort_streaming(conversation_id: i64) {
+    let active = ACTIVE_STREAMING_CONVERSATIONS
+        .lock()
+        .map(|slots| {
+            slots
+                .as_ref()
+                .is_some_and(|slots| slots.contains(&conversation_id))
+        })
+        .unwrap_or(false);
+    if !active {
+        return;
+    }
+    let mut flags = STREAMING_ABORT_FLAGS
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
+    let slots = flags.get_or_insert_with(Vec::new);
+    if let Some((_, flag)) = slots.iter().find(|(id, _)| *id == conversation_id) {
+        flag.store(true, Ordering::Relaxed);
+    }
+}
+
+fn clear_streaming_abort(conversation_id: i64) {
+    let mut flags = STREAMING_ABORT_FLAGS
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
+    let slots = flags.get_or_insert_with(Vec::new);
+    if let Some(index) = slots.iter().position(|(id, _)| *id == conversation_id) {
+        slots.remove(index);
+    }
+    let mut active = ACTIVE_STREAMING_CONVERSATIONS
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
+    let slots = active.get_or_insert_with(Vec::new);
+    if let Some(index) = slots.iter().position(|id| *id == conversation_id) {
+        slots.remove(index);
+    }
+}
+
+fn mark_streaming_active(conversation_id: i64) {
+    let mut active = ACTIVE_STREAMING_CONVERSATIONS
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
+    let slots = active.get_or_insert_with(Vec::new);
+    if !slots.contains(&conversation_id) {
+        slots.push(conversation_id);
+    }
+}
+
+#[derive(Clone)]
+struct QuickAiStreamSender {
+    channel: Channel<QuickAiStreamEvent>,
+}
+
+impl QuickAiStreamSender {
+    fn send(&self, event: QuickAiStreamEvent) -> bool {
+        self.channel.send(event).is_ok()
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -123,6 +216,121 @@ pub async fn send_quick_ai_message(
         },
     )
     .await
+}
+
+#[tauri::command]
+pub async fn send_quick_ai_message_streaming(
+    app: AppHandle,
+    conversation_id: i64,
+    expected_user_sequence: i64,
+    content: String,
+    channel: Channel<QuickAiStreamEvent>,
+) -> Result<ConversationSnapshot, String> {
+    let sender = QuickAiStreamSender { channel };
+    let abort_flag = abort_flag_for(conversation_id);
+    let usage_app = app.clone();
+    send_with_reply_provider(
+        || ConversationStore::open_for_app(&app),
+        conversation_id,
+        expected_user_sequence,
+        &content,
+        move |model, history| async move {
+            mark_streaming_active(conversation_id);
+            let result = stream_quick_ai_reply(
+                &usage_app,
+                &model,
+                &history,
+                &sender,
+                &abort_flag,
+                conversation_id,
+            )
+            .await;
+            clear_streaming_abort(conversation_id);
+            result
+        },
+    )
+    .await
+}
+
+#[tauri::command]
+pub fn abort_quick_ai_streaming(conversation_id: i64) -> Result<(), String> {
+    if conversation_id <= 0 {
+        return Err("Quick AI 会话 ID 无效。".to_string());
+    }
+    request_abort_streaming(conversation_id);
+    Ok(())
+}
+
+async fn stream_quick_ai_reply(
+    app: &AppHandle,
+    model: &str,
+    history: &[ConversationMessage],
+    sender: &QuickAiStreamSender,
+    abort_flag: &std::sync::Arc<AtomicBool>,
+    _conversation_id: i64,
+) -> Result<String, String> {
+    let api_key = crate::secret_store::deepseek_api_key_state()?
+        .into_key()
+        .ok_or_else(|| "未配置 DeepSeek API Key，无法执行 DeepSeek Quick AI。".to_string())?;
+    let request_body = build_quick_ai_streaming_request_body(model, history);
+    let mut stream =
+        stream_chat_completion_events("DeepSeek Quick AI", &request_body, &api_key).await?;
+
+    let mut reply = String::new();
+    let mut recorded_usage = false;
+    while let Some(chunk) = stream.next().await {
+        if abort_flag.load(Ordering::Relaxed) {
+            sender.send(QuickAiStreamEvent::Stopped);
+            return Err("回答已停止，已保留你的问题，可以直接重试。".to_string());
+        }
+
+        let chunk = chunk?;
+        if !chunk.delta.is_empty() {
+            reply.push_str(&chunk.delta);
+            if !sender.send(QuickAiStreamEvent::Delta {
+                text: chunk.delta.clone(),
+            }) {
+                return Err("Quick AI 流式事件无法送达。".to_string());
+            }
+        }
+        if let Some(usage) = chunk.usage {
+            let usage = parse_model_token_usage_value(&usage)?;
+            let _ = record_for_app(app, ModelUsageCategory::QuickAi, usage);
+            recorded_usage = true;
+        }
+        if let Some(finish_reason) = chunk.finish_reason.as_deref() {
+            if finish_reason != "stop" {
+                return Err(format!(
+                    "DeepSeek Quick AI 生成未正常结束：finish_reason={finish_reason}。"
+                ));
+            }
+        }
+    }
+
+    let reply = reply.trim().to_string();
+    if reply.is_empty() {
+        return Err("DeepSeek Quick AI 返回空消息。".to_string());
+    }
+    if !recorded_usage {
+        return Err("DeepSeek 模型流式响应缺少 usage，无法计入使用量。".to_string());
+    }
+    sender.send(QuickAiStreamEvent::Done);
+    Ok(reply)
+}
+
+fn build_quick_ai_streaming_request_body(
+    model: &str,
+    history: &[ConversationMessage],
+) -> serde_json::Value {
+    let messages = build_request_messages(history);
+    json!({
+        "model": model,
+        "messages": messages,
+        "stream": true,
+        "stream_options": { "include_usage": true },
+        "max_tokens": QUICK_AI_MAX_TOKENS,
+        "temperature": QUICK_AI_TEMPERATURE
+    })
 }
 
 #[cfg(test)]
@@ -486,6 +694,52 @@ mod tests {
         assert_eq!(resolve_recent_conversation_limit(Some(1)).unwrap(), 1);
         assert!(resolve_recent_conversation_limit(Some(0)).is_err());
         assert!(resolve_recent_conversation_limit(Some(21)).is_err());
+    }
+
+    #[test]
+    fn streaming_abort_flag_is_shared_between_command_and_stream() {
+        let flag = abort_flag_for(17);
+        assert!(!flag.load(Ordering::Relaxed));
+
+        // 无活跃流时 abort 是 no-op（避免污染下一次重试）
+        request_abort_streaming(17);
+        assert!(!flag.load(Ordering::Relaxed));
+
+        // 活跃流期间 abort 生效，流结束后清除
+        mark_streaming_active(17);
+        request_abort_streaming(17);
+        assert!(flag.load(Ordering::Relaxed));
+
+        clear_streaming_abort(17);
+        let after_clear = abort_flag_for(17);
+        assert!(!after_clear.load(Ordering::Relaxed));
+
+        abort_flag_for(23);
+        clear_streaming_abort(23);
+        assert!(!abort_flag_for(23).load(Ordering::Relaxed));
+    }
+
+    #[test]
+    fn streaming_request_body_keeps_existing_model_parameters() {
+        let history = vec![message(ConversationRole::User, "Stream this", 1)];
+        let body = build_quick_ai_streaming_request_body("deepseek-v4-flash", &history);
+
+        assert_eq!(body["model"], "deepseek-v4-flash");
+        assert_eq!(body["stream"], true);
+        assert_eq!(body["stream_options"]["include_usage"], true);
+        assert_eq!(body["max_tokens"], QUICK_AI_MAX_TOKENS);
+        assert_eq!(body["temperature"], QUICK_AI_TEMPERATURE);
+        assert_eq!(body["messages"][0]["role"], "system");
+        assert_eq!(body["messages"][1]["role"], "user");
+        assert_eq!(body["messages"][1]["content"], "Stream this");
+    }
+
+    #[test]
+    fn abort_command_rejects_invalid_conversation_id() {
+        assert!(abort_quick_ai_streaming(0).is_err());
+        assert!(abort_quick_ai_streaming(-1).is_err());
+        assert!(abort_quick_ai_streaming(17).is_ok());
+        clear_streaming_abort(17);
     }
 
     #[test]

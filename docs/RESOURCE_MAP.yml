@@ -4,7 +4,7 @@ project:
   repo_root: "."
 
 meta:
-  version: "1.37"
+  version: "1.39"
   last_updated: "2026-08-06"
   updated_by: "Codex"
   source_of_truth: "docs/RESOURCE_MAP.yml"
@@ -71,6 +71,15 @@ core_docs:
       - "在 Codex 中运行 pnpm 构建、启动 Tauri dev 或发布到 GitHub。"
     notes: "记录可复用环境经验和本机命令/发布基线，不写成每次操作流水账；已有基线应优先复用，不要先走通用工具探测。"
     risk: "不要手动移动 VS 或 SDK 目录；迁移前先确认安装器、缓存和 Junction 策略。"
+
+  - path: "docs/AGENT_UPGRADE.md"
+    purpose: "ReadRay 内置 Agent 体验升级（流式输出、Markdown 渲染、系统提示词）的任务书、已确认决策与验收标准。"
+    status: "active"
+    read_when:
+      - "执行或验收流式输出、对话页 Markdown 渲染、系统提示词构建任务。"
+      - "恢复内置 Agent 升级的上下文或核对已确认决策。"
+    notes: "执行顺序已确认：先流式输出 → 再 Markdown 渲染 → 最后专门讨论系统提示词构建。任务 1 流式输出执行中；已确认决策包括本轮不实现记忆注入、重新生成沿用覆盖式语义。任务完成后由调度者验收并更新本文件与 HANDOFF.md。"
+    risk: "任务书不是阶段计划；本文件不改变 DEVELOPMENT_PLAN 的阶段边界，阶段八仍处于暂缓状态。"
 
   - path: "docs/THEME_PROTOCOL.md"
     purpose: "ReadRayThemeV1 的 manifest、语义颜色、回退、安全解析、持久化和外部 adapter 边界。"

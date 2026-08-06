@@ -14,9 +14,9 @@ import type {
   QuickAiMessage,
 } from "./types/quickAi.ts";
 
-const COMPLETE_DELIVERY_CAPABILITIES = {
-  delivery: "complete",
-  canStop: false,
+const STREAMING_DELIVERY_CAPABILITIES = {
+  delivery: "streaming",
+  canStop: true,
   canRegenerate: false,
   canExport: true,
 } as const;
@@ -207,7 +207,7 @@ function turnAt(
 }
 
 export class RepositoryConversationService implements ConversationService {
-  readonly capabilities = COMPLETE_DELIVERY_CAPABILITIES;
+  readonly capabilities = STREAMING_DELIVERY_CAPABILITIES;
   private readonly repository: ConversationRepository;
   private readonly onConversationUpdated?: () => void;
 
@@ -286,11 +286,23 @@ export class RepositoryConversationService implements ConversationService {
     const userSequence = expectedUserSequence(request);
     let snapshot: QuickAiConversation;
     let updateNotified = false;
+    let streamed = false;
+    let streamedText = "";
+    let stoppedByUser = false;
     try {
-      snapshot = await this.repository.send(
+      snapshot = await this.repository.sendStreaming(
         conversationId,
         userSequence,
         request.prompt,
+        (event) => {
+          if (event.type === "delta") {
+            streamed = true;
+            streamedText += event.text;
+            request.onStreamDelta?.(event.text);
+          } else if (event.type === "stopped") {
+            stoppedByUser = true;
+          }
+        },
       );
     } catch (sendError) {
       this.onConversationUpdated?.();
@@ -308,7 +320,9 @@ export class RepositoryConversationService implements ConversationService {
         return {
           status: "pending" as const,
           persistedThread,
-          errorMessage: errorMessage(sendError),
+          errorMessage: stoppedByUser
+            ? "回答已停止，已保留你的问题，可以直接重试。"
+            : errorMessage(sendError),
         };
       }
       snapshot = recovered;
@@ -326,9 +340,15 @@ export class RepositoryConversationService implements ConversationService {
     return {
       status: "complete" as const,
       assistantMessageId: `quick-ai-message-${assistantMessage.id}`,
-      chunks: [assistantMessage.content],
+      chunks: streamed ? [streamedText] : [assistantMessage.content],
       persistedThread,
     };
+  }
+
+  async stopGeneration(conversationId: string) {
+    await this.repository.abortStreaming(
+      requireConversationId(conversationId),
+    );
   }
 
   async exportConversation(

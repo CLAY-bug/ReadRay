@@ -5,10 +5,10 @@
 ## TL;DR
 
 - 当前状态：阶段一至阶段七已经完成；阶段七设置与桌面生命周期已通过复审和真实 Tauri 人工验收。
-- 主题状态：ReadRayThemeV1、安全解析、SQLite v8、设置页导入/选择/删除、主窗口恢复以及随包 Flexoki（Light/Dark）主题接入已完成自动验证；尚待独立审核与真实 Tauri 人工验收，本轮不改变 DEVELOPMENT_PLAN 阶段状态。
+- 主题状态：ReadRayThemeV1、安全解析、SQLite v8、设置页导入/选择/删除、主窗口恢复以及随包 Flexoki（Light/Dark）与 30 个内置主题已通过独立审核和真实 Tauri 人工验收；主题工作不改变 DEVELOPMENT_PLAN 阶段状态。
 - 当前路线：Windows 原生，Tauri + React + TypeScript + Rust + SQLite。
-- 下一步：先独立审核并按清单完成人工主题验收；通过后再按 `docs/DEVELOPMENT_PLAN.md` 讨论阶段八复习对象、优先级信号和反馈语义。
-- 后续顺序：完成阶段八产品讨论后再实现复习闭环；其后的阶段顺序以 `docs/DEVELOPMENT_PLAN.md` 为准。
+- 下一步：内置 Agent 体验升级按已确认顺序推进（先流式输出 → 再对话页 Markdown 渲染 → 最后专门讨论系统提示词构建），任务 1 流式输出执行中；任务书、验收标准与已确认决策以 `docs/AGENT_UPGRADE.md` 为准。
+- 阶段八：用户已明确暂缓复习阶段讨论；Agent 升级完成后按 `docs/DEVELOPMENT_PLAN.md` 再排期阶段八产品讨论。
 - 当前约束：不使用通用 Agent 框架，不内置商业词典，不做 OCR、本地大模型或跨平台支持。
 - 交接原则：`HANDOFF.md` 只记录会影响下一次恢复上下文的信息，小型文档措辞和格式调整不记录。
 
@@ -166,7 +166,7 @@
 - 本轮复审修复后自动验证通过：设置/生命周期前端 25 项、会话前端回归 18 项、写作前端回归 26 项；完整 Rust 103 项通过，2 项真实 DeepSeek 联网测试按既有 ignored 标记跳过；`pnpm build`、`cargo fmt --check`、`cargo check`、RESOURCE_MAP YAML 解析和 `git diff --check` 均通过。自动测试未修改本机开机启动项，也没有使用浏览器、Computer Use 或真实 Tauri 窗口替代人工验收。
 - 阶段七复审与真实 Tauri 人工验收已经通过：托盘左右键与菜单、两种关闭策略、安全退出成功/失败/取消/强制退出、开机启动注册/注销及隐藏启动、第二次手动启动恢复、快捷键录制/冲突/逐项恢复/重启恢复，以及隐藏主窗口后的快捷键和后台自动保存均已验收；阶段七正式收口。
 
-### ReadRayThemeV1 主题基础设施（待重新审核与人工验收）
+### ReadRayThemeV1 主题基础设施（已通过审核与人工验收）
 
 - `docs/THEME_PROTOCOL.md` 定义版本化 manifest、light/dark 模式、语义配色、必填/可选 token 和确定性回退；内置 `ReadRay Default` 保留当前浅色变量并留在代码资源中，不写 SQLite。真实 Flexoki Obsidian/Codex 样本只用于核对表达能力，本轮没有实现或导入任何外部主题 adapter。
 - 正式路径为 `SettingsPage -> AppThemeController -> ThemeService -> ThemeRepository -> typed Rust commands`。repository 只打开原生单目录选择器；Rust 只读取该目录直属的普通 `manifest.json` / `theme.css`，符号链接和目录外路径拒绝。页面不直接 invoke、读文件、写 SQLite 或使用 localStorage/sessionStorage。
@@ -185,12 +185,13 @@
 - 侧边栏折叠冲突已修复：折叠态不再沿用展开时的拖拽宽度，主内容完全铺开；左缘 hover 可临时显示侧栏，点击标题栏按钮恢复固定侧栏。
 - 主窗口边界已改为系统窗口语义：main 继续使用 `transparent: true`，但 `tauri.conf.json` 开启 `shadow: true` 使用 Windows 原生无装饰阴影；真实 `.rr-main-app` 改为 `position:absolute + inset:0`，不再在透明窗口内额外留 16px 阴影边界，最大化时由 `is-maximized` 去掉圆角。浏览器预览画布继续使用固定 1440×900、独立留白和柔和 CSS 阴影；overlay 仍保持 `shadow:false`。主窗口四周的自定义 resize 手柄保留。前端 build、Rust fmt/check 和桌面生命周期静态测试通过；最终截图选区、最大化贴边、还原和原生阴影观感仍需真实 Tauri 人工验收。
 - 透明窗口边缘 resize：`transparent: true` 后 Windows 系统 resize 命中区失效（透明区不参与 hit-test），因此外壳在 `.rr-main-app` 四周渲染 8 个方向的自定义 `.rr-main-resize-handle`（onMouseDown 触发 `onStartResize`，App.tsx 里 `getCurrentWindow().startResizeDragging(direction)`），鼠标移到主窗口边缘即可缩放。关键点：必须新增 `core:window:allow-start-resize-dragging` capability（否则前端调用被拒并静默 catch），且用 `onMouseDown` 而非 `onPointerDown` + `preventDefault`。浏览器实测 8 个手柄位置与光标正确；真实拖拽手感需 Tauri 人工验收。
+- 主题已通过独立审核与真实 Tauri 人工验收（2026-08-06）：30 个随包内置主题的列表、Light/Dark 模式切换、重启恢复、Flexoki 深色模式实际观感，以及透明窗口阴影、最大化圆角与边缘 resize 拖拽手感均已完成人工确认；主题基础设施收口。
 
 ## 下一步
 
-阶段一至阶段七已经完成，主题基础设施不改变既有阶段状态。下一步先完成本轮独立审核和真实 Tauri 人工验收；通过后再进入阶段八前的产品讨论，本交接不代表已授权阶段八实现。
+阶段一至阶段七已经完成，主题基础设施已通过独立审核与真实 Tauri 人工验收并收口。当前推进 ReadRay 内置 Agent 体验升级（不属于任何 DEVELOPMENT_PLAN 阶段）：执行顺序为流式输出 → 对话页 Markdown 渲染 → 系统提示词构建；任务书、验收标准与已确认决策以 `docs/AGENT_UPGRADE.md` 为准，任务 1 流式输出执行中，执行会话完成后由调度者验收并更新本文件。阶段八（复习闭环）产品讨论已由用户明确暂缓，Agent 升级完成后按 `docs/DEVELOPMENT_PLAN.md` 再排期。
 
-- 阶段八实现前先讨论复习对象、真实优先级信号、“记得/忘了”的反馈语义，以及复习与历史浏览的边界。
+- 已确认决策（详见 `docs/AGENT_UPGRADE.md`）：本轮不实现记忆注入，对话继续维持"不声称能访问本地学习记录/联网/长期记忆"的诚实边界；"重新生成"沿用覆盖式语义（与 ChatGPT 主流一致），本轮不实现。
 - 新环境仍可复制 `.env.example` 为 `.env` 填写开发期 `DEEPSEEK_API_KEY`；用户在设置页保存或清除后，以 Windows 安全存储中的持久化决定为准。真实 `.env` 不提交。
 
 ## 当前已知限制与后续边界

@@ -184,6 +184,7 @@ export type ConversationGenerationRequest = {
   messages: ConversationMessage[];
   prompt: string;
   mode: "append" | "regenerate";
+  onStreamDelta?: (delta: string) => void;
 };
 
 export type ConversationExportResult =
@@ -204,7 +205,7 @@ export type ConversationExportResult =
     };
 
 export type ConversationServiceCapabilities = {
-  delivery: "complete" | "chunked-preview";
+  delivery: "complete" | "chunked-preview" | "streaming";
   canStop: boolean;
   canRegenerate: boolean;
   canExport: boolean;
@@ -229,4 +230,5 @@ export interface ConversationService {
   exportConversation(
     thread: ConversationThread,
   ): Promise<ConversationExportResult>;
+  stopGeneration?(conversationId: string): Promise<void>;
 }
