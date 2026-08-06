@@ -88,6 +88,35 @@ test("主应用稳定会话身份回调并复用统一 composer", async () => {
   assert.doesNotMatch(conversationStyles, /rr-conversation-composer/);
 });
 
+test("全部对话使用搜索、最近/其他分组和紧凑固定行", async () => {
+  const historyPage = await readFile(
+    "src/components/ConversationHistoryPage.tsx",
+    "utf8",
+  );
+  const historyStyles = await readFile(
+    "src/styles/conversation-page.css",
+    "utf8",
+  );
+  const rustConversations = await readFile(
+    "src-tauri/src/conversations.rs",
+    "utf8",
+  );
+
+  assert.match(historyPage, /placeholder="搜索对话"/);
+  assert.match(historyPage, /label="最近对话"/);
+  assert.match(historyPage, /label="其他对话"/);
+  assert.match(historyPage, /label: "标题"/);
+  assert.match(historyPage, /role="combobox"/);
+  assert.doesNotMatch(historyPage, /保留你的提问与学习记录/);
+  assert.match(historyStyles, /grid-template-columns: minmax\(0, 1fr\) 20px/);
+  assert.match(historyStyles, /grid-template-rows: auto auto/);
+  assert.match(historyStyles, /text-overflow: clip/);
+  assert.match(historyStyles, /font-size: calc\(14px \* var\(--rr-ui-font-scale\)\);\n  font-weight: 500/);
+  assert.match(historyStyles, /\.rr-conversation-history-date \{[\s\S]*?font-family: var\(--rr-main-font-display\)/);
+  assert.match(rustConversations, /const AUTO_TITLE_LEN: usize = 18/);
+  assert.match(rustConversations, /\.take\(AUTO_TITLE_LEN\)/);
+});
+
 test("Tauri repository 使用既有 Quick AI commands 和 camelCase 参数", async () => {
   const calls = [];
   const saveRequests = [];

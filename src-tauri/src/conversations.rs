@@ -9,6 +9,7 @@ use tauri::AppHandle;
 
 const MAX_MODEL_LEN: usize = 160;
 const MAX_TITLE_LEN: usize = 80;
+const AUTO_TITLE_LEN: usize = 18;
 const MAX_MESSAGE_LEN: usize = 32_000;
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -679,7 +680,7 @@ fn title_from_first_message(content: &str) -> String {
         .collect::<Vec<_>>()
         .join(" ")
         .chars()
-        .take(MAX_TITLE_LEN)
+        .take(AUTO_TITLE_LEN)
         .collect()
 }
 
@@ -770,6 +771,14 @@ pub(crate) mod tests {
         assert!(loaded.title.as_deref().unwrap().starts_with("Remember"));
         drop(store);
         let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn automatic_title_uses_a_fixed_prefix_without_ellipsis() {
+        let title = title_from_first_message(&format!("{} 后续内容", "前".repeat(30)));
+
+        assert_eq!(title, "前".repeat(AUTO_TITLE_LEN));
+        assert!(!title.contains('…'));
     }
 
     #[test]
