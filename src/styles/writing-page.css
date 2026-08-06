@@ -68,7 +68,7 @@
 .rr-writing-document-name {
   display: block;
   min-height: 28px !important;
-  max-width: 260px;
+  max-width: 320px;
   overflow: hidden;
   margin-left: -6px;
   border-radius: 6px !important;
@@ -280,6 +280,7 @@
 .rr-writing-grid {
   --rr-writing-editor-column-width: 736px;
   display: grid;
+  height: 100%;
   width: auto;
   min-width: 0;
   min-height: 0;
@@ -334,6 +335,7 @@
 }
 
 .rr-writing-editor-column {
+  height: 100%;
   min-width: 0;
   min-height: 0;
   overflow-y: auto;
@@ -382,32 +384,35 @@
 
 .rr-writing-editor-page {
   width: min(680px, calc(100% - 32px));
-  min-height: calc(100% - 70px);
+  min-height: max(760px, calc(100% - 70px));
   margin: 34px auto 36px;
-  border: 1px solid var(--rr-writing-border-soft);
+  border: 1px solid color-mix(
+    in oklab,
+    var(--rr-writing-border-soft),
+    var(--rr-writing-bg) 28%
+  );
   border-radius: 4px;
-  padding: 50px 56px 72px;
-  background: color-mix(in oklab, var(--rr-writing-bg), var(--rr-writing-contrast) 28%);
-  box-shadow: 0 16px 38px color-mix(in oklab, var(--rr-writing-fg), transparent 94%);
-}
-
-.rr-writing-editor-kicker {
-  margin-bottom: 24px;
-  color: var(--rr-writing-meta);
-  font-family: var(--rr-font-mono);
-  font-size: calc(9.5px * var(--rr-ui-font-scale));
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
+  padding: 48px 56px 64px;
+  background: color-mix(
+    in oklab,
+    var(--rr-writing-bg),
+    white 6%
+  );
+  box-shadow: 0 6px 24px color-mix(
+    in oklab,
+    var(--rr-writing-fg),
+    transparent 96%
+  );
 }
 
 .rr-writing-editor-title {
-  margin: 0 0 30px;
+  margin: 0 0 24px;
   color: var(--rr-writing-fg);
   font-family: var(--rr-learning-font-family);
-  font-size: calc(34px * var(--rr-learning-font-scale));
-  font-weight: 540;
-  line-height: 1.12;
-  letter-spacing: -0.025em;
+  font-size: calc(32px * var(--rr-learning-font-scale));
+  font-weight: 500;
+  line-height: 1.18;
+  letter-spacing: -0.02em;
   outline: 0;
   text-wrap: pretty;
 }
@@ -434,14 +439,15 @@
   color: var(--rr-writing-fg-2);
   caret-color: var(--rr-writing-fg);
   font-family: var(--rr-learning-font-family);
-  font-size: calc(var(--rr-learning-font-size) + 1px);
-  font-weight: 430;
-  line-height: 1.68;
+  font-size: calc(var(--rr-learning-font-size) * var(--rr-learning-font-scale));
+  font-weight: 400;
+  line-height: 1.72;
+  letter-spacing: 0.005em;
   outline: 0;
 }
 
 .rr-writing-article-editor p {
-  margin: 0 0 20px;
+  margin: 0 0 16px;
 }
 
 .rr-writing-article-editor p:last-child {
@@ -584,6 +590,12 @@
   visibility: hidden;
   pointer-events: none;
   transform: translateX(18px);
+}
+
+.rr-writing-page.is-draft:not(.has-assist) .rr-writing-layout-resizer,
+.rr-writing-page.is-completed:not(.has-assist) .rr-writing-layout-resizer,
+.rr-writing-page.is-responsive-coach-collapsed .rr-writing-layout-resizer {
+  display: none;
 }
 
 .rr-writing-coach,
@@ -1716,10 +1728,6 @@
   .rr-writing-document-bar {
     gap: 8px;
     padding-inline: 18px;
-  }
-
-  .rr-writing-document-name {
-    max-width: 150px;
   }
 
   .rr-writing-word-count {

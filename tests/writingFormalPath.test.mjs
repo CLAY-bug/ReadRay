@@ -85,11 +85,46 @@ test("宽窗口写作页提供受边界约束的编辑区拖拽分隔条", async
     styles,
     /grid-template-columns:[\s\S]*var\(--rr-writing-editor-column-width\)/,
   );
+  assert.match(styles, /\.rr-writing-grid \{[\s\S]*?height: 100%;/);
+  assert.match(
+    styles,
+    /\.rr-writing-editor-column \{[\s\S]*?height: 100%;/,
+  );
+  assert.match(
+    styles,
+    /\.rr-writing-editor-page \{[\s\S]*?min-height: max\(760px, calc\(100% - 70px\)\)/,
+  );
   assert.match(styles, /\.rr-writing-layout-resizer[\s\S]*justify-self: end/);
   assert.match(styles, /\.rr-writing-layout-resizer[\s\S]*right: -3px/);
   assert.match(
     styles,
     /@container \(max-width: 1120px\)[\s\S]*?\.rr-writing-layout-resizer[\s\S]*?display: none/,
+  );
+  assert.match(
+    styles,
+    /\.rr-writing-page\.is-draft:not\(\.has-assist\) \.rr-writing-layout-resizer[\s\S]*?display: none/,
+  );
+  assert.match(
+    styles,
+    /\.rr-writing-page\.is-responsive-coach-collapsed \.rr-writing-layout-resizer[\s\S]*?display: none/,
+  );
+});
+
+test("写作页隐藏无关元数据并在文章切换菜单外点击时收起", async () => {
+  const page = await readFile("src/components/WritingPage.tsx", "utf8");
+  const editor = await readFile("src/components/WritingEditor.tsx", "utf8");
+  const styles = await readFile("src/styles/writing-page.css", "utf8");
+
+  assert.doesNotMatch(page, /documentStatus|基于完成稿修改|kicker=/);
+  assert.doesNotMatch(editor, /rr-writing-editor-kicker|kicker/);
+  assert.match(page, /documentSwitcherRef/);
+  assert.match(page, /document\.addEventListener\("pointerdown", handlePointerDown\)/);
+  assert.match(page, /setDocumentSwitcherOpen\(false\)/);
+  assert.match(page, /formatDocumentTime\([\s\S]*?"更新于 "/);
+  assert.match(styles, /\.rr-writing-document-name \{[\s\S]*?max-width: 320px/);
+  assert.doesNotMatch(
+    styles,
+    /@container \(max-width: 1120px\)[\s\S]*?\.rr-writing-document-name[\s\S]*?max-width: 150px/,
   );
 });
 

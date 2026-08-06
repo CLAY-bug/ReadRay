@@ -207,6 +207,7 @@ function WritingPage({
     useState<OperationError>();
   const operationRetryRef = useRef<(() => void) | undefined>(undefined);
   const editorRef = useRef<WritingEditorHandle>(null);
+  const documentSwitcherRef = useRef<HTMLDivElement | null>(null);
   const writingPageRef = useRef<HTMLElement | null>(null);
   const writingGridRef = useRef<HTMLDivElement | null>(null);
   const writingResizeRef = useRef<{
@@ -572,6 +573,26 @@ function WritingPage({
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
   }, [assistOpen, hidden, mode]);
+
+  useEffect(() => {
+    if (!documentSwitcherOpen) {
+      return;
+    }
+
+    function handlePointerDown(event: Event) {
+      const target = event.target;
+      if (
+        !(target instanceof Node) ||
+        !documentSwitcherRef.current?.contains(target)
+      ) {
+        setDocumentSwitcherOpen(false);
+      }
+    }
+
+    document.addEventListener("pointerdown", handlePointerDown);
+    return () =>
+      document.removeEventListener("pointerdown", handlePointerDown);
+  }, [documentSwitcherOpen]);
 
   useEffect(() => {
     if (hidden || mode === "library" || mode === "compare") {
@@ -1099,12 +1120,6 @@ function WritingPage({
         .slice(0, 4),
     [activeDocument?.id, records],
   );
-  const documentStatus =
-    mode === "completed"
-      ? "已完成"
-      : revisionFromCompleted
-        ? "基于完成稿修改"
-        : "本地草稿";
   const documentTime =
     saveState === "saving"
       ? "正在自动保存…"
@@ -1115,14 +1130,8 @@ function WritingPage({
               ? selectedVersion?.completedAtUnixMs ??
                   activeDocument?.completedAtUnixMs
               : activeDocument?.draftUpdatedAtUnixMs,
-            mode === "completed" ? "完成于 " : "更新于 ",
+            "更新于 ",
           );
-  const kicker =
-    mode === "completed"
-      ? "Personal reflection · 已完成"
-      : revisionFromCompleted
-        ? "Personal reflection · 修改中"
-        : "Personal reflection · Draft";
 
   if (mode === "library") {
     return (
@@ -1199,7 +1208,10 @@ function WritingPage({
     >
       <header className="rr-writing-document-bar">
         <div className="rr-writing-document-meta">
-          <div className="rr-writing-document-switcher">
+          <div
+            ref={documentSwitcherRef}
+            className="rr-writing-document-switcher"
+          >
             <button
               className="rr-writing-document-name"
               type="button"
@@ -1251,8 +1263,6 @@ function WritingPage({
               </div>
             ) : null}
           </div>
-          <span>·</span>
-          <span>{documentStatus}</span>
           <span>·</span>
           <span>{documentTime}</span>
           {mode === "completed" && activeDocument.versions.length > 1 ? (
@@ -1407,7 +1417,6 @@ function WritingPage({
             issues={mode === "completed" ? [] : issues}
             patterns={patterns}
             resetKey={resetKey}
-            kicker={kicker}
             activeIssueId={activeIssueId}
             editingIssueId={editingIssueId}
             onChange={handleEditorChange}

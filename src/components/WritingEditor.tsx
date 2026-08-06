@@ -31,7 +31,6 @@ type WritingEditorProps = {
   issues: WritingIssue[];
   patterns: WritingPattern[];
   resetKey: number;
-  kicker: string;
   activeIssueId: string | null;
   editingIssueId: string | null;
   onChange: (snapshot: WritingSnapshot) => void;
@@ -100,7 +99,6 @@ const WritingEditor = forwardRef<WritingEditorHandle, WritingEditorProps>(functi
     issues,
     patterns,
     resetKey,
-    kicker,
     activeIssueId,
     editingIssueId,
     onChange,
@@ -214,7 +212,6 @@ const WritingEditor = forwardRef<WritingEditorHandle, WritingEditorProps>(functi
   return (
     <div className="rr-writing-editor-column" ref={columnRef} data-testid="writing-editor-column">
       <article className="rr-writing-editor-page" aria-label="英文文档编辑器">
-        <div className="rr-writing-editor-kicker">{kicker}</div>
         <h1
           ref={titleRef}
           className="rr-writing-editor-title"
