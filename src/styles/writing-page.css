@@ -278,15 +278,59 @@
 }
 
 .rr-writing-grid {
+  --rr-writing-editor-column-width: 736px;
   display: grid;
   width: auto;
   min-width: 0;
   min-height: 0;
   flex: 1 1 auto;
-  grid-template-columns: minmax(0, 736px) minmax(320px, 1fr);
-  gap: 24px;
+  grid-template-columns:
+    minmax(0, var(--rr-writing-editor-column-width))
+    24px
+    minmax(320px, 1fr);
+  gap: 0;
   margin-right: 0;
   margin-left: max(24px, calc((100% - 1080px) / 2));
+}
+
+.rr-writing-layout-resizer {
+  position: relative;
+  z-index: 5;
+  grid-column: 2;
+  width: 6px;
+  min-height: 100%;
+  justify-self: end;
+  right: -3px;
+  cursor: col-resize;
+  touch-action: none;
+  user-select: none;
+}
+
+.rr-writing-layout-resizer::after {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 2px;
+  width: 2px;
+  border-radius: 999px;
+  background: transparent;
+  content: "";
+  transition: background 150ms ease;
+}
+
+.rr-writing-layout-resizer:hover::after,
+.rr-writing-layout-resizer:active::after,
+.rr-writing-layout-resizer:focus-visible::after,
+.rr-writing-grid.is-resizing .rr-writing-layout-resizer::after {
+  background: color-mix(in oklab, var(--rr-writing-accent), transparent 55%);
+}
+
+.rr-writing-layout-resizer:focus-visible {
+  outline: 0;
+}
+
+.rr-writing-grid.is-resizing {
+  user-select: none;
 }
 
 .rr-writing-editor-column {
@@ -1302,7 +1346,7 @@
 
 .rr-writing-library-head {
   display: flex;
-  min-height: 88px;
+  min-height: 68px;
   align-items: center;
   gap: 32px;
   border-bottom: 1px solid var(--rr-writing-border);
@@ -1313,15 +1357,6 @@
   min-width: 0;
 }
 
-.rr-writing-library-head > div:first-child > p {
-  margin: 0 0 6px;
-  color: var(--rr-writing-meta);
-  font-family: var(--rr-font-mono);
-  font-size: calc(9.5px * var(--rr-ui-font-scale));
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-}
-
 .rr-writing-library-head h1 {
   margin: 0;
   font-family: var(--rr-learning-font-family);
@@ -1329,16 +1364,6 @@
   font-weight: 540;
   line-height: 1.05;
   letter-spacing: -0.025em;
-}
-
-.rr-writing-library-head > div:first-child > span {
-  display: block;
-  max-width: 650px;
-  margin-top: 7px;
-  color: var(--rr-writing-muted);
-  font-family: var(--rr-learning-font-family);
-  font-size: calc(11.5px * var(--rr-learning-font-scale));
-  line-height: 1.5;
 }
 
 .rr-writing-library-head-actions {
@@ -1687,7 +1712,7 @@
   }
 }
 
-@container (max-width: 900px) {
+@container (max-width: 1120px) {
   .rr-writing-document-bar {
     gap: 8px;
     padding-inline: 18px;
@@ -1704,6 +1729,10 @@
   .rr-writing-grid {
     position: relative;
     display: block;
+  }
+
+  .rr-writing-layout-resizer {
+    display: none;
   }
 
   .rr-writing-coach-column {
@@ -1724,6 +1753,15 @@
   .rr-writing-page.is-draft:not(.has-assist) .rr-writing-coach-column,
   .rr-writing-page.is-completed:not(.has-assist) .rr-writing-coach-column {
     box-shadow: none;
+  }
+
+  .rr-writing-page.is-responsive-coach-collapsed .rr-writing-coach-column {
+    border-left-color: transparent;
+    box-shadow: none;
+    opacity: 0;
+    visibility: hidden;
+    pointer-events: none;
+    transform: translateX(18px);
   }
 
   .rr-writing-editor-page {

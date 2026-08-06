@@ -9,6 +9,7 @@ export type MainAppIconName =
   | "more"
   | "arrow"
   | "send"
+  | "send-up"
   | "clock"
   | "book"
   | "chat"
@@ -46,6 +47,8 @@ function IconPaths({ name }: MainAppIconProps) {
       return <path d="M5 12h14M13 6l6 6-6 6" />;
     case "send":
       return <path d="M21 3 10 14m11-11-7 18-4-7-7-4 18-7Z" />;
+    case "send-up":
+      return <path d="M12 19V5M5 12l7-7 7 7" />;
     case "clock":
       return <><circle cx="12" cy="12" r="9" /><path d="M12 7v5l3 2" /></>;
     case "book":

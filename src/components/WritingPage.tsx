@@ -4,7 +4,10 @@ import {
   useMemo,
   useRef,
   useState,
+  type CSSProperties,
+  type KeyboardEvent as ReactKeyboardEvent,
   type MouseEvent,
+  type PointerEvent,
 } from "react";
 import {
   WritingDraftSaveCoordinator,
@@ -62,6 +65,37 @@ type OperationError = {
   message: string;
   actionLabel: string;
 };
+
+const WRITING_ASSIST_AUTO_COLLAPSE_WIDTH = 1120;
+const WRITING_EDITOR_DEFAULT_WIDTH = 736;
+const WRITING_EDITOR_MIN_WIDTH = 520;
+const WRITING_EDITOR_MAX_WIDTH = 960;
+const WRITING_COACH_MIN_WIDTH = 320;
+const WRITING_SPLITTER_COLUMN_WIDTH = 24;
+
+function getWritingEditorWidthBounds(grid: HTMLElement) {
+  const availableMax = Math.floor(
+    grid.getBoundingClientRect().width -
+      WRITING_SPLITTER_COLUMN_WIDTH -
+      WRITING_COACH_MIN_WIDTH,
+  );
+  const max = Math.max(
+    WRITING_EDITOR_MIN_WIDTH,
+    Math.min(WRITING_EDITOR_MAX_WIDTH, availableMax),
+  );
+  return {
+    min: Math.min(WRITING_EDITOR_MIN_WIDTH, max),
+    max,
+  };
+}
+
+function getWritingEditorColumnWidth(grid: HTMLElement) {
+  return (
+    grid
+      .querySelector<HTMLElement>(".rr-writing-editor-column")
+      ?.getBoundingClientRect().width ?? WRITING_EDITOR_DEFAULT_WIDTH
+  );
+}
 
 function errorMessage(error: unknown) {
   return error instanceof Error ? error.message : String(error);
@@ -159,6 +193,12 @@ function WritingPage({
   const [documentSwitcherOpen, setDocumentSwitcherOpen] = useState(false);
   const [selection, setSelection] = useState<WritingSelection | null>(null);
   const [assistOpen, setAssistOpen] = useState(false);
+  const [responsiveCoachCollapsed, setResponsiveCoachCollapsed] =
+    useState(false);
+  const [editorColumnWidth, setEditorColumnWidth] = useState<number | null>(
+    null,
+  );
+  const [writingResizing, setWritingResizing] = useState(false);
   const [agentRequest, setAgentRequest] = useState<WritingAgentRequest>({
     token: 0,
     intent: "ask",
@@ -167,6 +207,13 @@ function WritingPage({
     useState<OperationError>();
   const operationRetryRef = useRef<(() => void) | undefined>(undefined);
   const editorRef = useRef<WritingEditorHandle>(null);
+  const writingPageRef = useRef<HTMLElement | null>(null);
+  const writingGridRef = useRef<HTMLDivElement | null>(null);
+  const writingResizeRef = useRef<{
+    startX: number;
+    startWidth: number;
+  } | null>(null);
+  const responsiveCoachNarrowRef = useRef(false);
   const saveCoordinatorRef =
     useRef<WritingDraftSaveCoordinator | null>(null);
   const operationTokenRef = useRef(0);
@@ -526,6 +573,167 @@ function WritingPage({
     return () => window.removeEventListener("keydown", handleKeyDown);
   }, [assistOpen, hidden, mode]);
 
+  useEffect(() => {
+    if (hidden || mode === "library" || mode === "compare") {
+      responsiveCoachNarrowRef.current = false;
+      return;
+    }
+    const page = writingPageRef.current;
+    if (!page || typeof ResizeObserver === "undefined") {
+      return;
+    }
+
+    const applyResponsiveWidth = (width: number) => {
+      const isNarrow = width <= WRITING_ASSIST_AUTO_COLLAPSE_WIDTH;
+      if (!isNarrow) {
+        responsiveCoachNarrowRef.current = false;
+        const grid = writingGridRef.current;
+        if (grid) {
+          setEditorColumnWidth((currentWidth) => {
+            if (currentWidth === null) {
+              return currentWidth;
+            }
+            const bounds = getWritingEditorWidthBounds(grid);
+            const nextWidth = Math.round(
+              Math.min(bounds.max, Math.max(bounds.min, currentWidth)),
+            );
+            return nextWidth === currentWidth ? currentWidth : nextWidth;
+          });
+        }
+        setResponsiveCoachCollapsed(false);
+        return;
+      }
+      if (responsiveCoachNarrowRef.current) {
+        return;
+      }
+      responsiveCoachNarrowRef.current = true;
+      setResponsiveCoachCollapsed(true);
+      setAssistOpen(false);
+    };
+
+    const observer = new ResizeObserver(([entry]) => {
+      if (entry) {
+        applyResponsiveWidth(entry.contentRect.width);
+      }
+    });
+    observer.observe(page);
+    applyResponsiveWidth(page.getBoundingClientRect().width);
+    return () => {
+      observer.disconnect();
+      responsiveCoachNarrowRef.current = false;
+    };
+  }, [hidden, mode]);
+
+  const handleWritingResizePointerDown = useCallback(
+    (event: PointerEvent<HTMLDivElement>) => {
+      if (event.button !== 0) {
+        return;
+      }
+      const page = writingPageRef.current;
+      const grid = writingGridRef.current;
+      if (
+        !page ||
+        !grid ||
+        page.getBoundingClientRect().width <=
+          WRITING_ASSIST_AUTO_COLLAPSE_WIDTH
+      ) {
+        return;
+      }
+      const bounds = getWritingEditorWidthBounds(grid);
+      const currentWidth = Math.min(
+        bounds.max,
+        Math.max(bounds.min, getWritingEditorColumnWidth(grid)),
+      );
+      writingResizeRef.current = {
+        startX: event.clientX,
+        startWidth: currentWidth,
+      };
+      setWritingResizing(true);
+      event.currentTarget.setPointerCapture(event.pointerId);
+    },
+    [],
+  );
+
+  const handleWritingResizePointerMove = useCallback(
+    (event: PointerEvent<HTMLDivElement>) => {
+      const state = writingResizeRef.current;
+      const grid = writingGridRef.current;
+      if (!state || !grid) {
+        return;
+      }
+      const bounds = getWritingEditorWidthBounds(grid);
+      const nextWidth = Math.round(
+        Math.min(
+          bounds.max,
+          Math.max(
+            bounds.min,
+            state.startWidth + (event.clientX - state.startX),
+          ),
+        ),
+      );
+      setEditorColumnWidth(nextWidth);
+    },
+    [],
+  );
+
+  const handleWritingResizePointerUp = useCallback(
+    (event: PointerEvent<HTMLDivElement>) => {
+      if (!writingResizeRef.current) {
+        return;
+      }
+      writingResizeRef.current = null;
+      setWritingResizing(false);
+      if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+        event.currentTarget.releasePointerCapture(event.pointerId);
+      }
+    },
+    [],
+  );
+
+  const handleWritingResizeKeyDown = useCallback(
+    (event: ReactKeyboardEvent<HTMLDivElement>) => {
+      if (
+        event.key !== "ArrowLeft" &&
+        event.key !== "ArrowRight" &&
+        event.key !== "Home" &&
+        event.key !== "End"
+      ) {
+        return;
+      }
+      const page = writingPageRef.current;
+      const grid = writingGridRef.current;
+      if (
+        !page ||
+        !grid ||
+        page.getBoundingClientRect().width <=
+          WRITING_ASSIST_AUTO_COLLAPSE_WIDTH
+      ) {
+        return;
+      }
+      const bounds = getWritingEditorWidthBounds(grid);
+      const currentWidth = Math.min(
+        bounds.max,
+        Math.max(
+          bounds.min,
+          editorColumnWidth ?? getWritingEditorColumnWidth(grid),
+        ),
+      );
+      const step = event.shiftKey ? 64 : 24;
+      const nextWidth =
+        event.key === "Home"
+          ? bounds.min
+          : event.key === "End"
+            ? bounds.max
+            : currentWidth +
+              (event.key === "ArrowLeft" ? -step : step);
+      event.preventDefault();
+      setEditorColumnWidth(
+        Math.round(Math.min(bounds.max, Math.max(bounds.min, nextWidth))),
+      );
+    },
+    [editorColumnWidth],
+  );
+
   function handleEditorChange(nextSnapshot: WritingSnapshot) {
     const document = activeDocumentRef.current;
     if (!document?.draftSnapshot) {
@@ -650,6 +858,7 @@ function WritingPage({
     action?: WritingSelectionAction;
   } = {}) {
     setSelection(null);
+    setResponsiveCoachCollapsed(false);
     setAgentRequest((request) => ({
       token: request.token + 1,
       intent,
@@ -981,10 +1190,11 @@ function WritingPage({
 
   return (
     <main
+      ref={writingPageRef}
       hidden={hidden}
       className={`rr-writing-page is-${mode}${
         assistOpen ? " has-assist" : ""
-      }`}
+      }${responsiveCoachCollapsed ? " is-responsive-coach-collapsed" : ""}`}
       data-testid="writing-page"
     >
       <header className="rr-writing-document-bar">
@@ -1179,7 +1389,17 @@ function WritingPage({
         className="rr-writing-workspace"
         aria-label="英文写作工作区"
       >
-        <div className="rr-writing-grid">
+        <div
+          ref={writingGridRef}
+          className={`rr-writing-grid${writingResizing ? " is-resizing" : ""}`}
+          style={
+            editorColumnWidth === null
+              ? undefined
+              : ({
+                  "--rr-writing-editor-column-width": `${editorColumnWidth}px`,
+                } as CSSProperties)
+          }
+        >
           <WritingEditor
             ref={editorRef}
             mode={mode}
@@ -1199,6 +1419,24 @@ function WritingPage({
               }
             }}
             onStartAssist={() => openAgent({ intent: "start" })}
+          />
+          <div
+            className="rr-writing-layout-resizer"
+            role="separator"
+            aria-orientation="vertical"
+            aria-label="调整写作编辑区宽度"
+            aria-valuemin={WRITING_EDITOR_MIN_WIDTH}
+            aria-valuemax={WRITING_EDITOR_MAX_WIDTH}
+            aria-valuenow={Math.round(
+              editorColumnWidth ?? WRITING_EDITOR_DEFAULT_WIDTH,
+            )}
+            tabIndex={0}
+            data-testid="writing-layout-resizer"
+            onPointerDown={handleWritingResizePointerDown}
+            onPointerMove={handleWritingResizePointerMove}
+            onPointerUp={handleWritingResizePointerUp}
+            onPointerCancel={handleWritingResizePointerUp}
+            onKeyDown={handleWritingResizeKeyDown}
           />
           <aside
             className="rr-writing-coach-column"

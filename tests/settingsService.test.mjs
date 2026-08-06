@@ -803,6 +803,7 @@ test("正式设置页保持五类设计结构，确定性操作已接线且不�
     "src/appPreferenceSaveCoordinator.ts",
     "utf8",
   );
+  const sidebar = await readFile("src/components/MainSidebar.tsx", "utf8");
   const shell = await readFile("src/components/MainAppShell.tsx", "utf8");
   const rustSettings = await readFile("src-tauri/src/settings.rs", "utf8");
   const deepSeekClient = await readFile("src-tauri/src/deepseek_client.rs", "utf8");
@@ -852,6 +853,7 @@ test("正式设置页保持五类设计结构，确定性操作已接线且不�
   assert.match(page, /恢复默认快捷键/);
   assert.match(page, /onClick=\{refreshBalance\}/);
   assert.match(page, /new BalanceRefreshController/);
+  assert.doesNotMatch(page, /rr-settings-balance-meta/);
   assert.equal([...page.matchAll(/\.replaceCredential\(/g)].length, 2);
   assert.match(page, /visibilitychange/);
   assert.match(balanceRefresh, /5 \* 60 \* 1_000/);
@@ -874,10 +876,20 @@ test("正式设置页保持五类设计结构，确定性操作已接线且不�
   assert.match(page, /隐藏到托盘/);
   assert.match(page, /autostart/i);
   assert.match(page, /closeBehavior/);
-  assert.match(styles, /\.rr-settings-nav\s*\{[\s\S]*?width:\s*160px/);
+  assert.match(styles, /\.rr-settings-nav\s*\{[\s\S]*?width:\s*auto/);
   assert.match(styles, /\.rr-settings-content\s*\{[\s\S]*?width:\s*min\(820px/);
-  assert.match(styles, /\.rr-settings-row\s*\{[\s\S]*?min-height:\s*82px/);
-  assert.match(styles, /\.rr-settings-header h1\s*\{[\s\S]*?font-size:\s*calc\(30px \* var\(--rr-ui-font-scale\)\)/);
+  assert.match(styles, /\.rr-settings-page\s*\{[\s\S]*?--rr-settings-font-scale:\s*calc\(var\(--rr-ui-font-scale\) \* 0\.94\)/);
+  assert.match(styles, /\.rr-settings-row\s*\{[\s\S]*?grid-template-columns:\s*minmax\(0, 1fr\) auto[\s\S]*?min-height:\s*64px/);
+  assert.match(styles, /\.rr-settings-label\s*\{[\s\S]*?font-weight:\s*570/);
+  assert.match(styles, /\.rr-settings-shortcut-name\s*\{[\s\S]*?font-weight:\s*570/);
+  assert.doesNotMatch(styles, /\.rr-settings-stack-control\s*\{[\s\S]*?min-width:\s*280px/);
+  assert.match(styles, /\.rr-settings-path-actions\s*\{/);
+  assert.match(styles, /\.rr-settings-header h1\s*\{[\s\S]*?font-size:\s*calc\(30px \* var\(--rr-settings-font-scale\)\)/);
+  assert.match(styles, /\.rr-settings-button:hover:not\(:disabled\)\s*\{[\s\S]*?box-shadow:\s*none/);
+  assert.doesNotMatch(styles, /\.rr-settings-button:hover:not\(:disabled\)\s*\{[^}]*color:\s*var\(--rr-main-danger\)/);
+  assert.match(page, /function SettingsSelect/);
+  assert.doesNotMatch(page, /<select\b/);
+  assert.match(styles, /\.rr-settings-select-menu\s*\{/);
   assert.match(styles, /\.rr-settings-link-row\s*\{[\s\S]*?border:\s*0 !important/);
   assert.match(styles, /\.rr-settings-link-row\s*\{[\s\S]*?border-radius:\s*0 !important/);
   assert.match(styles, /\.rr-settings-link-row\s*\{[\s\S]*?min-height:\s*54px !important/);
@@ -885,6 +897,27 @@ test("正式设置页保持五类设计结构，确定性操作已接线且不�
   assert.match(styles, /@container \(max-width:\s*900px\)/);
   assert.match(overlayStyles, /\.app-shell\s*\{[\s\S]*?font-size:\s*calc\(16px \* var\(--rr-ui-font-scale\)\)/);
   assert.match(mainStyles, /\.rr-main-app\s*\{[\s\S]*?font-size:\s*calc\(16px \* var\(--rr-ui-font-scale\)\)/);
+  assert.match(sidebar, /className="rr-main-settings-footer"/);
+  assert.match(mainStyles, /\.rr-main-settings-footer\s*\{[\s\S]*?border-top:/);
+  assert.match(mainStyles, /\.rr-main-settings-footer\s*\{[\s\S]*?padding-top:\s*calc\(6px/);
+  assert.match(mainStyles, /\.rr-main-settings\s*\{[\s\S]*?min-height:\s*calc\(34px[\s\S]*?border:\s*0 !important[\s\S]*?border-radius:\s*calc\(9px/);
+  assert.match(mainStyles, /\.rr-main-settings\.is-active\s*\{[\s\S]*?background:\s*var\(--rr-main-surface-subtle\)/);
+  assert.doesNotMatch(mainStyles, /\.rr-main-settings\.is-active::before/);
+  assert.match(shell, /className="rr-main-titlebar-leading"[\s\S]*?className="rr-main-brand-zone"[\s\S]*?\{collapseButton\}/);
+  assert.match(shell, /is-sidebar-peeking/);
+  assert.match(shell, /className="rr-main-sidebar-peek-trigger"/);
+  assert.match(sidebar, /onPointerEnter=\{onPeekEnter\}/);
+  assert.match(sidebar, /onPointerLeave=\{onPeekLeave\}/);
+  assert.match(mainStyles, /\.rr-main-app\.is-sidebar-collapsed\s*\{[\s\S]*?--rr-main-sidebar-width:\s*0px/);
+  assert.match(mainStyles, /\.rr-main-app\.is-sidebar-collapsed \.rr-main-titlebar-leading\s*\{[\s\S]*?width:\s*calc\(36px/);
+  assert.match(mainStyles, /\.rr-main-app\.is-sidebar-collapsed \.rr-main-sidebar\s*\{[\s\S]*?visibility:\s*hidden[\s\S]*?pointer-events:\s*none/);
+  assert.match(mainStyles, /\.rr-main-sidebar-peek-trigger\s*\{[\s\S]*?left:\s*calc\(6px/);
+  assert.match(mainStyles, /\.rr-main-app\.is-sidebar-collapsed\.is-sidebar-peeking \.rr-main-sidebar\s*\{[\s\S]*?position:\s*absolute[\s\S]*?width:\s*var\(--rr-main-sidebar-peek-width\)[\s\S]*?pointer-events:\s*auto/);
+  assert.match(mainStyles, /\.rr-main-sidebar\s*\{[\s\S]*?--rr-main-sidebar-nav-font-size:\s*max\(12px, calc\(var\(--rr-ui-font-size\) - 1px\)\)/);
+  assert.match(mainStyles, /\.rr-main-nav-item\.is-active,[\s\S]*?font-weight:\s*500/);
+  assert.match(mainStyles, /\.rr-main-recent-item\.is-active\s*\{[\s\S]*?font-weight:\s*450/);
+  assert.match(mainStyles, /\.rr-main-recent-item\.is-active::before\s*\{/);
+  assert.match(mainStyles, /\.rr-main-section-label\s*\{[\s\S]*?font-family:\s*var\(--rr-main-sidebar-font-display\)[\s\S]*?letter-spacing:\s*0/);
   assert.match(writingStyles, /\.rr-writing-editor-title\s*\{[\s\S]*?font-family:\s*var\(--rr-learning-font-family\)[\s\S]*?font-size:\s*calc\(34px \* var\(--rr-learning-font-scale\)\)/);
   assert.match(writingStyles, /\.rr-writing-article-editor\s*\{[\s\S]*?font-family:\s*var\(--rr-learning-font-family\)/);
   assert.match(writingStyles, /\.rr-writing-pattern-grid p\s*\{[\s\S]*?font-family:\s*var\(--rr-learning-font-family\)[\s\S]*?var\(--rr-learning-font-scale\)/);

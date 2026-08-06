@@ -211,11 +211,7 @@ function WritingLibrary({
       <div className="rr-writing-library-shell">
         <header className="rr-writing-library-head">
           <div>
-            <p>本地写作归档</p>
             <h1 id="rr-writing-library-heading">写作</h1>
-            <span>
-              未完成的文章从这里继续，完成稿会安静保存在本机；重新打开时仍保留当时的版本和修改记录。
-            </span>
           </div>
           <div className="rr-writing-library-head-actions">
             <input

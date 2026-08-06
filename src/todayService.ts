@@ -49,7 +49,7 @@ export function createTodayLoadingViewModel(now = new Date()): TodayPageViewMode
     summary: "正在读取今天的本地学习记录。",
     localContext: "数据只从本机 ReadRay 存储中读取。",
     actions: [],
-    composerPlaceholder: "和 ReadRay 讨论今天想学什么……",
+    composerPlaceholder: "今天想和 ReadRay 讨论什么？",
   };
 }
 
@@ -107,7 +107,7 @@ export class RepositoryTodayService implements TodayService {
         ? "以上内容来自本机今天的学习记录，不包含复习数量、趋势或高频推断。"
         : "通过 overlay 完成一次解释查询后，记录会自动出现在这里。",
       actions,
-      composerPlaceholder: "和 ReadRay 讨论今天想学什么……",
+      composerPlaceholder: "今天想和 ReadRay 讨论什么？",
     };
   }
 

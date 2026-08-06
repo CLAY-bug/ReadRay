@@ -1,9 +1,10 @@
 import {
   useEffect,
+  useId,
   useRef,
   useState,
   type FormEvent,
-  type ReactNode,
+  type KeyboardEvent as ReactKeyboardEvent,
 } from "react";
 import type { SettingsService } from "../settingsService";
 import type { AppPreferenceSaveOutcome } from "../appPreferenceSaveCoordinator";
@@ -138,15 +139,6 @@ function usageCategory(
   return summary.categories.find((item) => item.category === category)!;
 }
 
-function InfoIcon() {
-  return (
-    <svg viewBox="0 0 24 24" aria-hidden="true">
-      <circle cx="12" cy="12" r="9" />
-      <path d="M12 10.8v5.2M12 7.7h.01" />
-    </svg>
-  );
-}
-
 function FolderIcon() {
   return (
     <svg viewBox="0 0 24 24" aria-hidden="true">
@@ -163,28 +155,33 @@ function ArrowIcon() {
   );
 }
 
+function ChevronDownIcon() {
+  return (
+    <svg viewBox="0 0 24 24" aria-hidden="true">
+      <path d="m6 9 6 6 6-6" />
+    </svg>
+  );
+}
+
 function SettingsHeader({
   title,
-  meta,
   id,
 }: {
   title: string;
-  meta: string;
   id: string;
 }) {
   return (
     <header className="rr-settings-header">
       <h1 id={id}>{title}</h1>
-      <span>{meta}</span>
     </header>
   );
 }
 
-function GroupHeading({ title, meta }: { title: string; meta: string }) {
+function GroupHeading({ title, meta }: { title: string; meta?: string }) {
   return (
     <div className="rr-settings-group-heading">
       <h2>{title}</h2>
-      <p>{meta}</p>
+      {meta ? <p>{meta}</p> : null}
     </div>
   );
 }
@@ -198,11 +195,167 @@ function SettingsCopy({ label, help }: { label: string; help?: string }) {
   );
 }
 
-function FutureNote({ children }: { children: ReactNode }) {
+type SettingsSelectOption = {
+  value: string;
+  label: string;
+};
+
+function SettingsSelect({
+  label,
+  value,
+  options,
+  disabled = false,
+  className,
+  onChange,
+}: {
+  label: string;
+  value: string;
+  options: readonly SettingsSelectOption[];
+  disabled?: boolean;
+  className?: string;
+  onChange: (value: string) => void;
+}) {
+  const selectId = useId();
+  const rootRef = useRef<HTMLDivElement>(null);
+  const buttonRef = useRef<HTMLButtonElement>(null);
+  const [open, setOpen] = useState(false);
+  const selectedIndex = Math.max(
+    0,
+    options.findIndex((option) => option.value === value),
+  );
+  const [activeIndex, setActiveIndex] = useState(selectedIndex);
+  const selectedOption = options[selectedIndex];
+
+  useEffect(() => {
+    if (!open) return;
+
+    const handlePointerDown = (event: PointerEvent) => {
+      if (!rootRef.current?.contains(event.target as Node)) {
+        setOpen(false);
+      }
+    };
+    const handleDocumentKeyDown = (event: globalThis.KeyboardEvent) => {
+      if (event.key === "Escape") {
+        setOpen(false);
+        buttonRef.current?.focus();
+      }
+    };
+
+    document.addEventListener("pointerdown", handlePointerDown);
+    document.addEventListener("keydown", handleDocumentKeyDown);
+    return () => {
+      document.removeEventListener("pointerdown", handlePointerDown);
+      document.removeEventListener("keydown", handleDocumentKeyDown);
+    };
+  }, [open]);
+
+  useEffect(() => {
+    if (!open) {
+      setActiveIndex(selectedIndex);
+    }
+  }, [open, selectedIndex]);
+
+  const chooseOption = (index: number) => {
+    const option = options[index];
+    if (!option) return;
+    onChange(option.value);
+    setOpen(false);
+    buttonRef.current?.focus();
+  };
+
+  const openMenu = () => {
+    if (disabled || options.length === 0) return;
+    setActiveIndex(selectedIndex);
+    setOpen(true);
+  };
+
+  const handleKeyDown = (event: ReactKeyboardEvent<HTMLButtonElement>) => {
+    if (disabled || options.length === 0) return;
+
+    if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+      event.preventDefault();
+      if (!open) {
+        openMenu();
+        return;
+      }
+      const delta = event.key === "ArrowDown" ? 1 : -1;
+      setActiveIndex((index) =>
+        Math.min(Math.max(index + delta, 0), options.length - 1),
+      );
+      return;
+    }
+
+    if (event.key === "Home" || event.key === "End") {
+      event.preventDefault();
+      if (!open) openMenu();
+      setActiveIndex(event.key === "Home" ? 0 : options.length - 1);
+      return;
+    }
+
+    if (event.key === "Enter" || event.key === " ") {
+      event.preventDefault();
+      if (open) {
+        chooseOption(activeIndex);
+      } else {
+        openMenu();
+      }
+    }
+  };
+
   return (
-    <div className="rr-settings-future-note">
-      <InfoIcon />
-      <span>{children}</span>
+    <div
+      ref={rootRef}
+      className={`rr-settings-select-shell${open ? " is-open" : ""}${
+        className ? ` ${className}` : ""
+      }`}
+    >
+      <button
+        ref={buttonRef}
+        className="rr-settings-select"
+        type="button"
+        role="combobox"
+        aria-label={label}
+        aria-controls={`${selectId}-listbox`}
+        aria-expanded={open}
+        aria-haspopup="listbox"
+        aria-activedescendant={
+          open ? `${selectId}-option-${activeIndex}` : undefined
+        }
+        disabled={disabled}
+        onClick={() => (open ? setOpen(false) : openMenu())}
+        onKeyDown={handleKeyDown}
+        title={selectedOption?.label ?? value}
+      >
+        <span className="rr-settings-select-value">
+          {selectedOption?.label ?? value}
+        </span>
+        <ChevronDownIcon />
+      </button>
+      {open ? (
+        <div
+          id={`${selectId}-listbox`}
+          className="rr-settings-select-menu"
+          role="listbox"
+          aria-label={label}
+        >
+          {options.map((option, index) => (
+            <button
+              id={`${selectId}-option-${index}`}
+              className={`rr-settings-select-option${
+                index === activeIndex ? " is-active" : ""
+              }${option.value === value ? " is-selected" : ""}`}
+              key={option.value}
+              type="button"
+              role="option"
+              aria-selected={option.value === value}
+              onMouseEnter={() => setActiveIndex(index)}
+              onClick={() => chooseOption(index)}
+            >
+              {option.label}
+            </button>
+          ))}
+        </div>
+      ) : null}
     </div>
   );
 }
@@ -1052,15 +1205,12 @@ function SettingsPage({
     );
   }
 
-  const sourceCopy =
-    snapshot.apiKeySource === "credential"
-      ? "已安全保存在当前 Windows 用户的凭据管理器中。"
-      : snapshot.apiKeySource === "environment"
-        ? "当前由开发环境配置提供；更新后会改用 Windows 凭据管理器。"
-        : "未配置时仍可查看本地内容，AI 功能会引导回到这里。";
   const balanceStatus = balanceState.status;
   const balance = balanceState.value;
-  const balanceError = balanceState.error;
+  const validationMessage =
+    operation === "saving"
+      ? "正在验证 DeepSeek 连接，成功后才会替换现有配置…"
+      : operationError ?? operationMessage;
   const selectedTheme = themeController.snapshot.themes.find(
     (theme) => theme.manifest.id === themeController.snapshot.currentThemeId,
   );
@@ -1093,7 +1243,6 @@ function SettingsPage({
                 <SettingsHeader
                   id="rr-settings-general-heading"
                   title="通用"
-                  meta="语言、快捷操作与桌面行为"
                 />
 
                 <div className="rr-settings-group">
@@ -1102,36 +1251,36 @@ function SettingsPage({
                     <div className="rr-settings-row">
                       <SettingsCopy label="界面语言" />
                       <div className="rr-settings-stack-control">
-                        <select
-                          className="rr-settings-select rr-settings-language-select"
-                          aria-label="界面语言"
+                        <SettingsSelect
+                          className="rr-settings-language-select"
+                          label="界面语言"
                           value="zh-CN"
+                          options={[{ value: "zh-CN", label: "简体中文" }]}
                           disabled
-                        >
-                          <option value="zh-CN">简体中文</option>
-                        </select>
+                          onChange={() => undefined}
+                        />
                       </div>
                     </div>
                     <div className="rr-settings-row">
                       <SettingsCopy
                         label="发送快捷键"
-                        help="适用于“今天”、完整对话、overlay Quick AI 和写作辅导。"
                       />
                       <div className="rr-settings-stack-control">
-                        <select
-                          className="rr-settings-select rr-settings-send-select"
-                          aria-label="发送快捷键"
+                        <SettingsSelect
+                          className="rr-settings-send-select"
+                          label="发送快捷键"
                           value={snapshot.preferences.sendShortcut}
+                          options={[
+                            { value: "enter", label: "Enter 发送" },
+                            { value: "ctrlEnter", label: "Ctrl+Enter 发送" },
+                          ]}
                           disabled={preferenceStatus === "loading"}
-                          onChange={(event) =>
+                          onChange={(value) =>
                             patchPreferences({
-                              sendShortcut: event.target.value as AppPreferences["sendShortcut"],
+                              sendShortcut: value as AppPreferences["sendShortcut"],
                             })
                           }
-                        >
-                          <option value="enter">Enter 发送</option>
-                          <option value="ctrlEnter">Ctrl+Enter 发送</option>
-                        </select>
+                        />
                         <div className="rr-settings-status-line">
                           {snapshot.preferences.sendShortcut === "enter"
                             ? "Enter 发送，Shift+Enter 换行"
@@ -1200,13 +1349,10 @@ function SettingsPage({
                 </div>
 
                 <div className="rr-settings-group">
-                  <GroupHeading title="启动与关闭" meta="Windows 实际状态与安全退出" />
+                  <GroupHeading title="启动与关闭" />
                   <div className="rr-settings-panel">
                     <div className="rr-settings-row">
-                      <SettingsCopy
-                        label="开机启动"
-                        help="开机启动时只运行托盘和全局快捷键，不显示窗口。"
-                      />
+                      <SettingsCopy label="开机启动" />
                       <div className="rr-settings-stack-control">
                         <div className="rr-settings-control">
                           <button
@@ -1231,23 +1377,21 @@ function SettingsPage({
                       </div>
                     </div>
                     <div className="rr-settings-row">
-                      <SettingsCopy
-                        label="关闭主窗口时"
-                        help="选择退出时会先静默保存设置和写作草稿。"
-                      />
+                      <SettingsCopy label="关闭主窗口时" />
                       <div className="rr-settings-stack-control">
-                        <select
-                          className="rr-settings-select rr-settings-close-select"
-                          aria-label="关闭主窗口时"
+                        <SettingsSelect
+                          className="rr-settings-close-select"
+                          label="关闭主窗口时"
                           value={snapshot.preferences.closeBehavior}
+                          options={[
+                            { value: "hideToTray", label: "隐藏到托盘" },
+                            { value: "exit", label: "退出 ReadRay" },
+                          ]}
                           disabled={preferenceStatus === "loading"}
-                          onChange={(event) => patchPreferences({
-                            closeBehavior: event.target.value as AppPreferences["closeBehavior"],
+                          onChange={(value) => patchPreferences({
+                            closeBehavior: value as AppPreferences["closeBehavior"],
                           })}
-                        >
-                          <option value="hideToTray">隐藏到托盘</option>
-                          <option value="exit">退出 ReadRay</option>
-                        </select>
+                        />
                       </div>
                     </div>
                   </div>
@@ -1261,11 +1405,10 @@ function SettingsPage({
                 <SettingsHeader
                   id="rr-settings-appearance-heading"
                   title="外观"
-                  meta="主题、字体与字号"
                 />
 
                 <div className="rr-settings-group">
-                  <GroupHeading title="主题" meta="本地安全主题包" />
+                  <GroupHeading title="主题" />
                   <div className="rr-settings-panel">
                     <div className="rr-settings-row">
                       <SettingsCopy
@@ -1276,39 +1419,37 @@ function SettingsPage({
                       />
                       <div className="rr-settings-stack-control">
                         <div className="rr-settings-appearance-actions">
-                          <select
-                            className="rr-settings-select rr-settings-theme-select"
-                            aria-label="主题"
+                          <SettingsSelect
+                            className="rr-settings-theme-select"
+                            label="主题"
                             value={themeController.snapshot.currentThemeId}
+                            options={themeController.snapshot.themes.map((theme) => ({
+                              value: theme.manifest.id,
+                              label: theme.manifest.name,
+                            }))}
                             disabled={themeBusy || themeController.status === "error"}
-                            onChange={(event) => selectTheme(event.target.value)}
-                          >
-                            {themeController.snapshot.themes.map((theme) => (
-                              <option key={theme.manifest.id} value={theme.manifest.id}>
-                                {theme.manifest.name}
-                              </option>
-                            ))}
-                          </select>
-                          <select
-                            className="rr-settings-select rr-settings-theme-mode-select"
-                            aria-label="主题模式"
+                            onChange={(value) => selectTheme(value)}
+                          />
+                          <SettingsSelect
+                            className="rr-settings-theme-mode-select"
+                            label="主题模式"
                             value={themeController.snapshot.currentMode}
+                            options={
+                              selectedTheme?.manifest.modes.map((mode) => ({
+                                value: mode,
+                                label: mode === "light" ? "浅色" : "深色",
+                              })) ?? []
+                            }
                             disabled={
                               themeBusy ||
                               themeController.status === "error" ||
                               (selectedTheme?.manifest.modes.length ?? 0) <= 1
                             }
-                            onChange={(event) => selectTheme(
+                            onChange={(value) => selectTheme(
                               themeController.snapshot.currentThemeId,
-                              event.target.value as ThemeMode,
+                              value as ThemeMode,
                             )}
-                          >
-                            {selectedTheme?.manifest.modes.map((mode) => (
-                              <option key={mode} value={mode}>
-                                {mode === "light" ? "浅色" : "深色"}
-                              </option>
-                            ))}
-                          </select>
+                          />
                         </div>
                       </div>
                     </div>
@@ -1343,20 +1484,21 @@ function SettingsPage({
                   <div className="rr-settings-panel">
                     <div className="rr-settings-row">
                       <SettingsCopy label="界面字体" />
-                      <select
-                        className="rr-settings-select rr-settings-font-field rr-settings-ui-font"
-                        aria-label="界面字体"
+                      <SettingsSelect
+                        className="rr-settings-font-field rr-settings-ui-font"
+                        label="界面字体"
                         value={snapshot.preferences.uiFont}
+                        options={[
+                          { value: "geistSourceHanSans", label: "Geist + 思源黑体" },
+                          { value: "sourceHanSans", label: "思源黑体" },
+                        ]}
                         disabled={preferenceStatus === "loading"}
-                        onChange={(event) =>
+                        onChange={(value) =>
                           patchPreferences({
-                            uiFont: event.target.value as AppPreferences["uiFont"],
+                            uiFont: value as AppPreferences["uiFont"],
                           })
                         }
-                      >
-                        <option value="geistSourceHanSans">Geist + 思源黑体</option>
-                        <option value="sourceHanSans">思源黑体</option>
-                      </select>
+                      />
                     </div>
                     <div className="rr-settings-row">
                       <SettingsCopy label="界面字号" />
@@ -1409,22 +1551,24 @@ function SettingsPage({
                     </div>
                     <div className="rr-settings-row">
                       <SettingsCopy label="学习内容字体" />
-                      <select
-                        className="rr-settings-select rr-settings-font-field rr-settings-learning-font"
-                        aria-label="学习内容字体"
+                      <SettingsSelect
+                        className="rr-settings-font-field rr-settings-learning-font"
+                        label="学习内容字体"
                         value={snapshot.preferences.learningFont}
+                        options={[
+                          {
+                            value: "newsreaderSourceHanSerif",
+                            label: "Newsreader + 思源宋体",
+                          },
+                          { value: "sourceHanSerif", label: "思源宋体" },
+                        ]}
                         disabled={preferenceStatus === "loading"}
-                        onChange={(event) =>
+                        onChange={(value) =>
                           patchPreferences({
-                            learningFont: event.target.value as AppPreferences["learningFont"],
+                            learningFont: value as AppPreferences["learningFont"],
                           })
                         }
-                      >
-                        <option value="newsreaderSourceHanSerif">
-                          Newsreader + 思源宋体
-                        </option>
-                        <option value="sourceHanSerif">思源宋体</option>
-                      </select>
+                      />
                     </div>
                     <div className="rr-settings-row">
                       <SettingsCopy label="学习内容字号" />
@@ -1504,7 +1648,6 @@ function SettingsPage({
                 <SettingsHeader
                   id="rr-settings-ai-heading"
                   title="AI 服务"
-                  meta="当前 provider · DeepSeek"
                 />
 
                 <div className="rr-settings-provider-head">
@@ -1512,7 +1655,6 @@ function SettingsPage({
                     <span className="rr-settings-provider-logo">D</span>
                     <div>
                       <strong>DeepSeek</strong>
-                      <span>ReadRay 当前正式 AI 服务</span>
                     </div>
                   </div>
                   <span
@@ -1529,7 +1671,6 @@ function SettingsPage({
                   <div className="rr-settings-key-form">
                     <div className="rr-settings-key-copy">
                       <strong>API Key</strong>
-                      <span>{sourceCopy}</span>
                     </div>
                     {editingKey ? (
                       <form className="rr-settings-key-actions" onSubmit={saveApiKey}>
@@ -1599,38 +1740,34 @@ function SettingsPage({
                       </div>
                     )}
                   </div>
-                  <div
-                    className={`rr-settings-validation${
-                      operation === "saving"
-                        ? " is-loading"
-                        : operationError
-                          ? " is-error"
-                          : operationMessage
-                            ? " is-success"
-                            : ""
-                    }`}
-                    aria-live="polite"
-                  >
-                    {operation === "saving"
-                      ? "正在验证 DeepSeek 连接，成功后才会替换现有配置…"
-                      : operationError ?? operationMessage ??
-                        "Key 只在本机安全存储；不会写入前端持久化或普通日志。"}
-                  </div>
+                  {validationMessage ? (
+                    <div
+                      className={`rr-settings-validation${
+                        operation === "saving"
+                          ? " is-loading"
+                          : operationError
+                            ? " is-error"
+                            : operationMessage
+                              ? " is-success"
+                              : ""
+                      }`}
+                      aria-live="polite"
+                    >
+                      {validationMessage}
+                    </div>
+                  ) : null}
                 </div>
 
                 <div className="rr-settings-row rr-settings-model-row">
-                  <SettingsCopy
-                    label="模型"
-                    help="只显示已完成 ReadRay 兼容验证的 DeepSeek 模型；当前验证模型为默认值。"
-                  />
-                  <select
-                    className="rr-settings-select rr-settings-model-select"
-                    aria-label="DeepSeek 模型"
+                  <SettingsCopy label="模型" />
+                  <SettingsSelect
+                    className="rr-settings-model-select"
+                    label="DeepSeek 模型"
                     value={snapshot.model}
+                    options={[{ value: snapshot.model, label: snapshot.model }]}
                     disabled
-                  >
-                    <option value={snapshot.model}>{snapshot.model}</option>
-                  </select>
+                    onChange={() => undefined}
+                  />
                 </div>
 
                 <div className="rr-settings-balance-card">
@@ -1659,28 +1796,6 @@ function SettingsPage({
                                 : "正在准备查询…"}
                       </div>
                     )}
-                    <div
-                      className={`rr-settings-balance-meta${
-                        balanceStatus === "error" ? " is-error" : ""
-                      }`}
-                      role={balanceStatus === "error" ? "alert" : undefined}
-                    >
-                      {!snapshot.apiKeyConfigured
-                        ? "余额只在配置 Key 后查询，不会在本地持久化。"
-                        : balanceStatus === "error"
-                          ? balance
-                            ? `更新失败：${errorMessage(balanceError)}；已保留上次成功余额。`
-                            : `查询失败：${errorMessage(balanceError)}`
-                          : balanceStatus === "loading"
-                            ? balance
-                              ? "正在更新官方实时余额；上次结果暂时保留。"
-                              : "正在查询官方实时余额…"
-                          : balanceStatus === "success"
-                            ? balance?.isAvailable
-                              ? "账户当前可用于 DeepSeek API 调用。"
-                              : "账户余额不足，当前不可用于 API 调用。"
-                            : "进入 AI 服务后会自动查询；结果不会持久化。"}
-                    </div>
                   </div>
                   <button
                     className="rr-settings-button"
@@ -1783,18 +1898,8 @@ function SettingsPage({
                         </button>
                       </div>
                     ) : null}
-                    <p className="rr-settings-usage-note">
-                      仅统计本机 ReadRay 自本功能启用后收到合法 usage 的解释查询、Quick
-                      AI 与写作请求；不补造历史、不估算费用，也不统计同一 API Key
-                      在其他应用中的调用。
-                    </p>
                   </div>
                 </div>
-
-                <FutureNote>
-                  <strong>更多 AI 服务后续支持。</strong> 当前不展示其他 provider
-                  名称，也不提供无效的“添加服务”按钮。
-                </FutureNote>
               </section>
             ) : null}
 
@@ -1803,23 +1908,19 @@ function SettingsPage({
                 <SettingsHeader
                   id="rr-settings-data-heading"
                   title="本地数据"
-                  meta="本地数据优先"
                 />
 
                 <div className="rr-settings-group">
-                  <GroupHeading title="数据目录" meta="运行时显示完整路径" />
+                  <GroupHeading title="数据目录" />
                   <div className="rr-settings-panel">
                     <div className="rr-settings-row">
-                      <SettingsCopy
-                        label="ReadRay 数据目录"
-                        help="包含学习记录、对话、写作和应用设置。"
-                      />
+                      <SettingsCopy label="ReadRay 数据目录" />
                       <div className="rr-settings-stack-control">
-                        <div className="rr-settings-path-box" title={snapshot.appDataDirectory}>
-                          <FolderIcon />
-                          <span>{snapshot.appDataDirectory}</span>
-                        </div>
-                        <div className="rr-settings-control">
+                        <div className="rr-settings-path-actions">
+                          <div className="rr-settings-path-box" title={snapshot.appDataDirectory}>
+                            <FolderIcon />
+                            <span>{snapshot.appDataDirectory}</span>
+                          </div>
                           <button
                             className="rr-settings-button"
                             type="button"
@@ -1830,7 +1931,7 @@ function SettingsPage({
                               ? "正在打开…"
                               : directoryStatus === "error"
                                 ? "重试打开"
-                                : "打开数据目录"}
+                              : "打开数据目录"}
                           </button>
                         </div>
                         {directoryMessage ? (
@@ -1846,10 +1947,7 @@ function SettingsPage({
                       </div>
                     </div>
                     <div className="rr-settings-row">
-                      <SettingsCopy
-                        label="数据概览"
-                        help="正式页面从本地数据库读取，不从前端推算。"
-                      />
+                      <SettingsCopy label="数据概览" />
                       <div className="rr-settings-counts">
                         <div><span>学习记录</span><strong>{snapshot.learningRecordCount}</strong></div>
                         <div><span>对话</span><strong>{snapshot.conversationCount}</strong></div>
@@ -1860,15 +1958,13 @@ function SettingsPage({
                 </div>
 
                 <div className="rr-settings-group">
-                  <GroupHeading title="备份" meta="包含全部 ReadRay 数据" />
+                  <GroupHeading title="备份" />
                   <div className="rr-settings-panel">
                     <div className="rr-settings-backup-panel">
                       <div className="rr-settings-backup-head">
                         <div>
                           <strong>备份全部 ReadRay 数据</strong>
-                          <p>
-                            创建运行期间一致的 SQLite 快照，包含学习记录、对话、写作和数据库内的非敏感设置；不包含 API Key。
-                          </p>
+                          <p>不包含 API Key。</p>
                         </div>
                         <button
                           className="rr-settings-button is-primary"
@@ -1898,10 +1994,6 @@ function SettingsPage({
                   </div>
                 </div>
 
-                <FutureNote>
-                  <strong>本阶段不开放：</strong>恢复备份、清空全部数据和全量结构化导出。解释自动保存到记忆是固定能力，不提供关闭开关。
-                </FutureNote>
-
               </section>
             ) : null}
 
@@ -1910,7 +2002,6 @@ function SettingsPage({
                 <SettingsHeader
                   id="rr-settings-about-heading"
                   title="关于"
-                  meta="版本信息"
                 />
                 <div className="rr-settings-about">
                   <span className="rr-settings-about-mark">R</span>

@@ -35,6 +35,8 @@ type MainSidebarProps = {
   ) => void;
   onViewAllConversations: () => void;
   onRecentRetry: () => void;
+  onPeekEnter?: () => void;
+  onPeekLeave?: () => void;
 };
 
 type RecentConversationTitleProps = {
@@ -88,6 +90,8 @@ function MainSidebar({
   onRecentConversationContextMenu,
   onViewAllConversations,
   onRecentRetry,
+  onPeekEnter,
+  onPeekLeave,
 }: MainSidebarProps) {
   const settingsActive = activeNavigationId === "settings";
   const dragState = useRef<{ startX: number; startWidth: number } | null>(null);
@@ -116,7 +120,12 @@ function MainSidebar({
   }, []);
 
   return (
-    <aside className="rr-main-sidebar" aria-label="全局导航">
+    <aside
+      className="rr-main-sidebar"
+      aria-label="全局导航"
+      onPointerEnter={onPeekEnter}
+      onPointerLeave={onPeekLeave}
+    >
       <button
         className="rr-main-new-chat"
         type="button"
@@ -191,17 +200,19 @@ function MainSidebar({
         </button>
       </section>
 
-      <button
-        className={`rr-main-settings${settingsActive ? " is-active" : ""}`}
-        type="button"
-        title="设置"
-        aria-current={settingsActive ? "page" : undefined}
-        aria-label={collapsed ? "设置" : undefined}
-        onClick={() => onNavigate("settings")}
-      >
-        <span className="rr-main-nav-icon"><MainAppIcon name="settings" /></span>
-        <span className="rr-main-nav-label">设置</span>
-      </button>
+      <div className="rr-main-settings-footer">
+        <button
+          className={`rr-main-settings${settingsActive ? " is-active" : ""}`}
+          type="button"
+          title="设置"
+          aria-current={settingsActive ? "page" : undefined}
+          aria-label={collapsed ? "设置" : undefined}
+          onClick={() => onNavigate("settings")}
+        >
+          <span className="rr-main-nav-icon"><MainAppIcon name="settings" /></span>
+          <span className="rr-main-nav-label">设置</span>
+        </button>
+      </div>
 
       <div
         className="rr-main-sidebar-resizer"

@@ -126,7 +126,17 @@ function TodayPage({
 
       <section className="rr-main-composer-area" aria-label="与 ReadRay 对话">
         <div className="rr-main-composer-inner">
-          <form className="rr-main-composer" onSubmit={submit}>
+          <form
+            className="rr-main-composer"
+            onSubmit={submit}
+            onClick={(event) => {
+              const target = event.target;
+              if (target instanceof Element && target.closest("button")) {
+                return;
+              }
+              inputRef.current?.focus();
+            }}
+          >
             <textarea
               ref={inputRef}
               rows={1}
@@ -151,9 +161,16 @@ function TodayPage({
                 }
               }}
             />
-            <button className="rr-main-send" type="submit" aria-label="发送并开始持续对话">
-              <MainAppIcon name="send" />
-            </button>
+            <div className="rr-main-composer-actions">
+              <button
+                className="rr-main-send"
+                type="submit"
+                aria-label="发送并开始持续对话"
+                disabled={!draft.trim()}
+              >
+                <MainAppIcon name="send-up" />
+              </button>
+            </div>
           </form>
         </div>
       </section>

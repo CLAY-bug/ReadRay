@@ -40,5 +40,5 @@ export const previewTodayPage: TodayPageViewModel = {
       recordId: "instruction",
     },
   ],
-  composerPlaceholder: "和 ReadRay 讨论今天想学什么……",
+  composerPlaceholder: "今天想和 ReadRay 讨论什么？",
 };

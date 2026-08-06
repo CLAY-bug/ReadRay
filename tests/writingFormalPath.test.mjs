@@ -51,3 +51,56 @@ test("写作辅导持续展开问答并让提问框按内容增高", async () =>
   assert.match(styles, /\.rr-writing-agent-input textarea[\s\S]*overflow-y: hidden/);
   assert.match(styles, /textarea::-webkit-scrollbar[\s\S]*width: 0/);
 });
+
+test("写作页在窄容器进入覆盖层断点时自动收起辅导区", async () => {
+  const page = await readFile("src/components/WritingPage.tsx", "utf8");
+  const styles = await readFile("src/styles/writing-page.css", "utf8");
+
+  assert.match(page, /WRITING_ASSIST_AUTO_COLLAPSE_WIDTH = 1120/);
+  assert.match(page, /new ResizeObserver\(/);
+  assert.match(page, /setResponsiveCoachCollapsed\(true\)/);
+  assert.match(page, /setAssistOpen\(false\)/);
+  assert.match(page, /ref=\{writingPageRef\}/);
+  assert.match(
+    page,
+    /setResponsiveCoachCollapsed\(false\)[\s\S]*?setAgentRequest/,
+  );
+  assert.match(
+    styles,
+    /@container \(max-width: 1120px\)[\s\S]*?\.rr-writing-page\.is-responsive-coach-collapsed \.rr-writing-coach-column[\s\S]*?visibility: hidden/,
+  );
+});
+
+test("宽窗口写作页提供受边界约束的编辑区拖拽分隔条", async () => {
+  const page = await readFile("src/components/WritingPage.tsx", "utf8");
+  const styles = await readFile("src/styles/writing-page.css", "utf8");
+
+  assert.match(page, /WRITING_EDITOR_MIN_WIDTH = 520/);
+  assert.match(page, /WRITING_EDITOR_MAX_WIDTH = 960/);
+  assert.match(page, /data-testid="writing-layout-resizer"/);
+  assert.match(page, /setPointerCapture\(event\.pointerId\)/);
+  assert.match(page, /aria-label="调整写作编辑区宽度"/);
+  assert.match(styles, /--rr-writing-editor-column-width: 736px/);
+  assert.match(
+    styles,
+    /grid-template-columns:[\s\S]*var\(--rr-writing-editor-column-width\)/,
+  );
+  assert.match(styles, /\.rr-writing-layout-resizer[\s\S]*justify-self: end/);
+  assert.match(styles, /\.rr-writing-layout-resizer[\s\S]*right: -3px/);
+  assert.match(
+    styles,
+    /@container \(max-width: 1120px\)[\s\S]*?\.rr-writing-layout-resizer[\s\S]*?display: none/,
+  );
+});
+
+test("写作文章库标题区只保留必要的页面标题", async () => {
+  const library = await readFile("src/components/WritingLibrary.tsx", "utf8");
+  const styles = await readFile("src/styles/writing-page.css", "utf8");
+
+  assert.match(library, /<h1 id="rr-writing-library-heading">写作<\/h1>/);
+  assert.doesNotMatch(library, /本地写作归档|未完成的文章从这里继续/);
+  assert.doesNotMatch(
+    styles,
+    /\.rr-writing-library-head > div:first-child > (?:p|span)\s*\{/,
+  );
+});

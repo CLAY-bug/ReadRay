@@ -174,6 +174,50 @@ function MainAppShell({
   >("loading");
   const [recentError, setRecentError] = useState<string>();
   const [recentRetryToken, setRecentRetryToken] = useState(0);
+  const [sidebarPeekOpen, setSidebarPeekOpen] = useState(false);
+  const sidebarPeekCloseTimerRef = useRef<number | null>(null);
+
+  function clearSidebarPeekCloseTimer() {
+    if (sidebarPeekCloseTimerRef.current === null) {
+      return;
+    }
+
+    window.clearTimeout(sidebarPeekCloseTimerRef.current);
+    sidebarPeekCloseTimerRef.current = null;
+  }
+
+  function toggleSidebar() {
+    clearSidebarPeekCloseTimer();
+    setSidebarPeekOpen(false);
+    setSidebarCollapsed((collapsed) => !collapsed);
+  }
+
+  function handleSidebarPeekEnter() {
+    if (!sidebarCollapsed) {
+      return;
+    }
+
+    clearSidebarPeekCloseTimer();
+    setSidebarPeekOpen(true);
+  }
+
+  function handleSidebarPeekLeave() {
+    if (!sidebarCollapsed) {
+      return;
+    }
+
+    clearSidebarPeekCloseTimer();
+    sidebarPeekCloseTimerRef.current = window.setTimeout(() => {
+      sidebarPeekCloseTimerRef.current = null;
+      setSidebarPeekOpen(false);
+    }, 180);
+  }
+
+  useEffect(() => {
+    return () => {
+      clearSidebarPeekCloseTimer();
+    };
+  }, []);
 
   useEffect(() => {
     let ignore = false;
@@ -236,7 +280,7 @@ function MainAppShell({
     function handleShortcut(event: KeyboardEvent) {
       if (event.ctrlKey && event.key.toLowerCase() === "b") {
         event.preventDefault();
-        setSidebarCollapsed((collapsed) => !collapsed);
+        toggleSidebar();
       }
     }
 
@@ -422,7 +466,7 @@ function MainAppShell({
       aria-label={sidebarCollapsed ? "展开左侧栏" : "折叠左侧栏"}
       aria-expanded={!sidebarCollapsed}
       title={`${sidebarCollapsed ? "展开" : "折叠"}左侧栏（Ctrl+B）`}
-      onClick={() => setSidebarCollapsed((collapsed) => !collapsed)}
+      onClick={toggleSidebar}
     >
       <MainAppIcon name="panel" />
     </button>
@@ -445,12 +489,17 @@ function MainAppShell({
       inert={interactionBlocked ? true : undefined}
       aria-busy={interactionBlocked || undefined}
       className={`rr-main-app${sidebarCollapsed ? " is-sidebar-collapsed" : ""}${
-        activePageId === "conversation" ? " is-conversation-page" : ""
-      }`}
+        sidebarCollapsed && sidebarPeekOpen ? " is-sidebar-peeking" : ""
+      }${activePageId === "conversation" ? " is-conversation-page" : ""}`}
       style={
-        sidebarCollapsed || sidebarWidth === null
+        sidebarWidth === null
           ? undefined
-          : ({ "--rr-main-sidebar-width": `${sidebarWidth}px` } as CSSProperties)
+          : ({
+              "--rr-main-sidebar-width": sidebarCollapsed
+                ? "0px"
+                : `${sidebarWidth}px`,
+              "--rr-main-sidebar-peek-width": `${sidebarWidth}px`,
+            } as CSSProperties)
       }
     >
       {resizeDirections.map((direction) => (
@@ -464,14 +513,24 @@ function MainAppShell({
           }}
         />
       ))}
+      {sidebarCollapsed && (
+        <div
+          className="rr-main-sidebar-peek-trigger"
+          aria-hidden="true"
+          onPointerEnter={handleSidebarPeekEnter}
+          onPointerLeave={handleSidebarPeekLeave}
+        />
+      )}
       <header
         className="rr-main-titlebar"
         aria-label="ReadRay 窗口标题栏"
         onMouseDown={handleTitlebarMouseDown}
       >
-        <div className="rr-main-brand-zone">
-          {!sidebarCollapsed && <span className="rr-main-brand-mark">R</span>}
-          {!sidebarCollapsed && <span className="rr-main-brand-name">ReadRay</span>}
+        <div className="rr-main-titlebar-leading">
+          <div className="rr-main-brand-zone">
+            {!sidebarCollapsed && <span className="rr-main-brand-mark">R</span>}
+            {!sidebarCollapsed && <span className="rr-main-brand-name">ReadRay</span>}
+          </div>
           {collapseButton}
         </div>
         <div className="rr-main-drag-zone">
@@ -529,6 +588,8 @@ function MainAppShell({
           onRecentConversationContextMenu={handleConversationContextMenu}
           onViewAllConversations={handleViewAllConversations}
           onRecentRetry={() => setRecentRetryToken((token) => token + 1)}
+          onPeekEnter={handleSidebarPeekEnter}
+          onPeekLeave={handleSidebarPeekLeave}
         />
         {activePageId === "conversation" ? (
           conversationService ? (
