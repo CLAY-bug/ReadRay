@@ -129,6 +129,15 @@ test("主应用稳定会话身份回调并复用统一 composer", async () => {
     conversationStyles,
     /\.rr-conversation-assistant-copy \{[\s\S]*?font-size: calc\(var\(--rr-learning-font-size\) - 2px\);[\s\S]*?line-height: 1\.6/,
   );
+  assert.match(conversationPage, /function ConversationGenerationIndicator/);
+  assert.match(conversationPage, /className="rr-conversation-pixel-grid"/);
+  assert.match(conversationPage, /onStop=\{canStop \? onStop : undefined\}/);
+  assert.match(conversationStyles, /\.rr-conversation-generation-indicator \{/);
+  assert.match(conversationStyles, /@keyframes rr-conversation-pixel-on/);
+  assert.match(conversationStyles, /@keyframes rr-conversation-shimmer/);
+  assert.match(conversationStyles, /prefers-reduced-motion/);
+  assert.doesNotMatch(conversationPage, /rr-conversation-stream-line/);
+  assert.doesNotMatch(conversationStyles, /rr-conversation-stream-line/);
   assert.doesNotMatch(conversationPage, /rr-conversation-composer/);
   assert.doesNotMatch(conversationStyles, /rr-conversation-composer/);
 });

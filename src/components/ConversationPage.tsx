@@ -62,6 +62,11 @@ type GenerationState = {
 };
 
 const USER_CLAMP_LINES = 5;
+const CONVERSATION_PIXEL_DELAYS = [
+  90, 180, 270,
+  0, 90, 180,
+  90, 180, 270,
+];
 
 function resizeComposer(input: HTMLTextAreaElement) {
   input.style.height = "auto";
@@ -229,6 +234,62 @@ function EmptyConversation() {
   );
 }
 
+function formatGenerationElapsed(elapsedMs: number) {
+  const totalSeconds = Math.max(0, elapsedMs) / 1000;
+  if (totalSeconds < 60) {
+    return `${totalSeconds.toFixed(1)}s`;
+  }
+  return `${Math.floor(totalSeconds / 60)}m ${(totalSeconds % 60).toFixed(1)}s`;
+}
+
+function ConversationGenerationIndicator({
+  onStop,
+}: {
+  onStop?: () => void;
+}) {
+  const [elapsedMs, setElapsedMs] = useState(0);
+
+  useEffect(() => {
+    const startedAt = Date.now();
+    const updateElapsed = () => setElapsedMs(Date.now() - startedAt);
+    updateElapsed();
+    const timer = window.setInterval(updateElapsed, 100);
+    return () => window.clearInterval(timer);
+  }, []);
+
+  return (
+    <div className="rr-conversation-generation-indicator">
+      <span className="rr-conversation-pixel-grid" aria-hidden="true">
+        {CONVERSATION_PIXEL_DELAYS.map((delay, index) => (
+          <span
+            className="rr-conversation-pixel"
+            key={index}
+            style={{ animationDelay: `${delay}ms` }}
+          />
+        ))}
+      </span>
+      <span className="rr-conversation-generation-label" aria-live="polite">
+        正在生成
+      </span>
+      <span
+        className="rr-conversation-generation-elapsed"
+        aria-hidden="true"
+      >
+        {formatGenerationElapsed(elapsedMs)}
+      </span>
+      {onStop ? (
+        <button
+          className="rr-conversation-stop-button"
+          type="button"
+          onClick={onStop}
+        >
+          停止生成
+        </button>
+      ) : null}
+    </div>
+  );
+}
+
 function GenerationMessage({
   state,
   canStop,
@@ -266,21 +327,11 @@ function GenerationMessage({
   return (
     <article className="rr-conversation-message is-assistant">
       <div className="rr-conversation-assistant-copy">
+        {state.text ? <p>{state.text}</p> : null}
         {state.phase === "generating" ? (
-          <div className="rr-conversation-answer-kicker">正在生成</div>
-        ) : null}
-        <p>{state.text}</p>
-        {state.phase === "generating" && canStop ? (
-          <div className="rr-conversation-generation-row">
-            <span className="rr-conversation-stream-line" />
-            <button
-              className="rr-conversation-stop-button"
-              type="button"
-              onClick={onStop}
-            >
-              停止生成
-            </button>
-          </div>
+          <ConversationGenerationIndicator
+            onStop={canStop ? onStop : undefined}
+          />
         ) : state.phase === "stopped" ? (
           <div className="rr-conversation-generation-row">
             <span className="rr-conversation-message-meta">已停止</span>
