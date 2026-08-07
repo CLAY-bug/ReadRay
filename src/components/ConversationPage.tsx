@@ -27,6 +27,7 @@ import {
 } from "../conversationViewModel";
 import { deliverConversationExport } from "../conversationExportDelivery";
 import MainAppIcon from "./MainAppIcon";
+import { MarkdownContent } from "./MarkdownContent";
 import {
   shouldSendMultilineMessage,
   type SendShortcut,
@@ -48,7 +49,7 @@ type ConversationPageProps = {
 };
 
 type GenerationState = {
-  phase: "generating" | "complete" | "stopped" | "failed";
+  phase: "generating" | "complete" | "stopped" | "truncated" | "failed";
   prompt: string;
   text: string;
   errorMessage?: string;
@@ -172,38 +173,42 @@ function AssistantMessage({
   return (
     <article className="rr-conversation-message is-assistant">
       <div className="rr-conversation-assistant-copy">
-        {message.blocks.map((block, index) => {
-          const key = `${block.kind}-${index}`;
-          if (block.kind === "list") {
+        {message.markdown !== undefined ? (
+          <MarkdownContent text={message.markdown} />
+        ) : (
+          message.blocks.map((block, index) => {
+            const key = `${block.kind}-${index}`;
+            if (block.kind === "list") {
+              return (
+                <ul className="rr-conversation-answer-list" key={key}>
+                  {block.items.map((item, itemIndex) => (
+                    <li key={`${key}-${itemIndex}`}>
+                      <InlineContent content={item} />
+                    </li>
+                  ))}
+                </ul>
+              );
+            }
+            if (block.kind === "example") {
+              return (
+                <p className="rr-conversation-example" lang="en" key={key}>
+                  {block.english}
+                  <span className="rr-conversation-translation">
+                    {block.translation}
+                  </span>
+                </p>
+              );
+            }
             return (
-              <ul className="rr-conversation-answer-list" key={key}>
-                {block.items.map((item, itemIndex) => (
-                  <li key={`${key}-${itemIndex}`}>
-                    <InlineContent content={item} />
-                  </li>
-                ))}
-              </ul>
-            );
-          }
-          if (block.kind === "example") {
-            return (
-              <p className="rr-conversation-example" lang="en" key={key}>
-                {block.english}
-                <span className="rr-conversation-translation">
-                  {block.translation}
-                </span>
+              <p
+                className={block.tone === "lead" ? "rr-conversation-answer-lead" : undefined}
+                key={key}
+              >
+                <InlineContent content={block.content} />
               </p>
             );
-          }
-          return (
-            <p
-              className={block.tone === "lead" ? "rr-conversation-answer-lead" : undefined}
-              key={key}
-            >
-              <InlineContent content={block.content} />
-            </p>
-          );
-        })}
+          })
+        )}
         {message.citation ? (
           <div className="rr-conversation-answer-footnote">
             <button
@@ -305,7 +310,7 @@ function GenerationMessage({
     return (
       <article className="rr-conversation-message is-assistant">
         <div className="rr-conversation-assistant-copy">
-          {state.text ? <p>{state.text}</p> : null}
+          {state.text ? <MarkdownContent text={state.text} /> : null}
           <div className="rr-conversation-answer-kicker">生成中断</div>
           <p className="rr-conversation-error-copy">
             {state.errorMessage
@@ -327,11 +332,24 @@ function GenerationMessage({
   return (
     <article className="rr-conversation-message is-assistant">
       <div className="rr-conversation-assistant-copy">
-        {state.text ? <p>{state.text}</p> : null}
+        {state.text ? <MarkdownContent text={state.text} streaming /> : null}
         {state.phase === "generating" ? (
           <ConversationGenerationIndicator
             onStop={canStop ? onStop : undefined}
           />
+        ) : state.phase === "truncated" ? (
+          <div className="rr-conversation-generation-row">
+            <span className="rr-conversation-message-meta">
+              回答达到长度上限被截断
+            </span>
+            <button
+              className="rr-conversation-quiet-button"
+              type="button"
+              onClick={onRetry}
+            >
+              继续生成
+            </button>
+          </div>
         ) : state.phase === "stopped" ? (
           <div className="rr-conversation-generation-row">
             <span className="rr-conversation-message-meta">已停止</span>
@@ -457,6 +475,7 @@ function ConversationPage({
             content: [{ kind: "text", text: replyText }],
           },
         ],
+        markdown: replyText,
       };
 
       setThread((current) => {
@@ -590,6 +609,14 @@ function ConversationPage({
         }
         if (service.capabilities.delivery === "streaming") {
           updateThread(reply.persistedThread!);
+          if (reply.status === "truncated") {
+            setGeneration({
+              ...pendingState,
+              phase: "truncated",
+              text: reply.chunks[0] ?? "",
+            });
+            return;
+          }
           setGeneration(null);
           return;
         }
@@ -836,7 +863,13 @@ function ConversationPage({
 
   useLayoutEffect(() => {
     if (generation && scrollRef.current) {
-      scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
+      const scroll = scrollRef.current;
+      // 用户主动上翻阅读时暂停自动跟随，接近底部时恢复
+      const distanceFromBottom =
+        scroll.scrollHeight - scroll.scrollTop - scroll.clientHeight;
+      if (distanceFromBottom < 80) {
+        scroll.scrollTop = scroll.scrollHeight;
+      }
     }
   }, [generation?.text, generation?.phase]);
 

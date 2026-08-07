@@ -39,6 +39,8 @@ export type ConversationAssistantMessage = {
   id: string;
   role: "assistant";
   blocks: ConversationAnswerBlock[];
+  /** 真实 Quick AI 回答的原始 Markdown 文本；存在时页面优先渲染它（白名单子集），否则回退 blocks。 */
+  markdown?: string;
   citation?: ConversationMemoryCitation;
   sequence?: number;
 };
@@ -169,6 +171,12 @@ export type ConversationRequest =
 export type ConversationGeneratedReply =
   | {
       status: "complete";
+      assistantMessageId: string;
+      chunks: string[];
+      persistedThread?: ConversationThread;
+    }
+  | {
+      status: "truncated";
       assistantMessageId: string;
       chunks: string[];
       persistedThread?: ConversationThread;

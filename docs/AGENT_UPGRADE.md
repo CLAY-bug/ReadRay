@@ -86,7 +86,81 @@ Quick AI 对话从"一次性完整返回"升级为"SSE 流式增量返回"，并
 
 ## 任务 2：对话页面 Markdown 渲染（待执行）
 
-> 占位。目标与验收标准在任务 1 完成后补充。
+### 背景
+
+任务 1 流式输出已验收通过（2026-08-06）。当前对话页的 assistant 消息以纯文本段落展示（`mapMessage` 把完整回答塞进单个 paragraph 块），模型输出的 Markdown 标记（列表、粗体、代码块、表格等）原样显示，可读性差。系统提示词当前要求"不要依赖 Markdown 渲染"（`QUICK_AI_SYSTEM_PROMPT`），本任务需与其联动。
+
+### 目标
+
+对话页 assistant 回答支持**白名单子集的轻量 Markdown 渲染**，并同步调整系统提示词，让模型输出结构化内容。
+
+### 范围边界（明确不做）
+
+- 不引入重型 Markdown 渲染库（如 marked/markdown-it 的完整模式）；优先轻量自研或受控解析。
+- 不执行任意 HTML / 脚本 / iframe / 图片 / 远程资源；渲染结果只包含受控元素与文本。
+- 不做代码高亮、LaTeX、数学公式、HTML 标签透传、超链接跳转下载等扩展能力。
+- 不改变流式链路、消息持久化、停止/重试语义（任务 1 已验收，不动）。
+- 不改变解释卡（ExplanationCard）与写作分析的 JSON 结构化协议；Markdown 渲染只作用于 Quick AI 对话的 assistant 文本。
+- 用户消息保持现有纯文本气泡，不渲染 Markdown。
+
+### 渲染子集（白名单，需与调度者确认后细化）
+
+支持以下 Markdown 子集的渲染，其余一律按纯文本处理或忽略标记：
+
+- 段落与换行；`#`/`##`/`###` 标题
+- `**粗体**`、`*斜体*`、`~~删除线~~`（如支持）
+- 行内代码 `` `code` `` 与多行代码块 ```` ``` ````
+- 无序列表 `-` / 有序列表 `1.`
+- 引用 `>`
+- 链接 `[text](url)`（仅渲染为文本 + 可见 URL，或默认不渲染）
+- 分隔线 `---`
+- 表格（`|` 语法，可列为非必须项，先确认模型输出中表格出现频率）
+
+### 实现约束
+
+- **安全边界与主题协议一致**：渲染器输出只生成受控 HTML（或 React 元素），输入永不作为 HTML 注入；对任何未知/畸形语法降级为纯文本。所有样式使用既有 `rr-conversation-*` 作用域与语义 token（`--rr-main-fg` 等），不引入固定色值、不改变布局/字体/字号体系。
+- **流式兼容**：生成过程中 delta 逐段到达，渲染器必须对**不完整 Markdown 片段**健壮（例如代码块/列表只写了一半时不得崩坏或闪现原始标记）；需设计"流式下的渲染策略"（如拼接后整体渲染，或对未闭合元素降级），并在实现中说明选择。
+- **与系统提示词联动**：`QUICK_AI_SYSTEM_PROMPT` 去掉"不要依赖 Markdown 渲染"，改为"可以使用简洁的 Markdown 结构化输出（列表、代码块、粗体、链接）"，并仍保持"不要声称访问互联网/本地记忆"等诚实边界。注意：**该提示词改动属于任务 2 的联动部分**，不是任务 3 的系统提示词重建；任务 3 仍按原计划专门讨论组合式构建。
+- **现有 blocks 协议**：`ConversationAnswerBlock`（paragraph/list/example）是设计稿 fixture 时代的中间协议；真实路径的 assistant 消息目前整体映射为单 paragraph。本任务需决定：是保留 blocks 协议（渲染发生在映射后）还是在页面渲染层直接处理原始文本。选择需说明，并保持 fixture 路径（`conversationFixtureService.ts`）可继续工作。
+
+### 涉及文件（预计）
+
+- `src/` 新增 Markdown 渲染模块（解析器 + 渲染组件，职责单一，独立测试）。
+- `src/conversationService.ts` / `src/conversationViewModel.ts`：assistant 消息渲染协议（如新增 `markdown` 文本类型或渲染入口）。
+- `src/components/ConversationPage.tsx`：assistant 消息改用渲染组件（含流式 GenerationMessage 实时渲染）。
+- `src-tauri/src/quick_ai.rs`：`QUICK_AI_SYSTEM_PROMPT` 联动修改。
+- `src/styles/conversation-page.css`：新增渲染元素样式（代码块、列表、引用、表格等，均用既有 token）。
+- 测试：渲染器单元测试 + 流式健壮性测试；Rust 提示词测试（`system_prompt_keeps_general_help_and_english_expertise_balanced` 等需同步）。
+
+### 验收标准
+
+- 真实 Tauri 中，模型回答中的列表/代码块/粗体/链接等正确渲染，无原始标记裸露、无乱码。
+- 流式生成过程中渲染稳定：未完成片段不崩坏、不闪现原始标记。
+- 任意用户输入/模型输出不触发 XSS 或非白名单 HTML 注入（测试覆盖恶意输入）。
+- 系统提示词更新后，模型输出的结构化程度提升，且诚实边界（不声称访问互联网/本地记忆）保留。
+- 现有测试全绿：前端（会话/写作/设置）+ Rust 全部通过；`pnpm build`、`cargo fmt --check`、`cargo check` 通过。
+- fixture 预览路径（非 Tauri 浏览器预览）仍可正常展示设计稿示例。
+
+### 未决/后续
+
+- 表格渲染是否纳入白名单（视模型实际输出频率与实现成本）。
+- 链接渲染策略（纯文本 vs 可点击，可点击需考虑 opener 能力与安全边界）。
+
+## 任务 2：对话页面 Markdown 渲染（已完成并验收通过）
+
+### 验收结论（2026-08-07，调度者）
+
+- 任务 2 已由用户在真实 Tauri 中验收通过：Markdown 渲染正常、换行修复生效、200 词段落生成约 16 秒（性能优化前约 1 分钟）；任务 2 正式收口。
+
+- **代码审查通过**：白名单渲染器职责单一、无 React 依赖、可独立测试；安全边界双层防护（解析层协议白名单 + React 转义，链接仅 http/https 且不可点击）；流式"拼接后整体渲染 + 未闭合降级"策略；blocks 协议双入口保留（fixture 预览不受影响）；系统提示词联动正确、诚实边界保留；测试 20（渲染器）+ 24（会话）+ 124（Rust）全绿，build/fmt/check 通过。
+- **换行问题修复（用户报告 + 审查发现）**：
+  1. 代码块/文本块不换行（用户报告主因）：`.rr-conversation-code-block code` 的 `white-space: pre` 只横向滚动不换行；已改 `pre-wrap + overflow-wrap: anywhere`。
+  2. 流式生成中不换行（审查发现）：`.rr-conversation-generation-row` 的 `white-space: nowrap` 继承到生成中回答内容；已改 `normal`。
+  3. 正文软换行丢失与超长内容溢出隐患（审查发现）：`.rr-conversation-assistant-copy p` 补 `white-space: pre-wrap` 保留模型输出的多行换行；`.rr-conversation-assistant-copy` 补 `overflow-wrap: anywhere`。
+  - 修复后验证：会话 24、渲染器 20、Rust 124 通过，`pnpm build`、`cargo fmt --check` 通过。真实 Tauri 换行观感仍需人工确认。
+- **finish_reason=length 截断误报修复（2026-08-07）**：用户遇到"DeepSeek Quick AI 生成未正常结束：finish_reason=length"。根因：`QUICK_AI_MAX_TOKENS = 2048` 硬编码，模型回答超过上限时标准行为是返回 `finish_reason=length` 截断（已生成部分仍有效），但代码把 `length` 当错误丢弃。修复：流式与非流式均把 `length` 降级为截断——正常消费完流、已生成部分保存为完整回答；新增 `truncated` 状态（Rust `Truncated` 事件、service `status: "truncated"`、页面 `truncated` 阶段），展示"回答达到长度上限被截断"提示 + 继续生成按钮；未知 finish_reason（如 content_filter）仍按错误处理。验证：前端 25（+1 truncated 测试）、Rust 126（+2 length/unknown 测试）、build/fmt/diff 通过。
+- **QUICK_AI_MAX_TOKENS 调整 2048 → 8192（2026-08-07）**：调研确认 2048 远低于 DeepSeek 官方文档上限（8192，实测 `deepseek-v4-flash` 对 4096/8192/16384/32768 全部接受），且 `deepseek-v4-flash` 为推理模型（输出含 reasoning token，实测 190 completion 中 147 为推理），2048 实际留给正文的预算更少，长回答易触发 length 截断。max_tokens 是上限非目标，提高不改变正常回答长度与成本，只为长文本输出留空间；ReadRay 学习对话场景按文档上限 8192 设置，未采用 Claude Code 的 32K（其任务单次输出可达 8K+，场景不同）。单次完整输出质量优于多轮续写，超 8K 的长文本续写留待任务 3 讨论清单。验证：Rust 126 通过、fmt/check 通过；前端无依赖（仅主题 sourceUrl 长度校验引用 2048，无关）。
+- **流式渲染性能优化（2026-08-07）**：用户反馈 200 词段落生成约 1 分钟。实测同参数直连 DeepSeek：200 词英文段落总耗时仅 **4.8 秒**（响应头 736ms、首 token 898ms、81 token/s），确认瓶颈在 ReadRay 前端而非模型/网络。前端累积性能问题：① `.rr-conversation-assistant-copy` 的 `text-wrap: pretty` 让每个 delta（~12ms 一次）都触发全量优化断行重排，随文本增长平方级变贵；② 每个 delta 强制 `scrollTop = scrollHeight`，用户上翻阅读时也被拉回底部。修复：去掉 `text-wrap: pretty`（改默认 normal，视觉几乎无感）；滚动改为"距底部 < 80px 才自动跟随"，用户主动上翻时暂停跟随。delta 节流（合并渲染）评估为"消除昂贵操作后的备选项"，未实施，留待实测仍有卡顿再加（50ms 左右保持平滑）。验证：会话 25、渲染器 20、build/diff 通过；真实 Tauri 生成速度需用户实测确认。
 
 ## 任务 3：系统提示词构建（待执行）
 

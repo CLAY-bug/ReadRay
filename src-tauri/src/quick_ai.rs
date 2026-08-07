@@ -20,9 +20,9 @@ const QUICK_AI_MAX_USER_MESSAGE_LEN: usize = 8_000;
 const QUICK_AI_MAX_CONTEXT_MESSAGES: usize = 40;
 const DEFAULT_RECENT_CONVERSATION_LIMIT: u32 = 6;
 const MAX_RECENT_CONVERSATION_LIMIT: u32 = 20;
-const QUICK_AI_MAX_TOKENS: u16 = 2_048;
+const QUICK_AI_MAX_TOKENS: u16 = 8_192;
 const QUICK_AI_TEMPERATURE: f32 = 0.5;
-const QUICK_AI_SYSTEM_PROMPT: &str = "You are Quick AI inside ReadRay, a general-purpose assistant with strong expertise in English learning. Answer ordinary technical, life, and general questions directly; do not force them into English-learning advice. For English learning, exam preparation, writing, and translation, give accurate, practical, expert help. For a personalized plan that lacks essential context, ask only 2 to 4 necessary questions; do not ask follow-up questions for simple or well-specified requests. When context is insufficient, you may first offer brief provisional advice, then ask those questions. Match the user's language. Use plain text with short paragraphs, line breaks, and clear numbered lists when useful; avoid dense walls of text and do not rely on Markdown rendering. Do not claim access to the internet, tools, local learning records, or long-term memory.";
+const QUICK_AI_SYSTEM_PROMPT: &str = "You are Quick AI inside ReadRay, a general-purpose assistant with strong expertise in English learning. Answer ordinary technical, life, and general questions directly; do not force them into English-learning advice. For English learning, exam preparation, writing, and translation, give accurate, practical, expert help. For a personalized plan that lacks essential context, ask only 2 to 4 necessary questions; do not ask follow-up questions for simple or well-specified requests. When context is insufficient, you may first offer brief provisional advice, then ask those questions. Match the user's language. You may use concise Markdown to structure your answer when it helps readability: short paragraphs, headings, lists, code blocks, bold, and links are fine; keep answers readable and do not rely on complex formatting. Do not claim access to the internet, tools, local learning records, or long-term memory.";
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 struct DeepSeekRequestMessage {
@@ -37,6 +37,7 @@ pub enum QuickAiStreamEvent {
     Delta { text: String },
     Done,
     Stopped,
+    Truncated,
     Error { message: String },
 }
 
@@ -278,6 +279,7 @@ async fn stream_quick_ai_reply(
 
     let mut reply = String::new();
     let mut recorded_usage = false;
+    let mut truncated = false;
     while let Some(chunk) = stream.next().await {
         if abort_flag.load(Ordering::Relaxed) {
             sender.send(QuickAiStreamEvent::Stopped);
@@ -299,7 +301,9 @@ async fn stream_quick_ai_reply(
             recorded_usage = true;
         }
         if let Some(finish_reason) = chunk.finish_reason.as_deref() {
-            if finish_reason != "stop" {
+            if finish_reason == "length" {
+                truncated = true;
+            } else if finish_reason != "stop" {
                 return Err(format!(
                     "DeepSeek Quick AI 生成未正常结束：finish_reason={finish_reason}。"
                 ));
@@ -313,6 +317,9 @@ async fn stream_quick_ai_reply(
     }
     if !recorded_usage {
         return Err("DeepSeek 模型流式响应缺少 usage，无法计入使用量。".to_string());
+    }
+    if truncated {
+        sender.send(QuickAiStreamEvent::Truncated);
     }
     sender.send(QuickAiStreamEvent::Done);
     Ok(reply)
@@ -461,7 +468,7 @@ fn extract_reply(response: QuickAiChatResponse) -> Result<String, String> {
         .next()
         .ok_or_else(|| "DeepSeek Quick AI 响应缺少 choices[0]。".to_string())?;
     if let Some(finish_reason) = choice.finish_reason.as_deref() {
-        if finish_reason != "stop" {
+        if finish_reason != "stop" && finish_reason != "length" {
             return Err(format!(
                 "DeepSeek Quick AI 生成未正常结束：finish_reason={finish_reason}。"
             ));
@@ -572,11 +579,13 @@ mod tests {
         assert!(prompt.contains("2 to 4 necessary questions"));
         assert!(prompt.contains("simple or well-specified requests"));
         assert!(prompt.contains("brief provisional advice"));
-        assert!(prompt.contains("short paragraphs"));
-        assert!(prompt.contains("clear numbered lists"));
+        assert!(prompt.contains("concise markdown"));
+        assert!(prompt.contains("headings, lists, code blocks, bold, and links"));
+        assert!(prompt.contains("do not rely on complex formatting"));
         assert!(prompt.contains("do not claim access to the internet"));
         assert!(prompt.contains("local learning records"));
         assert!(prompt.contains("long-term memory"));
+        assert!(!prompt.contains("do not rely on markdown rendering"));
     }
 
     fn assert_truncated_history_starts_with_user(history_len: i64, first_sequence: i64) {
@@ -740,6 +749,35 @@ mod tests {
         assert!(abort_quick_ai_streaming(-1).is_err());
         assert!(abort_quick_ai_streaming(17).is_ok());
         clear_streaming_abort(17);
+    }
+
+    #[test]
+    fn extract_reply_accepts_length_finish_reason_as_truncation() {
+        // finish_reason=length 是模型达到 max_tokens 上限的标准截断，
+        // 已生成内容应作为回答返回，而不是当作错误丢弃。
+        let response = QuickAiChatResponse {
+            choices: vec![QuickAiChoice {
+                finish_reason: Some("length".to_string()),
+                message: QuickAiResponseMessage {
+                    content: Some("已生成的前半部分".to_string()),
+                },
+            }],
+        };
+        assert_eq!(extract_reply(response).unwrap(), "已生成的前半部分");
+    }
+
+    #[test]
+    fn extract_reply_rejects_unknown_finish_reason() {
+        let response = QuickAiChatResponse {
+            choices: vec![QuickAiChoice {
+                finish_reason: Some("content_filter".to_string()),
+                message: QuickAiResponseMessage {
+                    content: Some("内容".to_string()),
+                },
+            }],
+        };
+        let error = extract_reply(response).unwrap_err();
+        assert!(error.contains("content_filter"));
     }
 
     #[test]

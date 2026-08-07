@@ -7,7 +7,7 @@
 - 当前状态：阶段一至阶段七已经完成；阶段七设置与桌面生命周期已通过复审和真实 Tauri 人工验收。
 - 主题状态：ReadRayThemeV1、安全解析、SQLite v8、设置页导入/选择/删除、主窗口恢复以及随包 Flexoki（Light/Dark）与 30 个内置主题已通过独立审核和真实 Tauri 人工验收；主题工作不改变 DEVELOPMENT_PLAN 阶段状态。
 - 当前路线：Windows 原生，Tauri + React + TypeScript + Rust + SQLite。
-- 下一步：内置 Agent 体验升级按已确认顺序推进（先流式输出 → 再对话页 Markdown 渲染 → 最后专门讨论系统提示词构建），任务 1 流式输出执行中；任务书、验收标准与已确认决策以 `docs/AGENT_UPGRADE.md` 为准。
+- 下一步：内置 Agent 体验升级按已确认顺序推进（先流式输出 → 再对话页 Markdown 渲染 → 最后专门讨论系统提示词构建）。任务 1 流式输出、任务 2 对话页 Markdown 渲染均已验收通过（2026-08-07），任务 3 系统提示词构建待执行；任务书、验收标准与已确认决策以 `docs/AGENT_UPGRADE.md` 为准。
 - 阶段八：用户已明确暂缓复习阶段讨论；Agent 升级完成后按 `docs/DEVELOPMENT_PLAN.md` 再排期阶段八产品讨论。
 - 当前约束：不使用通用 Agent 框架，不内置商业词典，不做 OCR、本地大模型或跨平台支持。
 - 交接原则：`HANDOFF.md` 只记录会影响下一次恢复上下文的信息，小型文档措辞和格式调整不记录。
@@ -187,9 +187,26 @@
 - 透明窗口边缘 resize：`transparent: true` 后 Windows 系统 resize 命中区失效（透明区不参与 hit-test），因此外壳在 `.rr-main-app` 四周渲染 8 个方向的自定义 `.rr-main-resize-handle`（onMouseDown 触发 `onStartResize`，App.tsx 里 `getCurrentWindow().startResizeDragging(direction)`），鼠标移到主窗口边缘即可缩放。关键点：必须新增 `core:window:allow-start-resize-dragging` capability（否则前端调用被拒并静默 catch），且用 `onMouseDown` 而非 `onPointerDown` + `preventDefault`。浏览器实测 8 个手柄位置与光标正确；真实拖拽手感需 Tauri 人工验收。
 - 主题已通过独立审核与真实 Tauri 人工验收（2026-08-06）：30 个随包内置主题的列表、Light/Dark 模式切换、重启恢复、Flexoki 深色模式实际观感，以及透明窗口阴影、最大化圆角与边缘 resize 拖拽手感均已完成人工确认；主题基础设施收口。
 
+### 任务 1：流式输出（已完成并验收通过）
+
+- 任务书与验收记录详见 `docs/AGENT_UPGRADE.md`。Quick AI 对话已从一次性返回升级为 Tauri `ipc::Channel` SSE 流式输出，支持真实可停止；channel 只推送 delta/done/stopped/error 四类事件。
+- 新命令 `send_quick_ai_message_streaming` 复用 `prepare_turn → 流式请求 → complete_turn` 链路，消息持久化语义（user 先落库、assistant 保持 pending、幂等重试、崩溃恢复）与现状完全一致；停止后保持 pending 可重试，不伪造完整回答。旧 `send_quick_ai_message` 非流式命令保留。
+- 停止采用 conversation 级 abort 原子标志 + active 流门控；usage 在流末尾 chunk 严格校验后尽力写入（QuickAi 分类），合法 usage 即使业务失败也计入，统计失败不影响业务结果。
+- 修复流式 usage 解析 bug：`stream_quick_ai_reply` 原先把 SSE 最终 chunk 的 usage 对象本身传给期望"带 usage 键完整响应体"的 `parse_model_token_usage`，导致**每次**真实流式回答都报"缺少 usage"；新增 `parse_model_token_usage_value` 直解析 usage 对象，流式路径改用它，原函数保留给非流式。`deepseek-v4-flash` 为推理模型（`reasoning_content`/`reasoning_tokens`），极简输入下可能"纯推理零内容"缺 usage，按用户方案 1 降级为不记录使用量、仍保存回答。
+- 验收：真实 Tauri 边生成边显示、可停止、重试恢复均正常；Rust 124 项通过（含新增 2 项）、会话前端 24 项通过、`pnpm build` / `cargo fmt --check` / `cargo check` 通过。对话页视觉随流式调整（消息列/输入框容器查询宽度、字号微调）一并确认无 bug 隐患，保留。
+
+### 任务 2：对话页面 Markdown 渲染（已完成并验收通过）
+
+- 任务书与验收记录详见 `docs/AGENT_UPGRADE.md`。新增轻量自研白名单 Markdown 解析器 `src/markdownParse.ts`（无依赖、类型化 token、Node 可测）与渲染组件 `src/components/MarkdownContent.tsx`；白名单子集覆盖段落/标题/粗体斜体删除线/行内与多行代码/列表/引用/分隔线/链接（仅 http/https 且不可点击），表格与 HTML 一律降级纯文本，输入永不作为 HTML 注入（React 转义 + 解析层协议白名单双层防护）。
+- assistant 消息新增可选 `markdown` 字段（真实回答原文），页面有则优先渲染、否则回退既有 blocks 协议，fixture 预览路径零改动；流式采用"拼接后整体渲染 + 未闭合降级"（streaming 模式未闭合代码块按代码块渲染、未闭合行内标记隐藏起始符号，不闪现原始标记）。
+- `QUICK_AI_SYSTEM_PROMPT` 联动："不要依赖 Markdown 渲染"改为"可使用简洁 Markdown 结构化输出"，诚实边界（不声称访问互联网/本地学习记录/长期记忆）保留。
+- 验收后修复（2026-08-07）：① 代码块/文本块不换行（`white-space: pre` 只横向滚动，改 `pre-wrap + overflow-wrap: anywhere`）；② 流式生成中不换行（`.rr-conversation-generation-row` 的 `nowrap` 继承，改 `normal`）；③ 正文软换行丢失与超长内容溢出（补 `pre-wrap` / `overflow-wrap: anywhere`）。
+- 后续性能优化（2026-08-07）：`finish_reason=length` 截断误报修复（降级为 truncated 状态保留已生成内容）；`QUICK_AI_MAX_TOKENS` 2048 → 8192（DeepSeek 文档上限，实测 v4-flash 接受）；流式渲染性能优化（去掉 `text-wrap: pretty`、滚动距底部 <80px 才跟随），200 词段落生成从约 1 分钟降至约 16 秒。
+- 验收：渲染器 20、会话 25、Rust 126 项通过，`pnpm build` / `cargo fmt --check` / `cargo check` / `git diff --check` 全绿；真实 Tauri 生成速度与渲染观感用户实测确认，任务 2 收口。
+
 ## 下一步
 
-阶段一至阶段七已经完成，主题基础设施已通过独立审核与真实 Tauri 人工验收并收口。当前推进 ReadRay 内置 Agent 体验升级（不属于任何 DEVELOPMENT_PLAN 阶段）：执行顺序为流式输出 → 对话页 Markdown 渲染 → 系统提示词构建；任务书、验收标准与已确认决策以 `docs/AGENT_UPGRADE.md` 为准，任务 1 流式输出执行中，执行会话完成后由调度者验收并更新本文件。阶段八（复习闭环）产品讨论已由用户明确暂缓，Agent 升级完成后按 `docs/DEVELOPMENT_PLAN.md` 再排期。
+阶段一至阶段七已经完成，主题基础设施已通过独立审核与真实 Tauri 人工验收并收口。当前推进 ReadRay 内置 Agent 体验升级（不属于任何 DEVELOPMENT_PLAN 阶段）：执行顺序为流式输出 → 对话页 Markdown 渲染 → 系统提示词构建；任务书、验收标准与已确认决策以 `docs/AGENT_UPGRADE.md` 为准。任务 1 流式输出、任务 2 对话页 Markdown 渲染均已验收通过，任务 3 系统提示词构建待执行；执行会话完成后由调度者验收并更新本文件。阶段八（复习闭环）产品讨论已由用户明确暂缓，Agent 升级完成后按 `docs/DEVELOPMENT_PLAN.md` 再排期。
 
 - 已确认决策（详见 `docs/AGENT_UPGRADE.md`）：本轮不实现记忆注入，对话继续维持"不声称能访问本地学习记录/联网/长期记忆"的诚实边界；"重新生成"沿用覆盖式语义（与 ChatGPT 主流一致），本轮不实现。
 - 新环境仍可复制 `.env.example` 为 `.env` 填写开发期 `DEEPSEEK_API_KEY`；用户在设置页保存或清除后，以 Windows 安全存储中的持久化决定为准。真实 `.env` 不提交。

@@ -918,7 +918,7 @@ test("正式设置页保持五类设计结构，确定性操作已接线且不�
   assert.match(mainStyles, /\.rr-main-recent-item\.is-active\s*\{[\s\S]*?font-weight:\s*450/);
   assert.match(mainStyles, /\.rr-main-recent-item\.is-active::before\s*\{/);
   assert.match(mainStyles, /\.rr-main-section-label\s*\{[\s\S]*?font-family:\s*var\(--rr-main-sidebar-font-display\)[\s\S]*?letter-spacing:\s*0/);
-  assert.match(writingStyles, /\.rr-writing-editor-title\s*\{[\s\S]*?font-family:\s*var\(--rr-learning-font-family\)[\s\S]*?font-size:\s*calc\(34px \* var\(--rr-learning-font-scale\)\)/);
+  assert.match(writingStyles, /\.rr-writing-editor-title\s*\{[\s\S]*?font-family:\s*var\(--rr-learning-font-family\)[\s\S]*?font-size:\s*calc\(32px \* var\(--rr-learning-font-scale\)\)/);
   assert.match(writingStyles, /\.rr-writing-article-editor\s*\{[\s\S]*?font-family:\s*var\(--rr-learning-font-family\)/);
   assert.match(writingStyles, /\.rr-writing-pattern-grid p\s*\{[\s\S]*?font-family:\s*var\(--rr-learning-font-family\)[\s\S]*?var\(--rr-learning-font-scale\)/);
   assert.match(writingStyles, /\.rr-writing-coach-head h2\s*\{[\s\S]*?font-family:\s*var\(--rr-ui-font-family\)/);

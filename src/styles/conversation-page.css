@@ -267,15 +267,106 @@ button.rr-conversation-title:not(:disabled) {
   font-size: calc(var(--rr-learning-font-size) - 2px);
   line-height: 1.6;
   letter-spacing: 0.002em;
-  text-wrap: pretty;
+  overflow-wrap: anywhere;
 }
 
 .rr-conversation-assistant-copy p {
   margin: 0 0 13px;
+  white-space: pre-wrap;
 }
 
 .rr-conversation-assistant-copy p:last-child {
   margin-bottom: 0;
+}
+
+/* 对话页 Markdown 白名单渲染：全部使用既有 rr-conversation-* 作用域与语义 token */
+.rr-conversation-markdown-h1,
+.rr-conversation-markdown-h2,
+.rr-conversation-markdown-h3 {
+  margin: 22px 0 8px;
+  color: var(--rr-main-fg);
+  font-weight: 600;
+  line-height: 1.4;
+}
+
+.rr-conversation-markdown-h1 {
+  font-size: calc(var(--rr-learning-font-size) + 3px);
+}
+
+.rr-conversation-markdown-h2 {
+  font-size: calc(var(--rr-learning-font-size) + 1px);
+}
+
+.rr-conversation-markdown-h3 {
+  font-size: var(--rr-learning-font-size);
+}
+
+.rr-conversation-assistant-copy .rr-conversation-markdown-h1:first-child,
+.rr-conversation-assistant-copy .rr-conversation-markdown-h2:first-child,
+.rr-conversation-assistant-copy .rr-conversation-markdown-h3:first-child {
+  margin-top: 0;
+}
+
+.rr-conversation-markdown-list {
+  margin: 3px 0 15px;
+  padding-left: 1.28em;
+}
+
+.rr-conversation-markdown-list li {
+  margin-top: 6px;
+  padding-left: 4px;
+}
+
+.rr-conversation-markdown-list li:first-child {
+  margin-top: 0;
+}
+
+.rr-conversation-markdown-quote {
+  margin: 3px 0 15px;
+  border-left: 2px solid var(--rr-main-accent);
+  padding: 2px 0 2px 12px;
+  color: var(--rr-main-fg-secondary);
+}
+
+.rr-conversation-markdown-quote > p:last-child,
+.rr-conversation-markdown-quote:last-child {
+  margin-bottom: 0;
+}
+
+.rr-conversation-code-block {
+  overflow-x: auto;
+  border: 1px solid var(--rr-main-border-soft);
+  border-radius: 8px;
+  margin: 3px 0 15px;
+  padding: 10px 12px;
+  background: color-mix(in oklab, var(--rr-main-bg), var(--rr-main-fg) 3%);
+  scrollbar-color: var(--rr-main-border) transparent;
+  scrollbar-width: thin;
+}
+
+.rr-conversation-code-block code {
+  display: block;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font-family: var(--rr-main-font-mono);
+  font-size: calc(13px * var(--rr-ui-font-scale));
+  font-weight: 450;
+  line-height: 1.5;
+}
+
+.rr-conversation-markdown-hr {
+  border: 0;
+  border-top: 1px solid var(--rr-main-border);
+  margin: 18px 0;
+}
+
+.rr-conversation-markdown-link {
+  color: var(--rr-main-fg-secondary);
+}
+
+.rr-conversation-markdown-url {
+  color: var(--rr-main-muted);
+  font-size: 0.94em;
 }
 
 .rr-conversation-assistant-copy strong {
@@ -396,6 +487,7 @@ button.rr-conversation-title:not(:disabled) {
   gap: 12px;
   margin-top: 16px;
   font-family: var(--rr-main-font-display);
+  white-space: normal;
 }
 
 .rr-conversation-generation-indicator {

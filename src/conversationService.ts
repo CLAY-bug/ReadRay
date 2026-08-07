@@ -111,6 +111,9 @@ function mapMessage(
         content: [{ kind: "text", text: message.content }],
       },
     ],
+    // 真实回答保留原始 Markdown 文本，页面渲染层优先走白名单渲染；
+    // blocks 字段继续存在以兼容既有协议与 fixture 路径。
+    markdown: message.content,
     sequence: message.sequence,
   } satisfies ConversationAssistantMessage;
 }
@@ -289,6 +292,7 @@ export class RepositoryConversationService implements ConversationService {
     let streamed = false;
     let streamedText = "";
     let stoppedByUser = false;
+    let truncated = false;
     try {
       snapshot = await this.repository.sendStreaming(
         conversationId,
@@ -301,6 +305,8 @@ export class RepositoryConversationService implements ConversationService {
             request.onStreamDelta?.(event.text);
           } else if (event.type === "stopped") {
             stoppedByUser = true;
+          } else if (event.type === "truncated") {
+            truncated = true;
           }
         },
       );
@@ -338,7 +344,7 @@ export class RepositoryConversationService implements ConversationService {
       this.onConversationUpdated?.();
     }
     return {
-      status: "complete" as const,
+      status: truncated ? ("truncated" as const) : ("complete" as const),
       assistantMessageId: `quick-ai-message-${assistantMessage.id}`,
       chunks: streamed ? [streamedText] : [assistantMessage.content],
       persistedThread,

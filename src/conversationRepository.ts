@@ -10,6 +10,7 @@ export type QuickAiStreamEvent =
   | { type: "delta"; text: string }
   | { type: "done" }
   | { type: "stopped" }
+  | { type: "truncated" }
   | { type: "error"; message: string };
 
 export interface ConversationRepository {

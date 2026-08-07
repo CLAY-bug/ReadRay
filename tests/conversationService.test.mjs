@@ -63,6 +63,9 @@ function withStreaming(repository, options = {}) {
       if (options.stopped) {
         onEvent({ type: "stopped" });
       }
+      if (options.truncated) {
+        onEvent({ type: "truncated" });
+      }
       return result;
     },
     abortStreaming:
@@ -798,6 +801,35 @@ test("正式导出只提交目标数据库 ID，取消不返回成功，失败�
     { conversationId: 17, suggestedFileName: "真实-会话.md" },
     { conversationId: 17, suggestedFileName: "真实-会话.md" },
   ]);
+});
+
+test("流式回答达到长度上限时返回 truncated 且保留已生成内容", async () => {
+  const saved = snapshot([
+    message(101, "user", "超长问题", 1),
+    message(102, "assistant", "已生成的前半部分", 2),
+  ]);
+  const service = new RepositoryConversationService(
+    withStreaming(
+      {
+        create: async () => snapshot(),
+        get: async () => saved,
+        send: async () => saved,
+      },
+      { emitDelta: ["已生成的前半部分"], truncated: true },
+    ),
+  );
+
+  const reply = await service.generateReply({
+    conversationId: "17",
+    messages: [{ id: "temporary-user", role: "user", content: "超长问题" }],
+    prompt: "超长问题",
+    mode: "append",
+  });
+
+  assert.equal(reply.status, "truncated");
+  assert.equal(reply.assistantMessageId, "quick-ai-message-102");
+  assert.deepEqual(reply.chunks, ["已生成的前半部分"]);
+  assert.equal(reply.persistedThread.messages.length, 2);
 });
 
 test("流式增量通过 onStreamDelta 转发且完成后返回已保存回答", async () => {
