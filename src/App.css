@@ -655,6 +655,125 @@ button:active {
   white-space: pre-wrap;
 }
 
+/* overlay Quick AI 的 Markdown 白名单渲染：与 .quick-ai-panel__message p 同一
+   文字体系，全部使用 overlay 既有 --rr-color-* / --rr-font-* token */
+.quick-ai-panel__markdown {
+  color: var(--rr-color-text-secondary);
+  font-family: var(--rr-font-body);
+  font-size: calc(var(--rr-learning-font-size) - 3px);
+  line-height: 1.58;
+  overflow-wrap: anywhere;
+}
+
+.quick-ai-panel__markdown p {
+  margin: 0 0 10px;
+  white-space: pre-wrap;
+}
+
+.quick-ai-panel__markdown p:last-child {
+  margin-bottom: 0;
+}
+
+.quick-ai-panel__markdown .rr-conversation-markdown-h1,
+.quick-ai-panel__markdown .rr-conversation-markdown-h2,
+.quick-ai-panel__markdown .rr-conversation-markdown-h3 {
+  margin: 14px 0 6px;
+  color: var(--rr-color-text-primary);
+  font-weight: 600;
+  line-height: 1.4;
+}
+
+.quick-ai-panel__markdown .rr-conversation-markdown-h1 {
+  font-size: calc(var(--rr-learning-font-size) + 1px);
+}
+
+.quick-ai-panel__markdown .rr-conversation-markdown-h2 {
+  font-size: var(--rr-learning-font-size);
+}
+
+.quick-ai-panel__markdown .rr-conversation-markdown-h3 {
+  font-size: calc(var(--rr-learning-font-size) - 1px);
+}
+
+.quick-ai-panel__markdown ul,
+.quick-ai-panel__markdown ol {
+  margin: 2px 0 12px;
+  padding-left: 1.28em;
+}
+
+.quick-ai-panel__markdown li {
+  margin-top: 4px;
+  padding-left: 3px;
+}
+
+.quick-ai-panel__markdown li:first-child {
+  margin-top: 0;
+}
+
+.quick-ai-panel__markdown blockquote {
+  margin: 2px 0 12px;
+  border-left: 2px solid var(--rr-color-amber);
+  padding: 1px 0 1px 11px;
+  color: var(--rr-color-text-muted);
+}
+
+.quick-ai-panel__markdown blockquote > p:last-child,
+.quick-ai-panel__markdown blockquote:last-child {
+  margin-bottom: 0;
+}
+
+.quick-ai-panel__markdown pre {
+  overflow-x: auto;
+  border: 1px solid var(--rr-color-border);
+  border-radius: var(--rr-radius-sm);
+  margin: 2px 0 12px;
+  padding: 9px 11px;
+  background: rgba(246, 240, 232, 0.04);
+  scrollbar-width: thin;
+  scrollbar-color: rgba(143, 133, 121, 0.42) transparent;
+}
+
+.quick-ai-panel__markdown pre code {
+  display: block;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font-family: var(--rr-font-mono);
+  font-size: calc(12px * var(--rr-ui-font-scale));
+  font-weight: 450;
+  line-height: 1.5;
+}
+
+.quick-ai-panel__markdown hr {
+  border: 0;
+  border-top: 1px solid var(--rr-color-border);
+  margin: 14px 0;
+}
+
+.quick-ai-panel__markdown strong {
+  color: var(--rr-color-text-primary);
+  font-weight: 600;
+}
+
+.quick-ai-panel__markdown .rr-conversation-markdown-link {
+  color: var(--rr-color-text-secondary);
+}
+
+.quick-ai-panel__markdown .rr-conversation-markdown-url {
+  color: var(--rr-color-text-muted);
+  font-size: 0.94em;
+}
+
+.quick-ai-panel__markdown code {
+  padding: 0;
+  color: var(--rr-color-text-primary);
+  background: transparent;
+  font-family: var(--rr-font-mono);
+  font-size: calc(13px * var(--rr-ui-font-scale));
+  font-weight: 450;
+  line-height: 1.4;
+  white-space: nowrap;
+}
+
 .quick-ai-panel__message.is-user {
   align-self: flex-end;
 }

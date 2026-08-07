@@ -510,6 +510,9 @@
 }
 
 .rr-main-recent-list {
+  display: flex;
+  flex-direction: column;
+  gap: calc(3px * var(--rr-main-design-scale));
   min-height: 0;
   overflow: hidden;
 }

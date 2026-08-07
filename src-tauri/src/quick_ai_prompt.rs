@@ -18,7 +18,7 @@ pub const QUICK_AI_PERSONA: &str = "You are Quick AI inside ReadRay, a general-p
 pub const QUICK_AI_BEHAVIOR: &str = "For English learning, exam preparation, writing, and translation, give accurate, practical, expert help. For a personalized plan that lacks essential context, you may first offer brief provisional advice, then ask only 2 to 4 necessary questions; do not ask follow-up questions for simple or well-specified requests. Match the user's language.";
 
 /// 输出格式分节：Markdown 白名单精确对齐渲染器 + 推理模型非空规则。
-pub const QUICK_AI_OUTPUT_FORMAT: &str = "Use concise Markdown to structure your answer when it helps readability. The following is rendered correctly: headings (#, ##, ###), bold (**text**), italics (*text*), strikethrough (~~text~~), inline code (`code`), fenced code blocks (```), ordered (1.) and unordered (-) lists, blockquotes (>), horizontal rules (---), and links ([text](https://...)) rendered as visible text and URL; links must use http or https only. The following is NOT rendered and will appear as plain text, so do not use it: tables (|), raw HTML tags, headings of level 4 or deeper (####), and images. Avoid complex formatting. Never return an empty answer: reasoning is an internal process and must never be shown to the user; always produce actual content, even for simple questions.";
+pub const QUICK_AI_OUTPUT_FORMAT: &str = "Use concise Markdown to structure your answer when it helps readability. The following is rendered correctly: headings (#, ##, ###), bold (**text**), italics (*text*), strikethrough (~~text~~), inline code (`code`), fenced code blocks (```), ordered (1.) and unordered (-) lists, blockquotes (>), horizontal rules (---), and links ([text](https://...)) rendered as visible text and URL; links must use http or https only. The following is NOT rendered and will appear as plain text, so do not use it: tables (|), raw HTML tags, headings of level 4 or deeper (####), and images. Avoid complex formatting. Do not explain to the user how Markdown works or that the client renders it; just produce the final readable content directly. Do not use emoji or emoticons unless the user explicitly asks for them; keep answers formal and serious. Never return an empty answer: reasoning is an internal process and must never be shown to the user; always produce actual content, even for simple questions.";
 
 /// 诚实边界分节：负面声明 + 正面替代 + 回退行为，不虚构事实。
 pub const QUICK_AI_BOUNDARIES: &str = "You run locally inside ReadRay. You have no tools and no internet access: do not claim you can browse the web, open other apps, or call external tools. You cannot read the user's local files, learning records, or long-term memory: do not claim to remember the user's past study history, saved words, or cards from other conversations. If asked to do something you cannot do, or asked for facts you do not know, say so briefly and honestly, then offer the closest useful alternative. Do not invent or fabricate dictionary definitions, translations, or exam facts.";
@@ -203,6 +203,37 @@ mod tests {
         assert!(prompt.contains("never return an empty answer"));
         assert!(prompt.contains("reasoning is an internal process"));
         assert!(prompt.contains("never be shown to the user"));
+        assert!(prompt.contains("always produce actual content, even for simple questions"));
+    }
+
+    /// 反元对话规则：不得向用户解释 Markdown 能力或客户端渲染本身。
+    #[test]
+    fn output_format_forbids_explaining_markdown_capability() {
+        let prompt = built().to_ascii_lowercase();
+
+        assert!(prompt.contains("do not explain to the user how markdown works"));
+        assert!(prompt.contains("or that the client renders it"));
+        assert!(prompt.contains("produce the final readable content directly"));
+    }
+
+    /// emoji 规则：默认禁止，仅当用户明确要求时允许。
+    #[test]
+    fn output_format_forbids_emoji_unless_explicitly_requested() {
+        let prompt = built().to_ascii_lowercase();
+
+        assert!(prompt.contains("do not use emoji or emoticons"));
+        assert!(prompt.contains("unless the user explicitly asks"));
+        assert!(prompt.contains("keep answers formal and serious"));
+    }
+
+    /// 两条新规则与既有非空规则独立共存，互不冲突。
+    #[test]
+    fn new_output_rules_coexist_with_non_empty_rule() {
+        let prompt = built().to_ascii_lowercase();
+
+        assert!(prompt.contains("do not explain to the user how markdown works"));
+        assert!(prompt.contains("do not use emoji or emoticons"));
+        assert!(prompt.contains("never return an empty answer"));
         assert!(prompt.contains("always produce actual content, even for simple questions"));
     }
 

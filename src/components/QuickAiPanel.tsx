@@ -6,6 +6,7 @@ import {
 } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import type { QuickAiConversation } from "../types/quickAi";
+import { MarkdownContent } from "./MarkdownContent";
 import {
   shouldSendMultilineMessage,
   type SendShortcut,
@@ -185,7 +186,13 @@ function QuickAiPanel({
             key={message.id}
           >
             <span>{message.role === "user" ? "你" : "AI"}</span>
-            <p>{message.content}</p>
+            {message.role === "user" ? (
+              <p>{message.content}</p>
+            ) : (
+              <div className="quick-ai-panel__markdown">
+                <MarkdownContent text={message.content} />
+              </div>
+            )}
           </div>
         ))}
 

@@ -118,11 +118,45 @@ test("主应用稳定会话身份回调并复用统一 composer", async () => {
   assert.match(shell, /onThreadIdentityChange=\{updateActiveConversation\}/);
   assert.match(conversationPage, /className="rr-main-composer-area"/);
   assert.match(conversationPage, /className="rr-main-composer"/);
+  assert.match(
+    conversationPage,
+    /rr-conversation-scroll-to-bottom\$\{showScrollToBottom \? " is-visible" : ""\}/,
+  );
+  assert.match(conversationPage, /aria-label="滚动到底部"/);
+  assert.match(conversationPage, /scrollToBottom/);
+  assert.match(conversationPage, /requestAnimationFrame\(step\)/);
+  assert.match(conversationPage, /1 - Math\.pow\(1 - progress, 3\)/);
+  assert.match(conversationPage, /distanceFromBottom > 96/);
+  assert.match(conversationPage, /distanceFromBottom < 24/);
   assert.match(conversationPage, /conversationCreationRef/);
   assert.match(conversationPage, /cachedCreation\?\.requestKey === request\.key/);
   assert.match(
     conversationStyles,
     /--rr-conversation-content-width:[\s\S]*?\.rr-conversation-page \.rr-main-composer-inner/,
+  );
+  assert.match(conversationPage, /rr-conversation-scroll-wrap/);
+  assert.match(conversationStyles, /\.rr-conversation-scroll-wrap \{[\s\S]*?position: relative;/);
+  assert.match(conversationStyles, /\.rr-conversation-scroll \{[\s\S]*?position: relative;/);
+  assert.match(
+    conversationStyles,
+    /\.rr-conversation-scroll-to-bottom \{[\s\S]*?opacity: 0;[\s\S]*?pointer-events: none;/,
+  );
+  assert.match(
+    conversationStyles,
+    /\.rr-conversation-scroll-to-bottom\.is-visible \{[\s\S]*?opacity: 1;[\s\S]*?pointer-events: auto;/,
+  );
+  assert.match(conversationStyles, /\.rr-conversation-scroll-to-bottom svg \{[\s\S]*?transform: rotate\(180deg\);/);
+  assert.match(
+    conversationStyles,
+    /\.rr-conversation-scroll-to-bottom \{[\s\S]*?left: 50%;[\s\S]*?bottom: 16px;[\s\S]*?border-radius: 50%;/,
+  );
+  assert.match(
+    conversationStyles,
+    /\.rr-conversation-scroll-to-bottom \{[\s\S]*?transform: translateX\(-50%\) translateY\(4px\);/,
+  );
+  assert.doesNotMatch(
+    conversationPage,
+    /className="rr-main-send rr-conversation-scroll-to-bottom"/,
   );
   assert.match(
     conversationStyles,
@@ -143,6 +177,44 @@ test("主应用稳定会话身份回调并复用统一 composer", async () => {
   assert.doesNotMatch(conversationStyles, /rr-conversation-stream-line/);
   assert.doesNotMatch(conversationPage, /rr-conversation-composer/);
   assert.doesNotMatch(conversationStyles, /rr-conversation-composer/);
+});
+
+test("assistant 回答悬停浮现复制按钮且优先复制原始 Markdown", async () => {
+  const conversationPage = await readFile(
+    "src/components/ConversationPage.tsx",
+    "utf8",
+  );
+  const conversationStyles = await readFile(
+    "src/styles/conversation-page.css",
+    "utf8",
+  );
+
+  assert.match(conversationPage, /rr-conversation-assistant-copy-button/);
+  assert.match(conversationPage, /renderAnswerText\(message\)/);
+  assert.match(conversationPage, /message\.markdown !== undefined/);
+  assert.match(conversationPage, /writeText\(/);
+  assert.match(conversationPage, /已复制/);
+  assert.match(conversationPage, /<path d="m5 12 4 4L19 6" \/>/);
+  assert.match(
+    conversationStyles,
+    /\.rr-conversation-message \{\n  position: relative;\n  margin-top: 24px;\n\}/,
+  );
+  assert.match(
+    conversationStyles,
+    /\.rr-conversation-assistant-copy-button \{[\s\S]*?opacity: 0;[\s\S]*?pointer-events: none;/,
+  );
+  assert.match(
+    conversationStyles,
+    /\.rr-conversation-message\.is-assistant:hover[\s\S]*?\.rr-conversation-assistant-copy-button:hover,[\s\S]*?\.rr-conversation-assistant-copy-button:focus-visible \{[\s\S]*?opacity: 1;[\s\S]*?pointer-events: auto;/,
+  );
+  assert.match(
+    conversationStyles,
+    /\.rr-conversation-message\.is-assistant::after \{[\s\S]*?position: absolute;[\s\S]*?right: 0;[\s\S]*?bottom: -38px;[\s\S]*?height: 38px/,
+  );
+  assert.match(
+    conversationStyles,
+    /\.rr-conversation-assistant-copy-button \{[\s\S]*?position: absolute;[\s\S]*?left: 0;[\s\S]*?bottom: -/,
+  );
 });
 
 test("全部对话使用搜索、最近/其他分组和紧凑固定行", async () => {

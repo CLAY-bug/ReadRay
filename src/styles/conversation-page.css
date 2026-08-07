@@ -16,11 +16,9 @@
 }
 
 .rr-conversation-page {
+  position: relative;
   overflow: hidden;
-  --rr-conversation-content-width: min(
-    clamp(540px, 52.7778cqw, 760px),
-    calc(100% - clamp(44px, 4.4444cqw, 64px))
-  );
+  --rr-conversation-content-width: min(760px, calc(100% - 48px));
 }
 
 .rr-conversation-bar {
@@ -149,7 +147,17 @@ button.rr-conversation-title:not(:disabled) {
   cursor: default;
 }
 
+.rr-conversation-scroll-wrap {
+  position: relative;
+  min-width: 0;
+  min-height: 0;
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+}
+
 .rr-conversation-scroll {
+  position: relative;
   min-width: 0;
   min-height: 0;
   flex: 1;
@@ -159,10 +167,82 @@ button.rr-conversation-title:not(:disabled) {
   scrollbar-width: thin;
 }
 
-.rr-conversation-page .rr-conversation-message-column,
+.rr-conversation-scroll-to-bottom {
+  position: absolute;
+  z-index: 3;
+  left: 50%;
+  bottom: 16px;
+  display: grid;
+  width: 32px;
+  height: 32px;
+  place-items: center;
+  border: 1px solid var(--rr-main-border);
+  border-radius: 50%;
+  color: var(--rr-main-muted);
+  background: var(--rr-main-bg) !important;
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.08);
+  cursor: pointer;
+  opacity: 0;
+  pointer-events: none;
+  transform: translateX(-50%) translateY(4px);
+  transition:
+    opacity 150ms ease,
+    transform 150ms ease,
+    color 150ms ease,
+    background 150ms ease,
+    border-color 150ms ease;
+}
+
+.rr-conversation-scroll-to-bottom.is-visible {
+  opacity: 1;
+  pointer-events: auto;
+  transform: translateX(-50%) translateY(0);
+}
+
+.rr-conversation-scroll-to-bottom svg {
+  transform: rotate(180deg);
+}
+
+.rr-conversation-scroll-to-bottom:hover:not(:disabled),
+.rr-conversation-scroll-to-bottom:focus-visible {
+  outline: 0;
+  color: var(--rr-main-fg);
+  border-color: var(--rr-main-border-soft);
+  background: var(--rr-main-surface-warm) !important;
+}
+
+.rr-conversation-scroll-to-bottom:active:not(:disabled) {
+  transform: translateX(-50%) translateY(1px);
+}
+
+.rr-conversation-page .rr-conversation-message-column {
+  width: var(--rr-conversation-content-width);
+  margin-inline: auto;
+}
+
 .rr-conversation-page .rr-main-composer-inner {
   width: var(--rr-conversation-content-width);
   margin-inline: auto;
+}
+
+.rr-conversation-page .rr-main-composer-area {
+  padding: 10px 0 20px;
+}
+
+.rr-conversation-page .rr-main-composer {
+  min-height: 64px;
+  gap: 4px;
+  padding: 8px 14px;
+}
+
+.rr-conversation-page .rr-main-composer textarea {
+  min-height: 24px;
+  padding: 2px 0;
+}
+
+.rr-conversation-page .rr-main-send {
+  width: 34px;
+  height: 34px;
 }
 
 .rr-conversation-message-column {
@@ -171,6 +251,7 @@ button.rr-conversation-title:not(:disabled) {
 }
 
 .rr-conversation-message {
+  position: relative;
   margin-top: 24px;
 }
 
@@ -453,6 +534,61 @@ button.rr-conversation-title:not(:disabled) {
   height: 5px;
   border-radius: 50%;
   background: var(--rr-main-fg);
+}
+
+.rr-conversation-assistant-copy-button {
+  position: absolute;
+  left: 0;
+  bottom: -30px;
+  display: inline-flex;
+  min-width: 26px;
+  height: 26px;
+  align-items: center;
+  justify-content: center;
+  border-radius: 6px;
+  padding: 0 6px;
+  color: var(--rr-main-muted);
+  cursor: pointer;
+  font-size: calc(11.5px * var(--rr-ui-font-scale));
+  opacity: 0;
+  pointer-events: none;
+  transition:
+    opacity 150ms ease,
+    color 150ms ease,
+    background 150ms ease;
+  z-index: 1;
+}
+
+/*
+ * 按钮位于回答底部的消息间隙中；用消息本身承接这段透明区域，
+ * 鼠标从回答右侧或上方滑向按钮时不会因离开文字内容而丢失悬停状态。
+ */
+.rr-conversation-message.is-assistant::after {
+  content: "";
+  position: absolute;
+  right: 0;
+  bottom: -38px;
+  left: 0;
+  height: 38px;
+  background: transparent;
+  z-index: 0;
+}
+
+.rr-conversation-message.is-assistant:hover
+  .rr-conversation-assistant-copy-button,
+.rr-conversation-message.is-assistant:focus-within
+  .rr-conversation-assistant-copy-button,
+.rr-conversation-assistant-copy-button:hover,
+.rr-conversation-assistant-copy-button:focus-visible {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.rr-conversation-assistant-copy-button:hover,
+.rr-conversation-assistant-copy-button:focus-visible {
+  outline: 0;
+  color: var(--rr-main-fg);
+  background: var(--rr-main-border-soft);
 }
 
 .rr-conversation-empty {
@@ -1232,11 +1368,6 @@ button.rr-conversation-title:not(:disabled) {
     padding-left: 14px;
   }
 
-  .rr-conversation-page .rr-conversation-message-column,
-  .rr-conversation-page .rr-main-composer-inner {
-    width: calc(100% - 32px);
-  }
-
   .rr-conversation-message-column {
     padding-top: 28px;
   }
@@ -1273,10 +1404,6 @@ button.rr-conversation-title:not(:disabled) {
 }
 
 @container (max-width: 700px) {
-  .rr-conversation-page .rr-conversation-message-column,
-  .rr-conversation-page .rr-main-composer-inner {
-    width: calc(100% - 28px);
-  }
 }
 
 @container (max-height: 650px) {

@@ -1,14 +1,5 @@
-import {
-  useCallback,
-  useEffect,
-  useId,
-  useLayoutEffect,
-  useRef,
-  useState,
-  type CSSProperties,
-  type FormEvent,
-  type ReactNode,
-} from "react";
+import { useCallback, useEffect, useId, useLayoutEffect, useRef, useState, type CSSProperties, type FormEvent, type ReactNode } from "react";
+import { writeText } from "@tauri-apps/plugin-clipboard-manager";
 import type {
   ConversationAssistantMessage,
   ConversationOperationIdentity,
@@ -160,6 +151,27 @@ function UserMessage({ message }: { message: ConversationUserMessage }) {
   );
 }
 
+function renderAnswerText(
+  message: ConversationAssistantMessage,
+): string {
+  if (message.markdown !== undefined) {
+    return message.markdown;
+  }
+  return message.blocks
+    .map((block) => {
+      if (block.kind === "paragraph") {
+        return block.content.map((inline) => inline.text).join("");
+      }
+      if (block.kind === "list") {
+        return block.items
+          .map((item) => `- ${item.map((inline) => inline.text).join("")}`)
+          .join("\n");
+      }
+      return `${block.english}\n${block.translation}`;
+    })
+    .join("\n\n");
+}
+
 function AssistantMessage({
   message,
   onOpenMemory,
@@ -170,6 +182,34 @@ function AssistantMessage({
     trigger: HTMLButtonElement,
   ) => void;
 }) {
+  const [copied, setCopied] = useState(false);
+  const copyTimerRef = useRef<number | undefined>(undefined);
+
+  useEffect(() => {
+    return () => {
+      if (copyTimerRef.current !== undefined) {
+        window.clearTimeout(copyTimerRef.current);
+      }
+    };
+  }, []);
+
+  const handleCopy = async () => {
+    const text = renderAnswerText(message).trim();
+    if (!text) {
+      return;
+    }
+    try {
+      await writeText(text);
+      setCopied(true);
+      if (copyTimerRef.current !== undefined) {
+        window.clearTimeout(copyTimerRef.current);
+      }
+      copyTimerRef.current = window.setTimeout(() => setCopied(false), 1600);
+    } catch (error) {
+      console.error("ReadRay 复制回答失败：", error);
+    }
+  };
+
   return (
     <article className="rr-conversation-message is-assistant">
       <div className="rr-conversation-assistant-copy">
@@ -224,6 +264,44 @@ function AssistantMessage({
           </div>
         ) : null}
       </div>
+      <button
+        className="rr-conversation-assistant-copy-button"
+        type="button"
+        aria-label={copied ? "已复制" : "复制回答"}
+        title={copied ? "已复制" : "复制回答"}
+        onClick={() => void handleCopy()}
+      >
+        {copied ? (
+          <svg
+            width="14"
+            height="14"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="2.1"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+            aria-hidden="true"
+          >
+            <path d="m5 12 4 4L19 6" />
+          </svg>
+        ) : (
+          <svg
+            width="14"
+            height="14"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="1.8"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+            aria-hidden="true"
+          >
+            <rect x="9" y="9" width="12" height="12" rx="2.5" />
+            <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" />
+          </svg>
+        )}
+      </button>
     </article>
   );
 }
@@ -390,6 +468,7 @@ function ConversationPage({
   const [drawerCitation, setDrawerCitation] =
     useState<ConversationMemoryCitation | null>(null);
   const [toast, setToast] = useState("");
+  const [showScrollToBottom, setShowScrollToBottom] = useState(false);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   const menuRef = useRef<HTMLDivElement>(null);
@@ -403,12 +482,77 @@ function ConversationPage({
   const generationTokenRef = useRef(0);
   const toastTimerRef = useRef<number | undefined>(undefined);
   const messageIdRef = useRef(0);
+  const scrollAnimationRef = useRef<number | undefined>(undefined);
   const conversationCreationRef = useRef<{
     requestKey: number;
     service: ConversationService;
     promise: Promise<ConversationThread>;
   } | null>(null);
   requestKeyRef.current = request.key;
+
+  const updateScrollToBottomVisibility = useCallback(() => {
+    const scroll = scrollRef.current;
+    if (!scroll) {
+      setShowScrollToBottom(false);
+      return;
+    }
+
+    const distanceFromBottom =
+      scroll.scrollHeight - scroll.scrollTop - scroll.clientHeight;
+    // 滞回：向上滚动超过 96px 才显示，回到距底部 24px 以内才隐藏；
+    // 中间区间保持当前状态，避免在临界值附近反复闪现。
+    // 隐藏阈值较小，保证点击按钮后的平滑滚动到达末尾时按钮才消失。
+    if (distanceFromBottom > 96) {
+      setShowScrollToBottom(true);
+      return;
+    }
+    if (distanceFromBottom < 24) {
+      setShowScrollToBottom(false);
+    }
+  }, []);
+
+  const scrollToBottom = useCallback(() => {
+    const scroll = scrollRef.current;
+    if (!scroll) {
+      return;
+    }
+
+    // 手动缓动滚动到底部：不依赖系统/浏览器对 smooth 的支持
+    // （Windows"减少动态效果"会让 behavior:"smooth" 退化为直接跳转），
+    // 用 rAF 逐帧逼近目标，达到类似真实鼠标滚动的丝滑感。
+    if (scrollAnimationRef.current !== undefined) {
+      cancelAnimationFrame(scrollAnimationRef.current);
+      scrollAnimationRef.current = undefined;
+    }
+    const startTop = scroll.scrollTop;
+    const targetTop = scroll.scrollHeight;
+    const distance = targetTop - startTop;
+    if (distance <= 0) {
+      return;
+    }
+    const duration = 320;
+    const startedAt = performance.now();
+    let lastAnimatedTop = startTop;
+    const step = (now: number) => {
+      // 用户手动滚动会打断动画：当前 scrollTop 与动画预期值出现偏差。
+      // 不能依赖 scroll 事件判断——程序化设置 scrollTop 也会触发 scroll 事件。
+      if (Math.abs(scroll.scrollTop - lastAnimatedTop) > 2) {
+        scrollAnimationRef.current = undefined;
+        return;
+      }
+      const progress = Math.min((now - startedAt) / duration, 1);
+      const eased = 1 - Math.pow(1 - progress, 3);
+      const nextTop = startTop + distance * eased;
+      lastAnimatedTop = nextTop;
+      scroll.scrollTop = nextTop;
+      if (progress < 1) {
+        scrollAnimationRef.current = requestAnimationFrame(step);
+      } else {
+        scrollAnimationRef.current = undefined;
+      }
+    };
+    scrollAnimationRef.current = requestAnimationFrame(step);
+  }, []);
 
   const operationIsCurrent = useCallback(
     (operation: ConversationOperationIdentity) =>
@@ -795,6 +939,10 @@ function ConversationPage({
         mountedRef.current = false;
         generationTokenRef.current += 1;
         stopTimer();
+        if (scrollAnimationRef.current !== undefined) {
+          cancelAnimationFrame(scrollAnimationRef.current);
+          scrollAnimationRef.current = undefined;
+        }
         if (toastTimerRef.current !== undefined) {
           window.clearTimeout(toastTimerRef.current);
         }
@@ -861,6 +1009,34 @@ function ConversationPage({
     return () => window.removeEventListener("resize", handleResize);
   }, []);
 
+  useEffect(() => {
+    const scroll = scrollRef.current;
+    if (!scroll) {
+      return;
+    }
+
+    const update = () => updateScrollToBottomVisibility();
+    update();
+    scroll.addEventListener("scroll", update, { passive: true });
+
+    const observer =
+      typeof ResizeObserver === "undefined"
+        ? null
+        : new ResizeObserver(update);
+    observer?.observe(scroll);
+    const messageColumn = scroll.querySelector<HTMLElement>(
+      ".rr-conversation-message-column",
+    );
+    if (messageColumn) {
+      observer?.observe(messageColumn);
+    }
+
+    return () => {
+      scroll.removeEventListener("scroll", update);
+      observer?.disconnect();
+    };
+  }, [updateScrollToBottomVisibility]);
+
   useLayoutEffect(() => {
     if (generation && scrollRef.current) {
       const scroll = scrollRef.current;
@@ -870,14 +1046,42 @@ function ConversationPage({
       if (distanceFromBottom < 80) {
         scroll.scrollTop = scroll.scrollHeight;
       }
+      updateScrollToBottomVisibility();
     }
-  }, [generation?.text, generation?.phase]);
+  }, [generation?.text, generation?.phase, updateScrollToBottomVisibility]);
 
   useLayoutEffect(() => {
-    if (scrollRef.current) {
-      scrollRef.current.scrollTop = 0;
+    const scroll = scrollRef.current;
+    if (!scroll) {
+      setShowScrollToBottom(false);
+      return;
     }
+
+    // 切换到新会话：滚动位置归零。显隐判断不在这里做——
+    // 此时异步加载的消息尚未渲染完成，scrollHeight 还是旧值。
+    scroll.scrollTop = 0;
   }, [thread?.id]);
+
+  useLayoutEffect(() => {
+    const scroll = scrollRef.current;
+    if (!scroll) {
+      return;
+    }
+
+    // 消息数量变化（会话加载完成、发送/收到消息）后等一帧，
+    // 让浏览器完成布局，再重算"回到底部"按钮的显隐。
+    let cancelled = false;
+    const frame = requestAnimationFrame(() => {
+      if (cancelled) {
+        return;
+      }
+      updateScrollToBottomVisibility();
+    });
+    return () => {
+      cancelled = true;
+      cancelAnimationFrame(frame);
+    };
+  }, [thread?.messages.length, updateScrollToBottomVisibility]);
 
   const notify = (message: string) => {
     setToast(message);
@@ -1288,10 +1492,24 @@ function ConversationPage({
         </div>
       </header>
 
-      <div className="rr-conversation-scroll" ref={scrollRef}>
-        <div className="rr-conversation-message-column" aria-live="polite">
-          {messageContent}
+      <div className="rr-conversation-scroll-wrap">
+        <div
+          className="rr-conversation-scroll"
+          ref={scrollRef}
+        >
+          <div className="rr-conversation-message-column" aria-live="polite">
+            {messageContent}
+          </div>
         </div>
+        <button
+          className={`rr-conversation-scroll-to-bottom${showScrollToBottom ? " is-visible" : ""}`}
+          type="button"
+          aria-label="滚动到底部"
+          title="滚动到底部"
+          onClick={scrollToBottom}
+        >
+          <MainAppIcon name="send-up" />
+        </button>
       </div>
 
       <form className="rr-main-composer-area" onSubmit={submit}>
