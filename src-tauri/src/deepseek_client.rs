@@ -12,6 +12,9 @@ pub(crate) struct StreamChunk {
     pub delta: String,
     pub finish_reason: Option<String>,
     pub usage: Option<Value>,
+    /// 推理模型（deepseek-v4-flash）的 `delta.reasoning_content`，仅捕获供
+    /// 调用方验证丢弃，绝不转发给 UI。
+    pub reasoning: Option<String>,
 }
 
 pub(crate) async fn stream_chat_completion_events(
@@ -64,6 +67,9 @@ struct StreamChunkChoice {
 struct StreamChunkDelta {
     #[serde(default)]
     content: Option<String>,
+    /// deepseek-v4-flash 推理过程增量；解析后只由调用方捕获验证、丢弃。
+    #[serde(default)]
+    reasoning_content: Option<String>,
 }
 
 fn parse_sse_stream(
@@ -178,15 +184,21 @@ fn parse_sse_line(operation: &str, line: &str) -> Result<Option<StreamChunk>, St
         .as_ref()
         .and_then(|choice| choice.delta.content.clone())
         .unwrap_or_default();
+    let reasoning = choice
+        .as_ref()
+        .and_then(|choice| choice.delta.reasoning_content.clone())
+        .unwrap_or_default();
+    let reasoning = (!reasoning.is_empty()).then_some(reasoning);
     let finish_reason = choice.and_then(|choice| choice.finish_reason);
     let usage = chunk.usage.filter(|usage| !usage.is_null());
-    if delta.is_empty() && finish_reason.is_none() && usage.is_none() {
+    if delta.is_empty() && reasoning.is_none() && finish_reason.is_none() && usage.is_none() {
         return Ok(None);
     }
     Ok(Some(StreamChunk {
         delta,
         finish_reason,
         usage,
+        reasoning,
     }))
 }
 
@@ -496,6 +508,7 @@ mod tests {
         assert_eq!(chunk.delta, "Hello");
         assert_eq!(chunk.finish_reason, None);
         assert!(chunk.usage.is_none());
+        assert_eq!(chunk.reasoning, None);
 
         let usage = json!({"prompt_tokens": 17, "completion_tokens": 9, "total_tokens": 26});
         let final_chunk = parse_sse_line(
@@ -509,6 +522,31 @@ mod tests {
         assert_eq!(final_chunk.delta, "");
         assert_eq!(final_chunk.finish_reason.as_deref(), Some("stop"));
         assert_eq!(final_chunk.usage, Some(usage));
+        assert_eq!(final_chunk.reasoning, None);
+    }
+
+    #[test]
+    fn captures_reasoning_content_without_folding_it_into_delta() {
+        // deepseek-v4-flash 推理增量在 delta.reasoning_content，与 content 分离；
+        // 捕获后由调用方验证丢弃，不得混入回答文本。
+        let chunk = parse_sse_line(
+            "测试模型调用",
+            r#"data: {"choices":[{"delta":{"content":"Answer","role":"assistant","reasoning_content":"thinking"}}]}"#,
+        )
+        .unwrap()
+        .expect("data line must yield a chunk");
+        assert_eq!(chunk.delta, "Answer");
+        assert_eq!(chunk.reasoning.as_deref(), Some("thinking"));
+
+        // 只含推理、没有正文的 chunk 也必须产出，让调用方能统计"纯推理零内容"。
+        let reasoning_only = parse_sse_line(
+            "测试模型调用",
+            r#"data: {"choices":[{"delta":{"reasoning_content":"thinking only"}}]}"#,
+        )
+        .unwrap()
+        .expect("reasoning-only line must yield a chunk");
+        assert_eq!(reasoning_only.delta, "");
+        assert_eq!(reasoning_only.reasoning.as_deref(), Some("thinking only"));
     }
 
     #[test]

@@ -7,7 +7,7 @@
 - 当前状态：阶段一至阶段七已经完成；阶段七设置与桌面生命周期已通过复审和真实 Tauri 人工验收。
 - 主题状态：ReadRayThemeV1、安全解析、SQLite v8、设置页导入/选择/删除、主窗口恢复以及随包 Flexoki（Light/Dark）与 30 个内置主题已通过独立审核和真实 Tauri 人工验收；主题工作不改变 DEVELOPMENT_PLAN 阶段状态。
 - 当前路线：Windows 原生，Tauri + React + TypeScript + Rust + SQLite。
-- 下一步：内置 Agent 体验升级按已确认顺序推进（先流式输出 → 再对话页 Markdown 渲染 → 最后专门讨论系统提示词构建）。任务 1 流式输出、任务 2 对话页 Markdown 渲染均已验收通过（2026-08-07），任务 3 系统提示词构建待执行；任务书、验收标准与已确认决策以 `docs/AGENT_UPGRADE.md` 为准。
+- 下一步：内置 Agent 体验升级的三个任务（流式输出 → 对话页 Markdown 渲染 → 系统提示词构建）已全部验收通过（2026-08-07）。系统提示词已从单一常量重构为组合式分节构建（`src-tauri/src/quick_ai_prompt.rs`），诚实边界升级为"负面+正面替代+回退"，Markdown 白名单精确对齐渲染器，推理模型非空规则 + reasoning 诊断日志落地。后续待定：是否需要继续 Agent 升级（如记忆注入、重新生成、超 8K 续写），或返回阶段八复习闭环讨论。
 - 阶段八：用户已明确暂缓复习阶段讨论；Agent 升级完成后按 `docs/DEVELOPMENT_PLAN.md` 再排期阶段八产品讨论。
 - 当前约束：不使用通用 Agent 框架，不内置商业词典，不做 OCR、本地大模型或跨平台支持。
 - 交接原则：`HANDOFF.md` 只记录会影响下一次恢复上下文的信息，小型文档措辞和格式调整不记录。
@@ -204,9 +204,18 @@
 - 后续性能优化（2026-08-07）：`finish_reason=length` 截断误报修复（降级为 truncated 状态保留已生成内容）；`QUICK_AI_MAX_TOKENS` 2048 → 8192（DeepSeek 文档上限，实测 v4-flash 接受）；流式渲染性能优化（去掉 `text-wrap: pretty`、滚动距底部 <80px 才跟随），200 词段落生成从约 1 分钟降至约 16 秒。
 - 验收：渲染器 20、会话 25、Rust 126 项通过，`pnpm build` / `cargo fmt --check` / `cargo check` / `git diff --check` 全绿；真实 Tauri 生成速度与渲染观感用户实测确认，任务 2 收口。
 
+### 任务 3：系统提示词构建（已完成并验收通过）
+
+- 任务书、研究结论与验收记录详见 `docs/AGENT_UPGRADE.md`。基于 Claude Code / Codex / OpenCode / Pi 源码研究（Workflow 8/9 成功），把 Quick AI 系统提示词从单一常量重构为组合式分节构建。
+- 新建 `src-tauri/src/quick_ai_prompt.rs`：5 个分节常量（persona → behavior → output_format → boundaries）+ `<readray_context>` 动态插槽 + `QuickAiDynamicContext` 空结构体（预留 learning_profile/recent_memory）+ `build_quick_ai_system_prompt()` 按静态→动态组装。`quick_ai.rs` 删常量、调用 builder，`messages[0].role=="system"` 保持。
+- 诚实边界升级为"负面（无网络/无工具/无本地记忆）+ 正面替代 + 回退行为（不知道就诚实说并提供最近可行替代，不虚构词典释义/翻译/考试事实）"；output_format 精确对齐 `src/markdownParse.ts` 白名单（支持清单 + 表格/HTML/四级+标题/图片负面清单 + http/https 链接约束）；推理模型非空规则（永不返回空回答、推理不外显）缓解"纯推理零内容"边界；不注入日期。
+- `deepseek_client.rs` 的 `StreamChunk` 新增 `reasoning` 捕获（`delta.reasoning_content`，与 content 严格分离不混入回答），`quick_ai.rs` 仅捕获验证丢弃并打诊断日志 `READRAY_QUICK_AI_REASONING_SEEN/ONLY`（纯推理零内容可观测）。
+- 解释卡与写作分析提示词保持独立未并入（一致性重构留作后续可选）。
+- 验收：用户真实 Tauri 确认效果提升；Rust 137 通过 / 4 ignored、前端 25/30/38 全绿、build/fmt/check/diff 通过；4 项真实 DeepSeek live 测试（白名单、诚实边界、两轮上下文、解释卡回归）通过。
+
 ## 下一步
 
-阶段一至阶段七已经完成，主题基础设施已通过独立审核与真实 Tauri 人工验收并收口。当前推进 ReadRay 内置 Agent 体验升级（不属于任何 DEVELOPMENT_PLAN 阶段）：执行顺序为流式输出 → 对话页 Markdown 渲染 → 系统提示词构建；任务书、验收标准与已确认决策以 `docs/AGENT_UPGRADE.md` 为准。任务 1 流式输出、任务 2 对话页 Markdown 渲染均已验收通过，任务 3 系统提示词构建待执行；执行会话完成后由调度者验收并更新本文件。阶段八（复习闭环）产品讨论已由用户明确暂缓，Agent 升级完成后按 `docs/DEVELOPMENT_PLAN.md` 再排期。
+阶段一至阶段七已经完成，主题基础设施已通过独立审核与真实 Tauri 人工验收并收口。ReadRay 内置 Agent 体验升级（流式输出 → 对话页 Markdown 渲染 → 系统提示词构建）三个任务已全部验收通过（2026-08-07），`docs/AGENT_UPGRADE.md` 记录了完整任务书与验收结论。下一步待定：可继续 Agent 升级（记忆注入、重新生成、超 8K 续写等，均在任务书未决区登记），或按 `docs/DEVELOPMENT_PLAN.md` 返回阶段八复习闭环产品讨论（用户此前已明确暂缓）。
 
 - 已确认决策（详见 `docs/AGENT_UPGRADE.md`）：本轮不实现记忆注入，对话继续维持"不声称能访问本地学习记录/联网/长期记忆"的诚实边界；"重新生成"沿用覆盖式语义（与 ChatGPT 主流一致），本轮不实现。
 - 新环境仍可复制 `.env.example` 为 `.env` 填写开发期 `DEEPSEEK_API_KEY`；用户在设置页保存或清除后，以 Windows 安全存储中的持久化决定为准。真实 `.env` 不提交。

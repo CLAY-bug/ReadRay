@@ -16,6 +16,7 @@ pub mod explanation;
 pub mod learning_records;
 pub mod model_usage;
 pub mod quick_ai;
+pub mod quick_ai_prompt;
 pub mod secret_store;
 pub mod settings;
 pub mod themes;

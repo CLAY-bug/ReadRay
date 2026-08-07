@@ -4,7 +4,7 @@ project:
   repo_root: "."
 
 meta:
-  version: "1.41"
+  version: "1.43"
   last_updated: "2026-08-06"
   updated_by: "Codex"
   source_of_truth: "docs/RESOURCE_MAP.yml"
@@ -78,7 +78,7 @@ core_docs:
     read_when:
       - "执行或验收流式输出、对话页 Markdown 渲染、系统提示词构建任务。"
       - "恢复内置 Agent 升级的上下文或核对已确认决策。"
-    notes: "执行顺序已确认：先流式输出 → 再 Markdown 渲染 → 最后专门讨论系统提示词构建。任务 1 流式输出、任务 2 对话页 Markdown 渲染均已验收通过（2026-08-07），任务 3 系统提示词构建待执行；已确认决策包括本轮不实现记忆注入、重新生成沿用覆盖式语义。任务完成后由调度者验收并更新本文件与 HANDOFF.md。"
+    notes: "执行顺序已确认：先流式输出 → 再 Markdown 渲染 → 最后专门讨论系统提示词构建。任务 1 流式输出、任务 2 对话页 Markdown 渲染、任务 3 系统提示词构建均已验收通过（2026-08-07）。系统提示词已重构为组合式分节构建（quick_ai_prompt.rs）。已确认决策包括本轮不实现记忆注入、重新生成沿用覆盖式语义。后续任务（记忆注入、重新生成、超 8K 续写）在任务书未决区登记。"
     risk: "任务书不是阶段计划；本文件不改变 DEVELOPMENT_PLAN 的阶段边界，阶段八仍处于暂缓状态。"
 
   - path: "docs/THEME_PROTOCOL.md"

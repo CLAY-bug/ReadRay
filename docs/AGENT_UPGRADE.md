@@ -1,6 +1,6 @@
 # ReadRay 内置 Agent 体验升级计划
 
-最后更新：2026-08-06
+最后更新：2026-08-07
 
 > 本文件是"ReadRay 内置 Agent（Quick AI / 对话）体验升级"的讨论与任务执行档案。执行任务由独立会话承担，本文件作为该会话的任务书与验收依据；调度者负责方向与验收。
 
@@ -22,7 +22,7 @@ ReadRay 的对话链路（Quick AI）目前是纯文本、非流式、单段展�
 - **本轮不实现、不启用记忆注入**：对话继续维持"不声称能访问本地学习记录/联网/长期记忆"的诚实边界。该边界在系统提示词任务中强化落实，接入时机等待阶段八复习模型与真实检索信号落地后再评估。
 - **"重新生成"沿用覆盖式语义**（与 ChatGPT 主流一致）：重新生成会替换当前 assistant 回答，不保留多版本分页历史。理由：与 ChatGPT/主流客户端产品语义一致、实现与上下文管理简单；多版本保留会引入版本分页 UI 与检索复杂度，且当前对话上下文是纯追加式，为后续阶段留有余量。**本轮任务不实现"重新生成"**，仅确认语义边界，留给后续任务。
 
-## 任务 1：流式输出（执行中）
+## 任务 1：流式输出（已完成并验收通过）
 
 ### 目标
 
@@ -162,6 +162,69 @@ Quick AI 对话从"一次性完整返回"升级为"SSE 流式增量返回"，并
 - **QUICK_AI_MAX_TOKENS 调整 2048 → 8192（2026-08-07）**：调研确认 2048 远低于 DeepSeek 官方文档上限（8192，实测 `deepseek-v4-flash` 对 4096/8192/16384/32768 全部接受），且 `deepseek-v4-flash` 为推理模型（输出含 reasoning token，实测 190 completion 中 147 为推理），2048 实际留给正文的预算更少，长回答易触发 length 截断。max_tokens 是上限非目标，提高不改变正常回答长度与成本，只为长文本输出留空间；ReadRay 学习对话场景按文档上限 8192 设置，未采用 Claude Code 的 32K（其任务单次输出可达 8K+，场景不同）。单次完整输出质量优于多轮续写，超 8K 的长文本续写留待任务 3 讨论清单。验证：Rust 126 通过、fmt/check 通过；前端无依赖（仅主题 sourceUrl 长度校验引用 2048，无关）。
 - **流式渲染性能优化（2026-08-07）**：用户反馈 200 词段落生成约 1 分钟。实测同参数直连 DeepSeek：200 词英文段落总耗时仅 **4.8 秒**（响应头 736ms、首 token 898ms、81 token/s），确认瓶颈在 ReadRay 前端而非模型/网络。前端累积性能问题：① `.rr-conversation-assistant-copy` 的 `text-wrap: pretty` 让每个 delta（~12ms 一次）都触发全量优化断行重排，随文本增长平方级变贵；② 每个 delta 强制 `scrollTop = scrollHeight`，用户上翻阅读时也被拉回底部。修复：去掉 `text-wrap: pretty`（改默认 normal，视觉几乎无感）；滚动改为"距底部 < 80px 才自动跟随"，用户主动上翻时暂停跟随。delta 节流（合并渲染）评估为"消除昂贵操作后的备选项"，未实施，留待实测仍有卡顿再加（50ms 左右保持平滑）。验证：会话 25、渲染器 20、build/diff 通过；真实 Tauri 生成速度需用户实测确认。
 
-## 任务 3：系统提示词构建（待执行）
+## 任务 3：系统提示词构建（已完成并验收通过）
 
-> 占位。目标与验收标准在任务 2 完成后补充；将专门讨论组合式上下文与诚实边界。
+### 验收结论（2026-08-07，调度者）
+
+- 任务 3 已由用户在真实 Tauri 中验收通过：效果相比之前有明显提升；任务 3 正式收口。
+- 代码审查通过：`src-tauri/src/quick_ai_prompt.rs` 实现质量高——5 分节常量 + `build_quick_ai_system_prompt()` 组合式组装，完全对齐研究结论（Claude Code / Codex / OpenCode / Pi 的组合式哲学）；诚实边界从"不要声称 X"升级为"负面 + 正面替代 + 回退行为"；output_format 精确对齐渲染器白名单（支持清单 + 表格/HTML/四级+标题/图片负面清单 + http/https 链接约束）；`<readray_context>` 空插槽 + `QuickAiDynamicContext` 预留；推理非空规则 + `reasoning_content` 捕获诊断日志（`READRAY_QUICK_AI_REASONING_SEEN/ONLY`）缓解并观测"纯推理零内容"边界。解释卡与写作分析提示词保持独立，未并入。
+- 验证：Rust 137 通过 / 4 ignored（+11：prompt 10 + reasoning 1）、前端 25/30/38 全绿、build/fmt/check/diff 通过；4 项真实 DeepSeek live 测试（白名单、诚实边界、两轮上下文、解释卡回归）29s 通过。调度者复跑稳定全绿（首次偶发 1 失败为并行 build 资源竞争，连续 7 次单独跑全绿）。
+
+### 背景与研究结论
+
+任务 1（流式）、任务 2（Markdown 渲染）已验收通过。本任务把 Quick AI 的系统提示词从单一常量重构为"组合式 + 可注入"结构。2026-08-07 完成深度研究（Workflow，8/9 成功），基于 Claude Code / Codex CLI / OpenCode / Pi 的源码实证，核心结论：
+
+- **没有任何顶级 Agent 用一条巨型常量提示词**——都是"静态基础 + 动态片段"组合式装配（Codex world-state 差分、Claude Code 精简基础 + 指令下沉、OpenCode 三明治拼装、Pi 标记化上下文块）。ReadRay 当前的 `QUICK_AI_SYSTEM_PROMPT` 单一常量正是反面教材。
+- **Claude Code 为 Claude 5 系列删掉 80%+ 系统提示词，评测无损失**——"让判断力强的模型更简单"；删除低信号条款优于不断追加。
+- **能力诚实是结构化而非声明式**——负面声明（无网络/无工具/无本地记忆）必须搭配正面替代与回退行为。
+- **输出规则必须对齐真实管线**——ReadRay 的 Markdown 白名单渲染器（`src/markdownParse.ts`）就是真实能力，应精确写进提示词，模型就不会输出渲染不了的内容。
+- **注入上下文用标记分隔**（如 `<readray_context>…</readray_context>`）——为未来记忆/学习画像注入预留插槽，模型把注入内容当数据而非指令。
+- **提示词是软件工件**——分节、版本化、可测试；先写行为测试再写提示词。
+- **一个触点一个 base**——对话 / 解释卡 / 写作分析各有自己的定制 base，不共享常量（解释卡与写作分析已各自正确，本任务不动它们）。
+
+### 目标
+
+把 Quick AI 系统提示词重构为：**静态 base（分节常量）+ 动态片段（可注入）+ 标记包裹**，由 `build_quick_ai_system_prompt()` 运行时组装。
+
+### 推荐组装结构（单条 system message，静态→动态）
+
+```
+[persona]      一句话身份：通用助手 + 英语专长（≤2 行，第二人称、正面、不吹嘘）
+[behavior]     专长分工 + 提问策略（直接回答普通问题；英语学习/考试/写作/翻译做专家教练；个性化计划缺上下文时只问 2-4 个必要问题；匹配用户语言）
+[output_format] Markdown 白名单精确对齐 src/markdownParse.ts + 推理模型"必须产出非空回答"规则
+[boundaries]   正面框架的诚实边界（无网络/无工具/无本地记忆 → 能做什么 + 做不到时的替代 + 回退行为）
+[context]      动态槽 <readray_context>…</readray_context>（当前空，预留未来记忆/画像注入）
+```
+
+### 实现约束
+
+- **组合式重构**：新建 `src-tauri/src/quick_ai_prompt.rs`，用命名分节常量（`QUICK_AI_PERSONA`、`QUICK_AI_BEHAVIOR`、`QUICK_AI_OUTPUT_FORMAT`、`QUICK_AI_BOUNDARIES`、`QUICK_AI_CONTEXT_MARKERS`）与 `pub fn build_quick_ai_system_prompt(context: &QuickAiDynamicContext) -> String`。在 `quick_ai.rs` 删除 `QUICK_AI_SYSTEM_PROMPT` 常量，`build_request_messages` 调用 builder（保持 `messages[0].role == "system"`，DeepSeek 用单条 system message）。`lib.rs` 添加 `pub mod quick_ai_prompt;`。
+- **诚实边界升级**：从"不要声称能访问本地记忆"升级为"负面 + 正面替代 + 回退行为"。草案：`You run locally inside ReadRay. You have no tools and no internet access: do not claim you can browse the web, open other apps, or call external tools. You cannot read the user's local files, learning records, or long-term memory: do not claim to remember the user's past study history, saved words, or cards from other conversations. If asked to do something you cannot do, or asked for facts you do not know, say so briefly and honestly, then offer the closest useful alternative. Do not invent or fabricate dictionary definitions, translations, or exam facts.`
+- **output_format 精确对齐渲染器**：列出支持子集（`#`/`##`/`###` 标题、`**粗体**`、`*斜体*`、`~~删除线~~`、行内 `code`、多行代码块、`-`/`1.` 列表、`>` 引用、`---` 分隔线、`[text](https://…)` 链接），并**明确列出会以纯文本显示的内容**（表格、HTML 标签、`####`+ 标题、图片）——模型就不会输出渲染不了的内容。链接只接受 http/https。
+- **推理模型规则**：`deepseek-v4-flash` 是推理模型，`reasoning_content` 会被 SSE 路径丢弃（`StreamChunkDelta` 只读 content）。提示词加"永远不要返回空回答；推理是内部过程，绝不展示给用户；即使简单问题也必须产出实际内容"——直接缓解"纯推理零内容"边界。
+- **动态上下文插槽**：新增 `QuickAiDynamicContext` 空结构体（预留 `learning_profile` / `recent_memory`），builder 拼接 `<readray_context>…</readray_context>` 标记片段，当前空、空回退渲染无内容。未来开启记忆注入只需填充该结构体，提示词文本不动。**本轮不注入记忆**（已确认决策）。
+- **不注入日期**：保持诚实边界（"今天"会诱导模型答当前事件）且保持前缀稳定（Pi 因缓存稳定性删除了日期）。
+- **保持会话历史注入**：最近 ≤40 条、user 开头的真实消息注入方式不变。
+- **不新增依赖**。解释卡（`explanation_card_system_prompt`）与写作分析（`writing_analysis_system_prompt` / `writing_answer_system_prompt`）各自的系统提示词**不并入本任务**，保持独立（一致性重构留作后续可选）。
+
+### 涉及文件（预计）
+
+- `src-tauri/src/quick_ai_prompt.rs`（新增）：分节常量 + builder + `QuickAiDynamicContext` + 测试。
+- `src-tauri/src/quick_ai.rs`：删除 `QUICK_AI_SYSTEM_PROMPT`，改用 builder；`StreamChunkDelta` 可选补 `reasoning_content` 捕获（仅捕获，不转发）。
+- `src-tauri/src/lib.rs`：注册新模块。
+- 测试：`src-tauri/src/quick_ai_prompt.rs` 内单测（组装顺序、静态→动态、标记、空回退、输出格式白名单契约、诚实边界正面框架）+ `quick_ai.rs` 既有提示词测试同步。
+
+### 验收标准
+
+- 现有测试全绿：Rust（原 126 + 新增）、`pnpm test:conversation` / `test:writing` / `test:settings`、`pnpm build`、`cargo fmt --check`、`cargo check`、`git diff --check`。
+- 新增契约测试：组装后的提示词包含 persona 行、行为策略、诚实边界（负面 + 正面替代 + 回退）、Markdown 白名单（含"不支持表格/HTML"的负面清单）；标记存在且空回退无内容。
+- 真实 DeepSeek（`deepseek-v4-flash`）验证（live 测试或用户人工）：模型按白名单输出（无表格/HTML/超深标题），始终产出非空回答，诚实边界生效（要求联网/查记忆时如实拒绝）。
+- 提示词不注入日期；会话历史注入方式不变。
+- 对话/解释卡/写作分析三个触点提示词保持独立。
+
+### 未决/后续
+
+- `reasoning_content` 捕获是否实现（仅验证丢弃，不强求）。
+- 解释卡与写作分析提示词的一致性重构（拆分静态/动态）留作后续可选。
+- 未来记忆注入时填充 `QuickAiDynamicContext`，并做字节预算截断（参考 Codex `project_doc_max_bytes`）。
+- 超 8K 长文本的多轮续写方案（任务 2 遗留，本任务不实现，仅记录）。
