@@ -656,7 +656,7 @@ async fn deepseek_smoke_test(prompt: Option<String>) -> Result<DeepSeekSmokeResu
         "max_tokens": 64
     });
 
-    let response = reqwest::Client::new()
+    let response = crate::deepseek_client::shared_http_client()?
         .post(format!("{DEEPSEEK_BASE_URL}/chat/completions"))
         .bearer_auth(api_key)
         .json(&request_body)

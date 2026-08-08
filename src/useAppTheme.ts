@@ -1,6 +1,13 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+} from "react";
 import { listen } from "@tauri-apps/api/event";
 import { desktopSaveCoordinator } from "./desktopLifecycle";
+import { getPrefetchedThemeSnapshot } from "./themePrefetch.ts";
 import type { ThemeService } from "./themeService.ts";
 import {
   ThemeMutationCoordinator,
@@ -97,10 +104,21 @@ export function useAppTheme(service: ThemeService | null): AppThemeController {
     }
   }, [coordinator, reload]);
 
-  useEffect(() => {
+  // 用 useLayoutEffect：在浏览器首次绘制前应用预取主题，
+  // 使 `.rr-main-app` 首帧即为已选主题（不再先绘制 CSS 硬编码默认值）。
+  useLayoutEffect(() => {
     mountedRef.current = true;
-    if (service) void reload();
-    else apply(DEFAULT_THEME_SNAPSHOT);
+    const prefetched = getPrefetchedThemeSnapshot();
+    if (service) {
+      if (prefetched) {
+        apply(prefetched);
+        void reload();
+      } else {
+        void reload();
+      }
+    } else {
+      apply(DEFAULT_THEME_SNAPSHOT);
+    }
     return () => {
       mountedRef.current = false;
       requestKeyRef.current += 1;

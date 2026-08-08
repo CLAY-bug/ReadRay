@@ -27,5 +27,6 @@ src-tauri/target
 *.sln
 *.sw?
 
+
 #design
 design-open-design

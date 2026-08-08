@@ -477,3 +477,69 @@ test("正式主题路径不使用前端存储、不执行原始 CSS，也不联�
   assert.match(files[5], /manifest_json, light_colors_json, dark_colors_json, warnings_json/);
   assert.doesNotMatch(files[5], /reqwest|ureq|webview|set_inner_html/);
 });
+
+import {
+  __resetPrefetchedThemeForTest,
+  __setThemeInvokeForTest,
+  __setThemePrefetchTimeoutForTest,
+  getPrefetchedThemeSnapshot,
+  prefetchThemeSnapshot,
+} from "../src/themePrefetch.ts";
+
+test("主题预取：非 Tauri 环境跳过，不调用 invoke", async () => {
+  __resetPrefetchedThemeForTest();
+  __setThemeInvokeForTest(() => {
+    throw new Error("非 Tauri 环境不应调用 invoke");
+  });
+  // Node 无 window：isTauriRuntime() 返回 false，直接跳过。
+  await prefetchThemeSnapshot();
+  assert.equal(getPrefetchedThemeSnapshot(), null);
+});
+
+test("主题预取：Tauri 环境成功预取并校验快照", async () => {
+  __resetPrefetchedThemeForTest();
+  globalThis.window = globalThis.window ?? {};
+  globalThis.window.__TAURI_INTERNALS__ = {};
+  const valid = clone(DEFAULT_THEME_SNAPSHOT);
+  __setThemeInvokeForTest(async () => valid);
+  await prefetchThemeSnapshot();
+  assert.deepEqual(getPrefetchedThemeSnapshot(), validateThemeSnapshot(valid));
+  delete globalThis.window;
+});
+
+test("主题预取：invoke 失败时静默回退，不抛出", async () => {
+  __resetPrefetchedThemeForTest();
+  globalThis.window = { __TAURI_INTERNALS__: {} };
+  __setThemeInvokeForTest(async () => {
+    throw new Error("IPC 失败");
+  });
+  await prefetchThemeSnapshot();
+  assert.equal(getPrefetchedThemeSnapshot(), null);
+  delete globalThis.window;
+});
+
+test("主题预取：非法快照被校验拒绝并静默回退", async () => {
+  __resetPrefetchedThemeForTest();
+  globalThis.window = { __TAURI_INTERNALS__: {} };
+  __setThemeInvokeForTest(async () => ({ currentThemeId: "bad", themes: [] }));
+  await prefetchThemeSnapshot();
+  assert.equal(getPrefetchedThemeSnapshot(), null);
+  delete globalThis.window;
+});
+
+test("主题预取：invoke 挂起超过超时后静默回退，不阻塞挂载", async () => {
+  __resetPrefetchedThemeForTest();
+  __setThemePrefetchTimeoutForTest(50);
+  globalThis.window = { __TAURI_INTERNALS__: {} };
+  __setThemeInvokeForTest(
+    () => new Promise(() => {}), // 永不 resolve：模拟 IPC 挂起
+  );
+  const startedAt = Date.now();
+  await prefetchThemeSnapshot();
+  const elapsed = Date.now() - startedAt;
+  // 超时兜底生效：不阻塞挂载，快速回退，且不抛异常。
+  assert.equal(getPrefetchedThemeSnapshot(), null);
+  assert.ok(elapsed < 500, `预取应在超时后返回而非挂起，实际耗时 ${elapsed}ms`);
+  delete globalThis.window;
+  __setThemePrefetchTimeoutForTest(2000);
+});

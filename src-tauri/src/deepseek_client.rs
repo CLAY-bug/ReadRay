@@ -5,7 +5,25 @@ use reqwest::Response;
 use serde::de::DeserializeOwned;
 use serde::Deserialize;
 use serde_json::{json, Value};
+use std::time::Duration;
 use tauri::AppHandle;
+
+/// DeepSeek 请求整体超时：从请求发出到响应读取完成。
+/// 流式长回答（8K tokens 上限）实测一般 30-90s，180s 留足余量，
+/// 同时兜底"连接建立后永不返回"的挂起场景。
+const REQUEST_TOTAL_TIMEOUT: Duration = Duration::from_secs(180);
+
+/// 流式响应空闲超时：读取到每个 chunk 后重置；连续 60s 无数据则中断。
+/// 防止 DeepSeek 流不关闭或网络半开导致 UI 永久停在"正在生成"。
+const STREAM_READ_TIMEOUT: Duration = Duration::from_secs(60);
+
+pub(crate) fn shared_http_client() -> Result<reqwest::Client, String> {
+    reqwest::Client::builder()
+        .timeout(REQUEST_TOTAL_TIMEOUT)
+        .read_timeout(STREAM_READ_TIMEOUT)
+        .build()
+        .map_err(|error| format!("ReadRay HTTP 客户端创建失败：{error}"))
+}
 
 #[derive(Debug)]
 pub(crate) struct StreamChunk {
@@ -22,7 +40,7 @@ pub(crate) async fn stream_chat_completion_events(
     request_body: &Value,
     api_key: &str,
 ) -> Result<futures_util::stream::BoxStream<'static, Result<StreamChunk, String>>, String> {
-    let response = reqwest::Client::new()
+    let response = shared_http_client()?
         .post(format!("{DEEPSEEK_BASE_URL}/chat/completions"))
         .bearer_auth(api_key)
         .json(request_body)
@@ -257,7 +275,7 @@ async fn send_chat_completion_value(
     request_body: &Value,
     api_key: &str,
 ) -> Result<Value, String> {
-    let response = reqwest::Client::new()
+    let response = shared_http_client()?
         .post(format!("{DEEPSEEK_BASE_URL}/chat/completions"))
         .bearer_auth(api_key)
         .json(request_body)
@@ -276,7 +294,7 @@ where
         .into_key()
         .ok_or_else(|| format!("未配置 DeepSeek API Key，无法执行 {operation}。"))?;
 
-    let response = reqwest::Client::new()
+    let response = shared_http_client()?
         .get(format!("{DEEPSEEK_BASE_URL}{path}"))
         .bearer_auth(api_key)
         .send()
@@ -596,5 +614,15 @@ mod tests {
         assert_eq!(chunk.delta, "");
         assert_eq!(chunk.finish_reason, None);
         assert_eq!(chunk.usage, Some(usage));
+    }
+
+    #[test]
+    fn shared_client_creates_successfully() {
+        // 流式链路必须有整体超时 + 流空闲超时（builder 设置，见 shared_http_client），
+        // 防止"一直生成中"。reqwest Client 不暴露超时 getter，
+        // 此处验证共享客户端可创建（超时配置在构建时由 builder 生效）。
+        assert!(shared_http_client().is_ok());
+        assert_eq!(REQUEST_TOTAL_TIMEOUT.as_secs(), 180);
+        assert_eq!(STREAM_READ_TIMEOUT.as_secs(), 60);
     }
 }
