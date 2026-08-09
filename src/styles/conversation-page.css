@@ -910,7 +910,38 @@ button.rr-conversation-title:not(:disabled) {
   display: flex;
   align-items: center;
   gap: 10px;
-  margin: 24px 0 30px;
+  margin: 12px 0 30px;
+}
+
+.rr-conversation-history-source-filter {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 24px;
+}
+
+.rr-conversation-history-source-filter button {
+  min-height: 29px !important;
+  border: 1px solid var(--rr-main-border) !important;
+  border-radius: 999px !important;
+  padding: 0 11px !important;
+  color: var(--rr-main-muted) !important;
+  background: transparent !important;
+  font-size: calc(11px * var(--rr-ui-font-scale)) !important;
+  cursor: pointer;
+}
+
+.rr-conversation-history-source-filter button:hover,
+.rr-conversation-history-source-filter button:focus-visible,
+.rr-conversation-history-source-filter button.is-active {
+  outline: 0;
+  border-color: color-mix(
+    in oklab,
+    var(--rr-main-accent),
+    var(--rr-main-border) 58%
+  ) !important;
+  color: var(--rr-main-fg) !important;
+  background: var(--rr-main-selection) !important;
 }
 
 .rr-conversation-history-search {
@@ -1197,9 +1228,40 @@ button.rr-conversation-title:not(:disabled) {
   font-weight: 500;
 }
 
-.rr-conversation-history-date {
+.rr-conversation-history-meta {
+  display: flex;
   grid-column: 1;
   grid-row: 2;
+  min-width: 0;
+  align-items: center;
+  gap: 8px;
+}
+
+.rr-conversation-history-origin {
+  display: inline-flex;
+  min-height: 18px;
+  flex: 0 0 auto;
+  align-items: center;
+  border: 1px solid var(--rr-main-border);
+  border-radius: 999px;
+  padding: 0 7px;
+  color: var(--rr-main-fg-secondary);
+  background: var(--rr-main-border-soft);
+  font-size: calc(9.5px * var(--rr-ui-font-scale));
+  line-height: 1;
+}
+
+.rr-conversation-history-origin.is-overlay {
+  border-color: color-mix(
+    in oklab,
+    var(--rr-main-accent),
+    var(--rr-main-border) 66%
+  );
+  color: var(--rr-main-accent);
+  background: var(--rr-main-selection);
+}
+
+.rr-conversation-history-date {
   color: var(--rr-main-muted);
   font-family: var(--rr-main-font-display);
   font-size: calc(10.5px * var(--rr-ui-font-scale));

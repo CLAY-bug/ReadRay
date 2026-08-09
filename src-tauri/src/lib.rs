@@ -36,21 +36,42 @@ struct WindowState {
     always_on_top: bool,
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, PartialEq, Eq)]
 enum OverlayWindowStage {
     Input,
     Result,
     Error,
+    QuickAi,
 }
 
 impl OverlayWindowStage {
     fn size(self) -> LogicalSize<f64> {
         match self {
-            Self::Input => LogicalSize::new(720.0, 104.0),
+            Self::Input => LogicalSize::new(750.0, 58.0),
             Self::Result => LogicalSize::new(800.0, 560.0),
             Self::Error => LogicalSize::new(720.0, 132.0),
+            Self::QuickAi => LogicalSize::new(750.0, 500.0),
         }
     }
+
+    fn uses_drawer_anchor_with(self, next: Self) -> bool {
+        matches!(
+            (self, next),
+            (Self::Input, Self::QuickAi) | (Self::QuickAi, Self::Input)
+        )
+    }
+}
+
+fn current_overlay_window_stage() -> &'static Mutex<OverlayWindowStage> {
+    static STAGE: OnceLock<Mutex<OverlayWindowStage>> = OnceLock::new();
+    STAGE.get_or_init(|| Mutex::new(OverlayWindowStage::Input))
+}
+
+fn get_current_overlay_window_stage() -> Result<OverlayWindowStage, String> {
+    current_overlay_window_stage()
+        .lock()
+        .map(|stage| *stage)
+        .map_err(tauri_err)
 }
 
 #[cfg(target_os = "windows")]
@@ -282,8 +303,28 @@ fn load_project_env() {
 }
 
 fn resize_overlay_window(window: &WebviewWindow, stage: OverlayWindowStage) -> Result<(), String> {
+    let previous_stage = get_current_overlay_window_stage()?;
+    let drawer_position = if previous_stage.uses_drawer_anchor_with(stage) {
+        let position = window.outer_position().map_err(tauri_err)?;
+        let scale_factor = window.scale_factor().map_err(tauri_err)?;
+        let previous_size = previous_stage.size();
+        let next_size = stage.size();
+        Some(SavedOverlayPosition {
+            x: f64::from(position.x) / scale_factor + (previous_size.width - next_size.width) / 2.0,
+            y: f64::from(position.y) / scale_factor,
+        })
+    } else {
+        None
+    };
+
     window.set_size(stage.size()).map_err(tauri_err)?;
-    if let Some(position) = get_saved_overlay_position()? {
+    *current_overlay_window_stage().lock().map_err(tauri_err)? = stage;
+    if let Some(position) = drawer_position {
+        window
+            .set_position(LogicalPosition::new(position.x, position.y))
+            .map_err(tauri_err)?;
+        save_overlay_position_from_logical(position.x, position.y)?;
+    } else if let Some(position) = get_saved_overlay_position()? {
         window
             .set_position(LogicalPosition::new(position.x, position.y))
             .map_err(tauri_err)?;
@@ -387,7 +428,7 @@ pub(crate) fn wake_quick_query(app: &tauri::AppHandle) -> Result<(), String> {
         .get_webview_window(OVERLAY_WINDOW_LABEL)
         .ok_or_else(|| "ReadRay overlay 窗口不存在。".to_string())?;
     set_pending_overlay_intent(OverlayIntent::show_input())?;
-    resize_overlay_window(&window, OverlayWindowStage::Input)?;
+    resize_overlay_window(&window, get_current_overlay_window_stage()?)?;
     show_and_focus(&window)?;
     app.emit_to(OVERLAY_WINDOW_LABEL, "readray://overlay-intent", ())
         .map_err(tauri_err)
@@ -401,7 +442,7 @@ fn toggle_window_visibility(window: &WebviewWindow) -> Result<bool, String> {
         window.hide().map_err(tauri_err)?;
         Ok(false)
     } else {
-        resize_overlay_window(window, OverlayWindowStage::Input)?;
+        resize_overlay_window(window, get_current_overlay_window_stage()?)?;
         show_and_focus(window)?;
         Ok(true)
     }
@@ -459,6 +500,7 @@ fn set_overlay_window_stage(window: WebviewWindow, stage: &str) -> Result<(), St
         "input" | "loading" => OverlayWindowStage::Input,
         "result" => OverlayWindowStage::Result,
         "error" => OverlayWindowStage::Error,
+        "quick-ai" => OverlayWindowStage::QuickAi,
         other => return Err(format!("未知 overlay stage：{other}")),
     };
 

@@ -21,6 +21,7 @@ function snapshot(messages = [], overrides = {}) {
     id: 17,
     title: "真实会话",
     model: "deepseek-v4-flash",
+    origin: "main",
     createdAtUnixMs: NOW.getTime(),
     updatedAtUnixMs: NOW.getTime(),
     messages,
@@ -272,7 +273,7 @@ test("Tauri repository 使用既有 Quick AI commands 和 camelCase 参数", asy
   await repository.send(17, 3, "继续问题");
 
   assert.deepEqual(calls, [
-    { command: "create_quick_ai_conversation", args: undefined },
+    { command: "create_quick_ai_conversation", args: { origin: "main" } },
     {
       command: "get_quick_ai_conversation",
       args: { conversationId: 17 },
@@ -309,6 +310,27 @@ test("Tauri repository 使用既有 Quick AI commands 和 camelCase 参数", asy
       filters: [{ name: "Markdown", extensions: ["md"] }],
     },
   ]);
+});
+
+test("主窗口最近会话只查询 main，全部历史保留 main 与 overlay", async () => {
+  const todayRepository = await readFile("src/todayRepository.ts", "utf8");
+  const historyPage = await readFile(
+    "src/components/ConversationHistoryPage.tsx",
+    "utf8",
+  );
+  const quickAiTypes = await readFile("src/types/quickAi.ts", "utf8");
+
+  assert.match(
+    todayRepository,
+    /list_recent_quick_ai_conversations[\s\S]*?\{ limit, origin: "main" \}/,
+  );
+  assert.match(historyPage, /\["main", "主窗口"\]/);
+  assert.match(historyPage, /\["overlay", "Quick AI"\]/);
+  assert.doesNotMatch(historyPage, /legacy|旧会话/);
+  assert.match(
+    quickAiTypes,
+    /ConversationOrigin = "overlay" \| "main";/,
+  );
 });
 
 test("原生保存对话框取消后不调用 Rust 导出 command", async () => {
@@ -373,6 +395,7 @@ test("会话列表仅由左键打开，右键统一进入三项管理菜单", as
 
   assert.match(sidebar, /onClick=\{\(\) => onRecentConversationSelect/);
   assert.match(sidebar, /onContextMenu=\{\(event\) =>\s*onRecentConversationContextMenu/);
+  assert.doesNotMatch(sidebar, /暂无 Quick AI 对话/);
   assert.match(history, /onClick=\{\(\) => onOpenConversation/);
   assert.match(history, /onContextMenu=\{\(event\) =>\s*onConversationContextMenu/);
   assert.doesNotMatch(history, /rr-conversation-history-actions/);
@@ -735,8 +758,18 @@ test("全部会话、重命名和删除只使用数据库 ID 并在成功后刷�
       create: async () => snapshot(),
       get: async () => snapshot(),
       list: async () => [
-        { id: 17, title: "  第一段历史  ", updatedAtUnixMs: NOW.getTime() },
-        { id: 23, title: "第二段历史", updatedAtUnixMs: NOW.getTime() - 1 },
+        {
+          id: 17,
+          title: "  第一段历史  ",
+          origin: "main",
+          updatedAtUnixMs: NOW.getTime(),
+        },
+        {
+          id: 23,
+          title: "第二段历史",
+          origin: "overlay",
+          updatedAtUnixMs: NOW.getTime() - 1,
+        },
       ],
       rename: async (conversationId, title) => {
         calls.push({ operation: "rename", conversationId, title });
@@ -763,8 +796,18 @@ test("全部会话、重命名和删除只使用数据库 ID 并在成功后刷�
   await service.deleteConversation("23");
 
   assert.deepEqual(all, [
-    { id: "17", title: "第一段历史", updatedAtUnixMs: NOW.getTime() },
-    { id: "23", title: "第二段历史", updatedAtUnixMs: NOW.getTime() - 1 },
+    {
+      id: "17",
+      title: "第一段历史",
+      origin: "main",
+      updatedAtUnixMs: NOW.getTime(),
+    },
+    {
+      id: "23",
+      title: "第二段历史",
+      origin: "overlay",
+      updatedAtUnixMs: NOW.getTime() - 1,
+    },
   ]);
   assert.equal(renamed.id, "17");
   assert.equal(renamed.title, "新名称");

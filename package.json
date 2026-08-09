@@ -7,6 +7,7 @@
     "dev": "vite",
     "build": "tsc && vite build",
     "preview": "vite preview",
+    "test:overlay": "node --test tests/overlayLifecycle.test.mjs",
     "test:conversation": "node --test tests/conversationService.test.mjs",
     "test:writing": "node --test tests/writing*.test.mjs",
     "test:settings": "node --test tests/settingsService.test.mjs tests/themeService.test.mjs tests/desktopLifecycle.test.mjs",

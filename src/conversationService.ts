@@ -71,6 +71,9 @@ function validateSnapshot(snapshot: QuickAiConversation) {
   if (!Number.isSafeInteger(snapshot.id) || snapshot.id <= 0) {
     throw new Error("Quick AI 返回了无效的会话 ID。");
   }
+  if (!["overlay", "main"].includes(snapshot.origin)) {
+    throw new Error("Quick AI 返回了无效的会话来源。");
+  }
 
   let previousSequence = 0;
   for (const message of snapshot.messages) {
@@ -243,6 +246,7 @@ export class RepositoryConversationService implements ConversationService {
         !Number.isSafeInteger(snapshot.id) ||
         snapshot.id <= 0 ||
         !snapshot.title.trim() ||
+        !["overlay", "main"].includes(snapshot.origin) ||
         !Number.isFinite(snapshot.updatedAtUnixMs)
       ) {
         throw new Error("Quick AI 返回了无效的会话摘要。");
@@ -250,6 +254,7 @@ export class RepositoryConversationService implements ConversationService {
       return {
         id: String(snapshot.id),
         title: snapshot.title.trim(),
+        origin: snapshot.origin,
         updatedAtUnixMs: snapshot.updatedAtUnixMs,
       };
     });

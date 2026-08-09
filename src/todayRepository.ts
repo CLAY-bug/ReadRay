@@ -26,7 +26,7 @@ export class TauriTodayRepository implements TodayRepository {
   listRecentConversations(limit: number) {
     return invoke<RecentQuickAiConversation[]>(
       "list_recent_quick_ai_conversations",
-      { limit },
+      { limit, origin: "main" },
     );
   }
 }

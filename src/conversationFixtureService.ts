@@ -473,6 +473,7 @@ export class FixtureConversationService implements ConversationService {
     return Object.values(threads).map((thread, index) => ({
       id: thread.id,
       title: thread.title,
+      origin: "main" as const,
       updatedAtUnixMs: Date.now() - index * 60_000,
     }));
   }

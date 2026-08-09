@@ -4,6 +4,7 @@ import type {
   QuickAiConversation,
   QuickAiConversationExport,
   RecentQuickAiConversation,
+  ConversationOrigin,
 } from "./types/quickAi";
 
 export type QuickAiStreamEvent =
@@ -53,17 +54,22 @@ export class TauriConversationRepository implements ConversationRepository {
 
   private readonly saveDialog: ConversationSaveDialog;
 
+  private readonly creationOrigin: Exclude<ConversationOrigin, "legacy">;
+
   constructor(
     invokeCommand: ConversationInvoke = invoke,
     saveDialog: ConversationSaveDialog = save,
+    creationOrigin: Exclude<ConversationOrigin, "legacy"> = "main",
   ) {
     this.invokeCommand = invokeCommand;
     this.saveDialog = saveDialog;
+    this.creationOrigin = creationOrigin;
   }
 
   create() {
     return this.invokeCommand<QuickAiConversation>(
       "create_quick_ai_conversation",
+      { origin: this.creationOrigin },
     );
   }
 

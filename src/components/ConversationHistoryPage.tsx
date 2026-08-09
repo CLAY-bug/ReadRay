@@ -11,6 +11,7 @@ import type {
   ConversationService,
   ConversationSummary,
 } from "../conversationViewModel";
+import type { ConversationOrigin } from "../types/quickAi";
 import MainAppIcon from "./MainAppIcon";
 
 type ConversationHistoryPageProps = {
@@ -24,8 +25,14 @@ type ConversationHistoryPageProps = {
 };
 
 type ConversationSortOrder = "recent" | "oldest" | "title";
+type ConversationOriginFilter = "all" | ConversationOrigin;
 
 const RECENT_CONVERSATION_LIMIT = 6;
+
+const conversationOriginLabels: Record<ConversationOrigin, string> = {
+  overlay: "Quick AI",
+  main: "主窗口",
+};
 
 const conversationSortOptions: ReadonlyArray<{
   value: ConversationSortOrder;
@@ -127,8 +134,15 @@ function ConversationHistoryGroup({
               onClick={() => onOpenConversation(conversation)}
             >
               <strong>{conversation.title}</strong>
-              <span className="rr-conversation-history-date">
-                {formatUpdatedAt(conversation.updatedAtUnixMs)}
+              <span className="rr-conversation-history-meta">
+                <span
+                  className={`rr-conversation-history-origin is-${conversation.origin}`}
+                >
+                  {conversationOriginLabels[conversation.origin]}
+                </span>
+                <span className="rr-conversation-history-date">
+                  {formatUpdatedAt(conversation.updatedAtUnixMs)}
+                </span>
               </span>
               <span className="rr-conversation-history-arrow" aria-hidden="true">
                 <MainAppIcon name="arrow" />
@@ -304,6 +318,8 @@ function ConversationHistoryPage({
   const [retryToken, setRetryToken] = useState(0);
   const [query, setQuery] = useState("");
   const [sortOrder, setSortOrder] = useState<ConversationSortOrder>("recent");
+  const [originFilter, setOriginFilter] =
+    useState<ConversationOriginFilter>("all");
 
   useEffect(() => {
     let ignore = false;
@@ -343,13 +359,19 @@ function ConversationHistoryPage({
 
   const visibleConversations = useMemo(() => {
     const normalizedQuery = query.trim().toLocaleLowerCase();
+    const sourceMatched =
+      originFilter === "all"
+        ? conversations
+        : conversations.filter(
+            (conversation) => conversation.origin === originFilter,
+          );
     const matched = normalizedQuery
-      ? conversations.filter((conversation) =>
+      ? sourceMatched.filter((conversation) =>
           conversation.title.toLocaleLowerCase().includes(normalizedQuery),
         )
-      : conversations;
+      : sourceMatched;
     return sortConversations(matched, sortOrder);
-  }, [conversations, query, sortOrder]);
+  }, [conversations, originFilter, query, sortOrder]);
 
   const recentConversations = visibleConversations.filter((conversation) =>
     recentConversationIds.has(conversation.id),
@@ -367,7 +389,7 @@ function ConversationHistoryPage({
           </div>
           {status === "ready" ? (
             <span>
-              {query.trim()
+              {query.trim() || originFilter !== "all"
                 ? `${visibleConversations.length} / ${conversations.length} 个会话`
                 : `${conversations.length} 个会话`}
             </span>
@@ -393,6 +415,28 @@ function ConversationHistoryPage({
           </div>
         ) : (
           <>
+            <div
+              className="rr-conversation-history-source-filter"
+              aria-label="按创建来源筛选"
+            >
+              {(
+                [
+                  ["all", "全部"],
+                  ["main", "主窗口"],
+                  ["overlay", "Quick AI"],
+                ] as const
+              ).map(([value, label]) => (
+                <button
+                  className={originFilter === value ? "is-active" : ""}
+                  type="button"
+                  key={value}
+                  aria-pressed={originFilter === value}
+                  onClick={() => setOriginFilter(value)}
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
             <div className="rr-conversation-history-toolbar">
               <label className="rr-conversation-history-search">
                 <MainAppIcon name="search" />
@@ -423,9 +467,15 @@ function ConversationHistoryPage({
             {visibleConversations.length === 0 ? (
               <div className="rr-conversation-history-state is-search-empty">
                 <strong>没有找到匹配的对话</strong>
-                <p>换一个关键词试试，或清除搜索条件。</p>
-                <button type="button" onClick={() => setQuery("")}>
-                  清除搜索
+                <p>换一个关键词试试，或清除当前来源筛选。</p>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setQuery("");
+                    setOriginFilter("all");
+                  }}
+                >
+                  清除筛选
                 </button>
               </div>
             ) : (

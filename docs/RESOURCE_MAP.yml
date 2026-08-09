@@ -4,8 +4,8 @@ project:
   repo_root: "."
 
 meta:
-  version: "1.43"
-  last_updated: "2026-08-06"
+  version: "1.45"
+  last_updated: "2026-08-09"
   updated_by: "Codex"
   source_of_truth: "docs/RESOURCE_MAP.yml"
   language: "zh-CN"
@@ -80,6 +80,15 @@ core_docs:
       - "恢复内置 Agent 升级的上下文或核对已确认决策。"
     notes: "执行顺序已确认：先流式输出 → 再 Markdown 渲染 → 最后专门讨论系统提示词构建。任务 1 流式输出、任务 2 对话页 Markdown 渲染、任务 3 系统提示词构建均已验收通过（2026-08-07）。系统提示词已重构为组合式分节构建（quick_ai_prompt.rs）。已确认决策包括本轮不实现记忆注入、重新生成沿用覆盖式语义。后续任务（记忆注入、重新生成、超 8K 续写）在任务书未决区登记。"
     risk: "任务书不是阶段计划；本文件不改变 DEVELOPMENT_PLAN 的阶段边界，阶段八仍处于暂缓状态。"
+
+  - path: "doc/quick-ai-overlay-upgrade-task.md"
+    purpose: "Quick AI 浮层尺寸、外壳、输入密度、会话恢复、返回与历史导航的顺序任务书。"
+    status: "active"
+    read_when:
+      - "执行或验收 Quick AI 浮层体验升级。"
+      - "恢复本轮 Quick AI 交互优化上下文。"
+    notes: "严格一次只执行一个任务；任务 1～6 已通过用户验收。任务 7 自动回归已通过，当前只等待真实 Tauri 视觉与交互验收；验收前不得把任务 7 标为完成或进入后续工作。任务 6 经用户确认允许最小修改主窗口统一历史，并为既有会话表增加创建来源字段。"
+    risk: "除任务 6 已明确的主窗口历史来源展示和 SQLite 来源字段外，不得扩展到选区解释浮层、模型能力、第二套会话存储或未规划功能。"
 
   - path: "docs/THEME_PROTOCOL.md"
     purpose: "ReadRayThemeV1 的 manifest、语义颜色、回退、安全解析、持久化和外部 adapter 边界。"
@@ -177,7 +186,7 @@ source_areas:
     status: "active"
     read_when:
       - "调整主应用导航结构、最近对话展示、手动折叠态或侧边栏宽度拖拽。"
-    notes: "默认宽 252px，用户可拖拽调整；手动折叠后主内容完全铺开，左缘 hover 临时显示侧栏，移开自动隐藏，点击标题栏按钮恢复固定侧栏。展开态最近对话来自真实 Quick AI 标题，并支持 loading/empty/error/retry。最近项左键打开，右键把数据库 ID 和标题交给统一的会话管理菜单；不维护常驻操作按钮。侧边栏右缘提供 180–360px 的拖拽调整手柄，折叠态隐藏手柄。"
+    notes: "默认宽 252px，用户可拖拽调整；手动折叠后主内容完全铺开，左缘 hover 临时显示侧栏，移开自动隐藏，点击标题栏按钮恢复固定侧栏。展开态最近对话来自真实主窗口会话标题，并支持 loading/error/retry；列表为空时不显示冗余空状态，只保留查看全部入口。最近项左键打开，右键把数据库 ID 和标题交给统一的会话管理菜单；不维护常驻操作按钮。侧边栏右缘提供 180–360px 的拖拽调整手柄，折叠态隐藏手柄。"
     risk: "组件只消费装配层数据；最近对话和查看全部入口不得自行读取 SQLite 或维护第二份会话事实。"
 
   - path: "src/components/TodayPage.tsx"
@@ -203,7 +212,7 @@ source_areas:
     read_when:
       - "调整查看全部对话的 loading、empty、error、retry 或列表交互。"
       - "排查历史列表打开或右键管理入口。"
-    notes: "只消费 ConversationService；列表来自 SQLite 摘要，覆盖 loading、empty、error、retry。列表项左键打开，右键只把目标交给外壳的统一管理菜单，不在本页复制重命名、导出或删除业务状态。"
+    notes: "只消费 ConversationService；列表来自 SQLite 摘要，覆盖 loading、empty、error、retry。统一归档展示 main、overlay 全部有效会话并支持来源筛选和标签；列表项左键留在主窗口打开，右键只把目标交给外壳的统一管理菜单，不在本页复制重命名、导出或删除业务状态。"
     risk: "不得从侧栏最近六条推导全部历史，也不得把列表标题当成数据库外的第二份权威状态。"
 
   - path: "src/components/ConversationManagementMenu.tsx"
@@ -845,7 +854,7 @@ source_areas:
     read_when:
       - "调整 Quick AI 对话持久化或继续历史对话。"
       - "实现未来主应用对话历史读取。"
-    notes: "复用 v2 表、消息自增 ID 与 UNIQUE(conversation_id, sequence)，未新增迁移。仓库提供全部有标题会话、按 ID 重命名和级联删除；导出从数据库快照按 sequence 顺序写出完整 user/assistant Markdown。prepare_turn 先独立提交 pending user；complete_turn 只在匹配的 user ID/expected sequence 后补 assistant，完成轮次重试直接返回权威快照，旧版本或并发冲突拒绝写入。"
+    notes: "复用 v2 会话表、消息自增 ID 与 UNIQUE(conversation_id, sequence)；SQLite v9 为既有会话表增加不可变 origin（overlay/main/legacy）及来源更新时间索引，v10 一次性删除无法可靠追溯且仅用于测试的 legacy 会话并依赖外键级联清理消息；新建必须显式写入 overlay 或 main。仓库支持按来源查询最近/全部有标题会话、按 ID 重命名和级联删除；导出从数据库快照按 sequence 顺序写出完整 user/assistant Markdown。prepare_turn 先独立提交 pending user；complete_turn 只在匹配的 user ID/expected sequence 后补 assistant，完成轮次重试直接返回权威快照，旧版本或并发冲突拒绝写入。"
     risk: "不要把 Quick AI 消息写入 learning_records；不实现长期记忆、回答重生成、检索增强或第二套会话存储。"
 
   - path: "src-tauri/src/quick_ai.rs"
@@ -854,7 +863,7 @@ source_areas:
     read_when:
       - "调整 Quick AI system prompt、上下文窗口或发送流程。"
       - "排查 create/get/send/list_recent/list_all/rename/delete/export Quick AI commands。"
-    notes: "独立于 ExplanationCard JSON 协议；管理和导出 commands 始终携带数据库 conversationId，export 在用户选定路径后重新读取权威快照再写文件。send command 要求已创建的 conversationId 和 expectedUserSequence，先 prepare pending user，再从该 SQLite 快照装配多轮上下文并以 quick_ai 分类调用共享模型边界，成功后 complete assistant；已完成轮次不会再次请求模型或重复统计。"
+    notes: "独立于 ExplanationCard JSON 协议；create command 要求 overlay/main 创建来源，recent/all commands 可按来源过滤，主窗口不传过滤时读取全部来源。管理和导出 commands 始终携带数据库 conversationId，export 在用户选定路径后重新读取权威快照再写文件。send command 要求已创建的 conversationId 和 expectedUserSequence，先 prepare pending user，再从该 SQLite 快照装配多轮上下文并以 quick_ai 分类调用共享模型边界，成功后 complete assistant；已完成轮次不会再次请求模型或重复统计。"
     risk: "不接学习记录检索、工具调用、联网搜索、长期记忆或通用 Agent 框架。"
 
   - path: "src-tauri/src/writing.rs"

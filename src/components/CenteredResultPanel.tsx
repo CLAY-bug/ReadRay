@@ -11,7 +11,6 @@ type CenteredResultPanelProps = {
   open: boolean;
   onQueryChange: (value: string) => void;
   onSubmit: (value: string) => void;
-  onOpenChange: (open: boolean) => void;
 };
 
 function CenteredResultPanel({
@@ -20,7 +19,6 @@ function CenteredResultPanel({
   open,
   onQueryChange,
   onSubmit,
-  onOpenChange,
 }: CenteredResultPanelProps) {
   useEffect(() => {
     if (!open) {
@@ -29,21 +27,16 @@ function CenteredResultPanel({
 
     function handleKeyDown(event: globalThis.KeyboardEvent) {
       if (event.key === "Escape") {
-        onOpenChange(false);
+        event.preventDefault();
+        onQueryChange("");
       }
     }
 
     document.addEventListener("keydown", handleKeyDown);
     return () => document.removeEventListener("keydown", handleKeyDown);
-  }, [onOpenChange, open]);
+  }, [onQueryChange, open]);
 
   function handleInputKeyDown(event: KeyboardEvent<HTMLInputElement>) {
-    if (event.key === "Escape") {
-      event.preventDefault();
-      onOpenChange(false);
-      return;
-    }
-
     if (event.key === "Enter") {
       event.preventDefault();
       const nextQuery = event.currentTarget.value.trim();

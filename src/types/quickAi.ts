@@ -1,4 +1,5 @@
 export type QuickAiRole = "user" | "assistant";
+export type ConversationOrigin = "overlay" | "main";
 
 export type QuickAiMessage = {
   id: number;
@@ -13,6 +14,7 @@ export type QuickAiConversation = {
   id: number;
   title?: string | null;
   model: string;
+  origin: ConversationOrigin;
   createdAtUnixMs: number;
   updatedAtUnixMs: number;
   messages: QuickAiMessage[];
@@ -21,6 +23,7 @@ export type QuickAiConversation = {
 export type RecentQuickAiConversation = {
   id: number;
   title: string;
+  origin: ConversationOrigin;
   updatedAtUnixMs: number;
 };
 

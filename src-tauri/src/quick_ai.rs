@@ -1,6 +1,7 @@
 use crate::conversations::{
-    export_snapshot_to_path, ConversationExportSummary, ConversationMessage, ConversationRole,
-    ConversationSnapshot, ConversationStore, PreparedTurn, RecentConversationSummary,
+    export_snapshot_to_path, ConversationExportSummary, ConversationMessage, ConversationOrigin,
+    ConversationRole, ConversationSnapshot, ConversationStore, PreparedTurn,
+    RecentConversationSummary,
 };
 use crate::deepseek_client::{
     configured_model, parse_model_token_usage_value, post_tracked_chat_completion,
@@ -133,8 +134,11 @@ struct QuickAiResponseMessage {
 }
 
 #[tauri::command]
-pub fn create_quick_ai_conversation(app: AppHandle) -> Result<ConversationSnapshot, String> {
-    ConversationStore::open_for_app(&app)?.create(&configured_model())
+pub fn create_quick_ai_conversation(
+    app: AppHandle,
+    origin: ConversationOrigin,
+) -> Result<ConversationSnapshot, String> {
+    ConversationStore::open_for_app(&app)?.create_with_origin(&configured_model(), origin)
 }
 
 #[tauri::command]
@@ -149,16 +153,18 @@ pub fn get_quick_ai_conversation(
 pub fn list_recent_quick_ai_conversations(
     app: AppHandle,
     limit: Option<u32>,
+    origin: Option<ConversationOrigin>,
 ) -> Result<Vec<RecentConversationSummary>, String> {
     let limit = resolve_recent_conversation_limit(limit)?;
-    ConversationStore::open_for_app(&app)?.list_recent(limit)
+    ConversationStore::open_for_app(&app)?.list_recent(limit, origin)
 }
 
 #[tauri::command]
 pub fn list_all_quick_ai_conversations(
     app: AppHandle,
+    origin: Option<ConversationOrigin>,
 ) -> Result<Vec<RecentConversationSummary>, String> {
-    ConversationStore::open_for_app(&app)?.list_all()
+    ConversationStore::open_for_app(&app)?.list_all(origin)
 }
 
 #[tauri::command]

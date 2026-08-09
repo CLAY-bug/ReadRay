@@ -9,7 +9,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use tauri::{AppHandle, Manager};
 
 const DATABASE_FILE_NAME: &str = "readray.sqlite3";
-const DATABASE_SCHEMA_VERSION: i64 = 8;
+const DATABASE_SCHEMA_VERSION: i64 = 10;
 pub const EXPLANATION_CARD_SCHEMA_VERSION: i64 = 1;
 const DEFAULT_PAGE: u32 = 1;
 const DEFAULT_PAGE_SIZE: u32 = 20;
@@ -229,6 +229,20 @@ INSERT INTO theme_preferences (id, revision, theme_id, mode)
 VALUES (1, 0, 'readray-default', 'light');
 "#;
 
+const MIGRATION_9: &str = r#"
+ALTER TABLE quick_ai_conversations
+  ADD COLUMN origin TEXT NOT NULL DEFAULT 'legacy'
+  CHECK (origin IN ('overlay', 'main', 'legacy'));
+
+CREATE INDEX idx_quick_ai_conversations_origin_updated_at
+  ON quick_ai_conversations(origin, updated_at_unix_ms DESC, id DESC);
+"#;
+
+const MIGRATION_10: &str = r#"
+DELETE FROM quick_ai_conversations
+WHERE origin = 'legacy';
+"#;
+
 const MIGRATIONS: &[(i64, &str)] = &[
     (1, MIGRATION_1),
     (2, MIGRATION_2),
@@ -237,7 +251,9 @@ const MIGRATIONS: &[(i64, &str)] = &[
     (5, MIGRATION_5),
     (6, MIGRATION_6),
     (7, MIGRATION_7),
-    (DATABASE_SCHEMA_VERSION, MIGRATION_8),
+    (8, MIGRATION_8),
+    (9, MIGRATION_9),
+    (DATABASE_SCHEMA_VERSION, MIGRATION_10),
 ];
 
 #[derive(Clone, Debug, Serialize)]
@@ -848,7 +864,7 @@ mod tests {
     }
 
     #[test]
-    fn version_two_database_upgrades_without_losing_existing_data() {
+    fn version_two_database_upgrade_removes_unclassified_test_conversations() {
         let (root, path) = test_database_path();
         fs::create_dir_all(&root).unwrap();
         let connection = Connection::open(&path).unwrap();
@@ -885,9 +901,9 @@ mod tests {
                 row.get(0)
             })
             .unwrap();
-        let preserved_title: String = upgraded
+        let legacy_conversation_count: i64 = upgraded
             .query_row(
-                "SELECT title FROM quick_ai_conversations WHERE id = 44",
+                "SELECT COUNT(*) FROM quick_ai_conversations WHERE id = 44",
                 [],
                 |row| row.get(0),
             )
@@ -902,8 +918,116 @@ mod tests {
             .unwrap();
 
         assert_eq!(version, DATABASE_SCHEMA_VERSION);
-        assert_eq!(preserved_title, "保留的会话");
+        assert_eq!(legacy_conversation_count, 0);
         assert_eq!(writing_table_count, 1);
+        drop(upgraded);
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn version_nine_database_removes_legacy_conversations_and_cascades_messages() {
+        let (root, path) = test_database_path();
+        fs::create_dir_all(&root).unwrap();
+        let connection = Connection::open(&path).unwrap();
+        connection
+            .execute_batch("PRAGMA foreign_keys = ON;")
+            .unwrap();
+        connection
+            .execute_batch(
+                "CREATE TABLE schema_migrations (
+                    version INTEGER PRIMARY KEY,
+                    applied_at_unix_ms INTEGER NOT NULL
+                 );",
+            )
+            .unwrap();
+        for migration in [
+            MIGRATION_1,
+            MIGRATION_2,
+            MIGRATION_3,
+            MIGRATION_4,
+            MIGRATION_5,
+            MIGRATION_6,
+            MIGRATION_7,
+            MIGRATION_8,
+            MIGRATION_9,
+        ] {
+            connection.execute_batch(migration).unwrap();
+        }
+        connection
+            .execute(
+                "INSERT INTO schema_migrations (version, applied_at_unix_ms)
+                 VALUES
+                   (1, 100), (2, 200), (3, 300), (4, 400), (5, 500),
+                   (6, 600), (7, 700), (8, 800), (9, 900)",
+                [],
+            )
+            .unwrap();
+        connection
+            .execute(
+                "INSERT INTO quick_ai_conversations (
+                    id, title, model, created_at_unix_ms, updated_at_unix_ms, origin
+                 ) VALUES
+                   (41, '旧测试会话', 'deepseek-v4-flash', 100, 100, 'legacy'),
+                   (42, '主窗口会话', 'deepseek-v4-flash', 200, 200, 'main'),
+                   (43, 'Quick AI 会话', 'deepseek-v4-flash', 300, 300, 'overlay')",
+                [],
+            )
+            .unwrap();
+        connection
+            .execute(
+                "INSERT INTO quick_ai_messages (
+                    id, conversation_id, role, content, sequence, created_at_unix_ms
+                 ) VALUES
+                   (51, 41, 'user', '旧消息', 1, 100),
+                   (52, 42, 'user', '主窗口消息', 1, 200),
+                   (53, 43, 'user', 'Quick AI 消息', 1, 300)",
+                [],
+            )
+            .unwrap();
+        drop(connection);
+
+        let upgraded = open_database(&path).unwrap();
+        let version: i64 = upgraded
+            .query_row("SELECT MAX(version) FROM schema_migrations", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        let legacy_conversations: i64 = upgraded
+            .query_row(
+                "SELECT COUNT(*) FROM quick_ai_conversations WHERE origin = 'legacy'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        let legacy_messages: i64 = upgraded
+            .query_row(
+                "SELECT COUNT(*) FROM quick_ai_messages WHERE conversation_id = 41",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        let preserved_origins: String = upgraded
+            .query_row(
+                "SELECT group_concat(origin, ',') FROM (
+                   SELECT origin FROM quick_ai_conversations ORDER BY id
+                 )",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        let preserved_messages: i64 = upgraded
+            .query_row(
+                "SELECT COUNT(*) FROM quick_ai_messages WHERE conversation_id IN (42, 43)",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+
+        assert_eq!(version, DATABASE_SCHEMA_VERSION);
+        assert_eq!(legacy_conversations, 0);
+        assert_eq!(legacy_messages, 0);
+        assert_eq!(preserved_origins, "main,overlay");
+        assert_eq!(preserved_messages, 2);
         drop(upgraded);
         let _ = fs::remove_dir_all(root);
     }
@@ -1020,7 +1144,7 @@ mod tests {
     }
 
     #[test]
-    fn version_four_database_adds_usage_table_without_losing_existing_data() {
+    fn version_four_database_adds_usage_table_and_removes_unclassified_test_conversations() {
         let (root, path) = test_database_path();
         fs::create_dir_all(&root).unwrap();
         let connection = Connection::open(&path).unwrap();
@@ -1067,9 +1191,9 @@ mod tests {
                 |row| row.get(0),
             )
             .unwrap();
-        let preserved_title: String = upgraded
+        let legacy_conversation_count: i64 = upgraded
             .query_row(
-                "SELECT title FROM quick_ai_conversations WHERE id = 45",
+                "SELECT COUNT(*) FROM quick_ai_conversations WHERE id = 45",
                 [],
                 |row| row.get(0),
             )
@@ -1082,7 +1206,7 @@ mod tests {
 
         assert_eq!(version, DATABASE_SCHEMA_VERSION);
         assert_eq!(usage_table_count, 1);
-        assert_eq!(preserved_title, "升级后保留");
+        assert_eq!(legacy_conversation_count, 0);
         assert_eq!(usage_count, 0);
         drop(upgraded);
         let _ = fs::remove_dir_all(root);

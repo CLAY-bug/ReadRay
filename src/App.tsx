@@ -31,7 +31,10 @@ import type {
   CaptureInput,
   ExplanationCard,
 } from "./types/explanation";
-import type { QuickAiConversation } from "./types/quickAi";
+import type {
+  QuickAiConversation,
+  RecentQuickAiConversation,
+} from "./types/quickAi";
 import { mainAppViewModel } from "./mainAppViewModel";
 import { memoryPageViewModel } from "./memoryViewModel";
 import { TauriMemoryRepository } from "./memoryRepository";
@@ -122,9 +125,15 @@ type DeepSeekSmokeResult = {
 
 type PreviewMode = "anchored" | "command";
 type CenteredMode = "explanation" | "quick-ai";
+type QuickAiPage = "conversation" | "history";
 type CommandStage = "input" | "loading" | "result";
 type AnchoredStage = "mock" | "loading" | "result" | "error";
-type OverlayWindowStage = "input" | "loading" | "result" | "error";
+type OverlayWindowStage =
+  | "input"
+  | "loading"
+  | "result"
+  | "error"
+  | "quick-ai";
 
 type WindowsUiaCapture = {
   selectedText?: string | null;
@@ -254,15 +263,47 @@ function OverlayApp() {
   const [commandError, setCommandError] = useState<string | undefined>();
   const [centeredResult, setCenteredResult] =
     useState<CenteredResult>(mockExplanationResult);
-  const [quickAiConversation, setQuickAiConversation] =
+  const [quickAiConversation, setQuickAiConversationState] =
     useState<QuickAiConversation | null>(null);
+  const [quickAiPage, setQuickAiPage] =
+    useState<QuickAiPage>("conversation");
   const [quickAiDraft, setQuickAiDraft] = useState("");
   const [quickAiPendingMessage, setQuickAiPendingMessage] = useState<string>();
   const [quickAiLoading, setQuickAiLoading] = useState(false);
   const [quickAiError, setQuickAiError] = useState<string>();
+  const [quickAiConversationLoading, setQuickAiConversationLoading] =
+    useState(false);
+  const [quickAiRenaming, setQuickAiRenaming] = useState(false);
+  const [quickAiRecentConversations, setQuickAiRecentConversations] = useState<
+    RecentQuickAiConversation[]
+  >([]);
+  const [quickAiHistoryStatus, setQuickAiHistoryStatus] = useState<
+    "idle" | "loading" | "ready" | "error"
+  >("idle");
+  const [quickAiHistoryError, setQuickAiHistoryError] = useState<string>();
+  const [quickAiAllConversations, setQuickAiAllConversations] = useState<
+    RecentQuickAiConversation[]
+  >([]);
+  const [quickAiAllHistoryStatus, setQuickAiAllHistoryStatus] = useState<
+    "idle" | "loading" | "ready" | "error"
+  >("idle");
+  const [quickAiAllHistoryError, setQuickAiAllHistoryError] = useState<string>();
   const anchoredRequestId = useRef(0);
+  const commandRequestId = useRef(0);
   const quickAiRequestId = useRef(0);
+  const quickAiHistoryRequestId = useRef(0);
+  const quickAiSelectionRequestId = useRef(0);
+  const quickAiRenameRequestId = useRef(0);
+  const quickAiConversationRef = useRef<QuickAiConversation | null>(null);
   const anchoredSourceRect = useRef<AnchorRect | null>(null);
+
+  const setQuickAiConversation = useCallback(
+    (conversation: QuickAiConversation | null) => {
+      quickAiConversationRef.current = conversation;
+      setQuickAiConversationState(conversation);
+    },
+    [],
+  );
 
   const updatePreviewAnchorRect = useCallback(() => {
     const element = previewAnchorRef.current;
@@ -317,7 +358,7 @@ function OverlayApp() {
 
   const overlayWindowStage: OverlayWindowStage =
     centeredMode === "quick-ai"
-      ? "result"
+      ? "quick-ai"
       : commandError
         ? "error"
         : commandStage;
@@ -339,23 +380,25 @@ function OverlayApp() {
     setCommandError(undefined);
   }, []);
 
-  const clearQuickAiState = useCallback(() => {
+  const startNewQuickAiConversation = useCallback(() => {
     quickAiRequestId.current += 1;
+    quickAiSelectionRequestId.current += 1;
+    quickAiRenameRequestId.current += 1;
+    setQuickAiPage("conversation");
     setQuickAiConversation(null);
     setQuickAiDraft("");
     setQuickAiPendingMessage(undefined);
     setQuickAiLoading(false);
+    setQuickAiConversationLoading(false);
+    setQuickAiRenaming(false);
     setQuickAiError(undefined);
-  }, []);
+  }, [setQuickAiConversation]);
 
   const showCommandOverlay = useCallback(() => {
     anchoredRequestId.current += 1;
-    clearCommandState();
-    clearQuickAiState();
-    setCenteredMode("explanation");
     setPreviewMode("command");
     setCommandOpen(true);
-  }, [clearCommandState, clearQuickAiState]);
+  }, []);
 
   const closeAnchoredOverlay = useCallback(async () => {
     anchoredRequestId.current += 1;
@@ -563,12 +606,6 @@ function OverlayApp() {
   }, [anchoredStage, closeAnchoredOverlay, previewMode]);
 
   async function handleCommandOpenChange(nextOpen: boolean) {
-    clearCommandState();
-    if (!nextOpen) {
-      quickAiRequestId.current += 1;
-      setQuickAiPendingMessage(undefined);
-      setQuickAiLoading(false);
-    }
     setCommandOpen(nextOpen);
     if (!nextOpen) {
       try {
@@ -580,6 +617,7 @@ function OverlayApp() {
   }
 
   function handleCommandValueChange(nextValue: string) {
+    commandRequestId.current += 1;
     setCommandValue(nextValue);
     setCommandStage("input");
     setCommandError(undefined);
@@ -590,6 +628,8 @@ function OverlayApp() {
       return;
     }
 
+    const requestId = commandRequestId.current + 1;
+    commandRequestId.current = requestId;
     setCommandValue(value);
     setCommandStage("loading");
     setCommandError(undefined);
@@ -605,9 +645,15 @@ function OverlayApp() {
         input,
       });
       notifyLearningRecordCreated();
+      if (commandRequestId.current !== requestId) {
+        return;
+      }
       setCenteredResult(mapExplanationCard(card));
       setCommandStage("result");
     } catch (error) {
+      if (commandRequestId.current !== requestId) {
+        return;
+      }
       setCommandStage("input");
       setCommandError(formatError(error));
     }
@@ -615,10 +661,10 @@ function OverlayApp() {
 
   async function sendQuickAiMessage(
     value: string,
-    conversation: QuickAiConversation,
+    conversation: QuickAiConversation | null = quickAiConversationRef.current,
   ) {
     const content = value.trim();
-    if (!content || quickAiLoading) {
+    if (!content || quickAiLoading || quickAiConversationLoading) {
       return;
     }
 
@@ -630,7 +676,19 @@ function OverlayApp() {
     setQuickAiError(undefined);
 
     try {
-      const lastMessage = conversation.messages[conversation.messages.length - 1];
+      let targetConversation = conversation;
+      if (!targetConversation) {
+        targetConversation = await invoke<QuickAiConversation>(
+          "create_quick_ai_conversation",
+          { origin: "overlay" },
+        );
+        if (quickAiRequestId.current === requestId) {
+          setQuickAiConversation(targetConversation);
+        }
+      }
+
+      const lastMessage =
+        targetConversation.messages[targetConversation.messages.length - 1];
       const expectedUserSequence =
         lastMessage?.role === "user" &&
         lastMessage.content.trim() === content
@@ -639,13 +697,16 @@ function OverlayApp() {
       const updatedConversation = await invoke<QuickAiConversation>(
         "send_quick_ai_message",
         {
-          conversationId: conversation.id,
+          conversationId: targetConversation.id,
           expectedUserSequence,
           content,
         },
       );
       notifyQuickAiConversationUpdated();
-      if (quickAiRequestId.current !== requestId) {
+      if (
+        quickAiRequestId.current !== requestId ||
+        quickAiConversationRef.current?.id !== targetConversation.id
+      ) {
         return;
       }
       setQuickAiConversation(updatedConversation);
@@ -653,7 +714,11 @@ function OverlayApp() {
       setQuickAiLoading(false);
     } catch (error) {
       notifyQuickAiConversationUpdated();
-      if (quickAiRequestId.current !== requestId) {
+      if (
+        quickAiRequestId.current !== requestId ||
+        (conversation !== null &&
+          quickAiConversationRef.current?.id !== conversation.id)
+      ) {
         return;
       }
       setQuickAiDraft(content);
@@ -665,59 +730,188 @@ function OverlayApp() {
 
   async function enterQuickAi(initialValue: string) {
     const initialMessage = initialValue.trim();
-    clearQuickAiState();
     setCenteredMode("quick-ai");
+    setQuickAiPage("conversation");
     setCommandValue("");
+    setCommandStage("input");
     setCommandError(undefined);
 
-    const requestId = quickAiRequestId.current + 1;
-    quickAiRequestId.current = requestId;
-    setQuickAiLoading(true);
+    if (!initialMessage) {
+      return;
+    }
+    if (quickAiLoading || quickAiConversationLoading) {
+      setQuickAiDraft(initialMessage);
+      return;
+    }
+    await sendQuickAiMessage(initialMessage);
+  }
+
+  function returnToCommandInput() {
+    setCenteredMode("explanation");
+    setCommandStage("input");
+    setCommandError(undefined);
+    setCommandOpen(true);
+  }
+
+  async function loadQuickAiHistory() {
+    const requestId = quickAiHistoryRequestId.current + 1;
+    quickAiHistoryRequestId.current = requestId;
+    setQuickAiHistoryStatus("loading");
+    setQuickAiHistoryError(undefined);
     try {
-      const conversation = await invoke<QuickAiConversation>(
-        "create_quick_ai_conversation",
+      const conversations = await invoke<RecentQuickAiConversation[]>(
+        "list_recent_quick_ai_conversations",
+        { limit: 8, origin: "overlay" },
       );
-      if (quickAiRequestId.current !== requestId) {
+      if (quickAiHistoryRequestId.current !== requestId) {
         return;
       }
-      setQuickAiConversation(conversation);
-      setQuickAiLoading(false);
-      if (initialMessage) {
-        await sendQuickAiMessage(initialMessage, conversation);
-      }
+      setQuickAiRecentConversations(conversations);
+      setQuickAiHistoryStatus("ready");
     } catch (error) {
-      if (quickAiRequestId.current !== requestId) {
+      if (quickAiHistoryRequestId.current !== requestId) {
         return;
       }
-      setQuickAiLoading(false);
-      setQuickAiError(formatError(error));
+      setQuickAiHistoryStatus("error");
+      setQuickAiHistoryError(formatError(error));
     }
   }
 
-  async function createNewQuickAiConversation() {
-    const requestId = quickAiRequestId.current + 1;
-    quickAiRequestId.current = requestId;
-    setQuickAiConversation(null);
-    setQuickAiDraft("");
-    setQuickAiPendingMessage(undefined);
+  async function selectQuickAiConversation(conversationId: number) {
+    if (quickAiConversationRef.current?.id === conversationId) {
+      setQuickAiPage("conversation");
+      return;
+    }
+
+    const selectionRequestId = quickAiSelectionRequestId.current + 1;
+    quickAiSelectionRequestId.current = selectionRequestId;
+    quickAiRenameRequestId.current += 1;
+    setQuickAiRenaming(false);
+    setQuickAiConversationLoading(true);
     setQuickAiError(undefined);
-    setQuickAiLoading(true);
     try {
-      const conversation = await invoke<QuickAiConversation>(
-        "create_quick_ai_conversation",
+      const conversation = await invoke<QuickAiConversation | null>(
+        "get_quick_ai_conversation",
+        { conversationId },
       );
-      if (quickAiRequestId.current !== requestId) {
+      if (quickAiSelectionRequestId.current !== selectionRequestId) {
         return;
       }
+      if (!conversation) {
+        throw new Error("所选 Quick AI 对话不存在或已被删除。");
+      }
+      if (conversation.origin !== "overlay") {
+        throw new Error("所选会话不属于 Overlay Quick AI 历史。");
+      }
+
+      quickAiRequestId.current += 1;
       setQuickAiConversation(conversation);
+      setQuickAiPage("conversation");
+      setQuickAiDraft("");
+      setQuickAiPendingMessage(undefined);
       setQuickAiLoading(false);
     } catch (error) {
-      if (quickAiRequestId.current !== requestId) {
+      if (quickAiSelectionRequestId.current !== selectionRequestId) {
         return;
       }
-      setQuickAiLoading(false);
       setQuickAiError(formatError(error));
+    } finally {
+      if (quickAiSelectionRequestId.current === selectionRequestId) {
+        setQuickAiConversationLoading(false);
+      }
     }
+  }
+
+  async function renameQuickAiConversation(title: string) {
+    const conversation = quickAiConversationRef.current;
+    const normalizedTitle = title.trim();
+    if (!conversation?.title || !normalizedTitle) {
+      setQuickAiError("会话名称不能为空。");
+      return false;
+    }
+    if (normalizedTitle === conversation.title.trim()) {
+      return true;
+    }
+
+    const requestId = quickAiRenameRequestId.current + 1;
+    quickAiRenameRequestId.current = requestId;
+    const conversationId = conversation.id;
+    setQuickAiRenaming(true);
+    setQuickAiError(undefined);
+    try {
+      const renamed = await invoke<QuickAiConversation>(
+        "rename_quick_ai_conversation",
+        { conversationId, title: normalizedTitle },
+      );
+      if (
+        quickAiRenameRequestId.current !== requestId ||
+        quickAiConversationRef.current?.id !== conversationId
+      ) {
+        return false;
+      }
+      if (renamed.origin !== "overlay") {
+        throw new Error("重命名结果不属于当前 Overlay 会话。");
+      }
+
+      setQuickAiConversation(renamed);
+      setQuickAiRecentConversations((items) =>
+        items.map((item) =>
+          item.id === conversationId
+            ? { ...item, title: renamed.title || normalizedTitle }
+            : item,
+        ),
+      );
+      setQuickAiAllConversations((items) =>
+        items.map((item) =>
+          item.id === conversationId
+            ? { ...item, title: renamed.title || normalizedTitle }
+            : item,
+        ),
+      );
+      notifyQuickAiConversationUpdated();
+      return true;
+    } catch (error) {
+      if (
+        quickAiRenameRequestId.current === requestId &&
+        quickAiConversationRef.current?.id === conversationId
+      ) {
+        setQuickAiError(formatError(error));
+      }
+      return false;
+    } finally {
+      if (quickAiRenameRequestId.current === requestId) {
+        setQuickAiRenaming(false);
+      }
+    }
+  }
+
+  async function loadAllQuickAiConversations() {
+    const requestId = quickAiHistoryRequestId.current + 1;
+    quickAiHistoryRequestId.current = requestId;
+    setQuickAiAllHistoryStatus("loading");
+    setQuickAiAllHistoryError(undefined);
+    try {
+      const conversations = await invoke<RecentQuickAiConversation[]>(
+        "list_all_quick_ai_conversations",
+        { origin: "overlay" },
+      );
+      if (quickAiHistoryRequestId.current !== requestId) {
+        return;
+      }
+      setQuickAiAllConversations(conversations);
+      setQuickAiAllHistoryStatus("ready");
+    } catch (error) {
+      if (quickAiHistoryRequestId.current !== requestId) {
+        return;
+      }
+      setQuickAiAllHistoryStatus("error");
+      setQuickAiAllHistoryError(formatError(error));
+    }
+  }
+
+  function openAllQuickAiConversations() {
+    setQuickAiPage("history");
+    void loadAllQuickAiConversations();
   }
 
   async function toggleWindow() {
@@ -821,8 +1015,45 @@ function OverlayApp() {
   }
 
   return (
-    <main className="app-shell">
+    <main
+      className="app-shell"
+      onContextMenu={(event) => event.preventDefault()}
+    >
       <section className="compact-preview" aria-label="ReadRay 桌面浮层">
+        <QuickAiPanel
+          open={
+            previewMode === "command" &&
+            centeredMode === "quick-ai" &&
+            commandOpen
+          }
+          conversation={quickAiConversation}
+          page={quickAiPage}
+          recentConversations={quickAiRecentConversations}
+          historyStatus={quickAiHistoryStatus}
+          historyError={quickAiHistoryError}
+          allConversations={quickAiAllConversations}
+          allHistoryStatus={quickAiAllHistoryStatus}
+          allHistoryError={quickAiAllHistoryError}
+          conversationLoading={quickAiConversationLoading}
+          renaming={quickAiRenaming}
+          draft={quickAiDraft}
+          pendingMessage={quickAiPendingMessage}
+          loading={quickAiLoading || quickAiConversationLoading}
+          error={quickAiError}
+          onDraftChange={setQuickAiDraft}
+          onSend={(value) => void sendQuickAiMessage(value)}
+          onNewConversation={startNewQuickAiConversation}
+          onHistoryRequest={() => void loadQuickAiHistory()}
+          onConversationSelect={(conversationId) =>
+            void selectQuickAiConversation(conversationId)
+          }
+          onRename={renameQuickAiConversation}
+          onViewAllConversations={openAllQuickAiConversations}
+          onAllHistoryRetry={() => void loadAllQuickAiConversations()}
+          onHistoryBack={() => setQuickAiPage("conversation")}
+          onBack={returnToCommandInput}
+          sendShortcut={preferences.sendShortcut}
+        />
         {previewMode === "anchored" ? (
           anchoredStage === "mock" ? (
             <>
@@ -873,46 +1104,33 @@ function OverlayApp() {
             </section>
           )
         ) : (
-          centeredMode === "quick-ai" ? (
-            <QuickAiPanel
-              open={commandOpen}
-              conversation={quickAiConversation}
-              draft={quickAiDraft}
-              pendingMessage={quickAiPendingMessage}
-              loading={quickAiLoading}
-              error={quickAiError}
-              onDraftChange={setQuickAiDraft}
-              onSend={(value) => {
-                if (quickAiConversation) {
-                  void sendQuickAiMessage(value, quickAiConversation);
-                }
-              }}
-              onNewConversation={() => void createNewQuickAiConversation()}
+          <>
+            <CenteredCommandInput
+              value={commandValue}
+              onValueChange={handleCommandValueChange}
+              open={
+                centeredMode === "explanation" &&
+                commandOpen &&
+                commandStage !== "result"
+              }
+              loading={commandStage === "loading"}
+              error={commandError}
+              onSubmit={submitCommand}
+              onQuickAi={(value) => void enterQuickAi(value)}
               onOpenChange={handleCommandOpenChange}
-              sendShortcut={preferences.sendShortcut}
             />
-          ) : (
-            <>
-              <CenteredCommandInput
-                value={commandValue}
-                onValueChange={handleCommandValueChange}
-                open={commandOpen && commandStage !== "result"}
-                loading={commandStage === "loading"}
-                error={commandError}
-                onSubmit={submitCommand}
-                onQuickAi={(value) => void enterQuickAi(value)}
-                onOpenChange={handleCommandOpenChange}
-              />
-              <CenteredResultPanel
-                query={commandValue}
-                result={centeredResult}
-                open={commandOpen && commandStage === "result"}
-                onQueryChange={handleCommandValueChange}
-                onSubmit={submitCommand}
-                onOpenChange={handleCommandOpenChange}
-              />
-            </>
-          )
+            <CenteredResultPanel
+              query={commandValue}
+              result={centeredResult}
+              open={
+                centeredMode === "explanation" &&
+                commandOpen &&
+                commandStage === "result"
+              }
+              onQueryChange={handleCommandValueChange}
+              onSubmit={submitCommand}
+            />
+          </>
         )}
       </section>
 

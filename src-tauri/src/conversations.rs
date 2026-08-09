@@ -19,6 +19,33 @@ pub enum ConversationRole {
     Assistant,
 }
 
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ConversationOrigin {
+    Overlay,
+    Main,
+    Legacy,
+}
+
+impl ConversationOrigin {
+    fn as_storage(self) -> &'static str {
+        match self {
+            Self::Overlay => "overlay",
+            Self::Main => "main",
+            Self::Legacy => "legacy",
+        }
+    }
+
+    fn from_storage(value: &str) -> Result<Self, String> {
+        match value {
+            "overlay" => Ok(Self::Overlay),
+            "main" => Ok(Self::Main),
+            "legacy" => Ok(Self::Legacy),
+            _ => Err(format!("Quick AI 对话包含未知创建来源：{value}")),
+        }
+    }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ConversationMessage {
@@ -36,6 +63,7 @@ pub struct ConversationSnapshot {
     pub id: i64,
     pub title: Option<String>,
     pub model: String,
+    pub origin: ConversationOrigin,
     pub created_at_unix_ms: i64,
     pub updated_at_unix_ms: i64,
     pub messages: Vec<ConversationMessage>,
@@ -46,6 +74,7 @@ pub struct ConversationSnapshot {
 pub struct RecentConversationSummary {
     pub id: i64,
     pub title: String,
+    pub origin: ConversationOrigin,
     pub updated_at_unix_ms: i64,
 }
 
@@ -62,6 +91,7 @@ struct StoredConversation {
     id: i64,
     title: Option<String>,
     model: String,
+    origin: String,
     created_at_unix_ms: i64,
     updated_at_unix_ms: i64,
 }
@@ -104,19 +134,31 @@ impl ConversationStore {
         })
     }
 
-    pub(crate) fn create(&mut self, model: &str) -> Result<ConversationSnapshot, String> {
+    pub(crate) fn create_with_origin(
+        &mut self,
+        model: &str,
+        origin: ConversationOrigin,
+    ) -> Result<ConversationSnapshot, String> {
         validate_model(model)?;
+        if origin == ConversationOrigin::Legacy {
+            return Err("新建 Quick AI 对话必须标明 Overlay 或主窗口来源。".to_string());
+        }
         let timestamp = unix_time_ms()?;
         self.connection
             .execute(
                 "INSERT INTO quick_ai_conversations (
-                    title, model, created_at_unix_ms, updated_at_unix_ms
-                 ) VALUES (NULL, ?1, ?2, ?2)",
-                params![model, timestamp],
+                    title, model, origin, created_at_unix_ms, updated_at_unix_ms
+                 ) VALUES (NULL, ?1, ?2, ?3, ?3)",
+                params![model, origin.as_storage(), timestamp],
             )
             .map_err(|error| format!("Quick AI 对话创建失败：{error}"))?;
 
         self.get_required(self.connection.last_insert_rowid())
+    }
+
+    #[cfg(test)]
+    pub(crate) fn create(&mut self, model: &str) -> Result<ConversationSnapshot, String> {
+        self.create_with_origin(model, ConversationOrigin::Main)
     }
 
     #[cfg(test)]
@@ -342,7 +384,7 @@ impl ConversationStore {
         let stored = self
             .connection
             .query_row(
-                "SELECT id, title, model, created_at_unix_ms, updated_at_unix_ms
+                "SELECT id, title, model, origin, created_at_unix_ms, updated_at_unix_ms
                  FROM quick_ai_conversations WHERE id = ?1",
                 [id],
                 |row| {
@@ -350,8 +392,9 @@ impl ConversationStore {
                         id: row.get(0)?,
                         title: row.get(1)?,
                         model: row.get(2)?,
-                        created_at_unix_ms: row.get(3)?,
-                        updated_at_unix_ms: row.get(4)?,
+                        origin: row.get(3)?,
+                        created_at_unix_ms: row.get(4)?,
+                        updated_at_unix_ms: row.get(5)?,
                     })
                 },
             )
@@ -393,6 +436,7 @@ impl ConversationStore {
             id: stored.id,
             title: stored.title,
             model: stored.model,
+            origin: ConversationOrigin::from_storage(&stored.origin)?,
             created_at_unix_ms: stored.created_at_unix_ms,
             updated_at_unix_ms: stored.updated_at_unix_ms,
             messages,
@@ -404,58 +448,84 @@ impl ConversationStore {
             .ok_or_else(|| format!("Quick AI 对话不存在：id={id}"))
     }
 
-    pub(crate) fn list_recent(&self, limit: u32) -> Result<Vec<RecentConversationSummary>, String> {
+    pub(crate) fn list_recent(
+        &self,
+        limit: u32,
+        origin: Option<ConversationOrigin>,
+    ) -> Result<Vec<RecentConversationSummary>, String> {
+        let origin_filter = origin.map(ConversationOrigin::as_storage);
         let mut statement = self
             .connection
             .prepare(
-                "SELECT id, title, updated_at_unix_ms
+                "SELECT id, title, origin, updated_at_unix_ms
                  FROM quick_ai_conversations
                  WHERE title IS NOT NULL AND length(trim(title)) > 0
+                   AND (?1 IS NULL OR origin = ?1)
                  ORDER BY updated_at_unix_ms DESC, id DESC
-                 LIMIT ?1",
+                 LIMIT ?2",
             )
             .map_err(|error| format!("最近 Quick AI 对话语句无法准备：{error}"))?;
         let rows = statement
-            .query_map([i64::from(limit)], |row| {
-                Ok(RecentConversationSummary {
-                    id: row.get(0)?,
-                    title: row.get(1)?,
-                    updated_at_unix_ms: row.get(2)?,
-                })
+            .query_map(params![origin_filter, i64::from(limit)], |row| {
+                let origin: String = row.get(2)?;
+                Ok((
+                    row.get::<_, i64>(0)?,
+                    row.get::<_, String>(1)?,
+                    origin,
+                    row.get::<_, i64>(3)?,
+                ))
             })
             .map_err(|error| format!("最近 Quick AI 对话读取失败：{error}"))?;
         let mut conversations = Vec::new();
         for row in rows {
-            conversations
-                .push(row.map_err(|error| format!("最近 Quick AI 对话行读取失败：{error}"))?);
+            let (id, title, origin, updated_at_unix_ms) =
+                row.map_err(|error| format!("最近 Quick AI 对话行读取失败：{error}"))?;
+            conversations.push(RecentConversationSummary {
+                id,
+                title,
+                origin: ConversationOrigin::from_storage(&origin)?,
+                updated_at_unix_ms,
+            });
         }
 
         Ok(conversations)
     }
 
-    pub(crate) fn list_all(&self) -> Result<Vec<RecentConversationSummary>, String> {
+    pub(crate) fn list_all(
+        &self,
+        origin: Option<ConversationOrigin>,
+    ) -> Result<Vec<RecentConversationSummary>, String> {
+        let origin_filter = origin.map(ConversationOrigin::as_storage);
         let mut statement = self
             .connection
             .prepare(
-                "SELECT id, title, updated_at_unix_ms
+                "SELECT id, title, origin, updated_at_unix_ms
                  FROM quick_ai_conversations
                  WHERE title IS NOT NULL AND length(trim(title)) > 0
+                   AND (?1 IS NULL OR origin = ?1)
                  ORDER BY updated_at_unix_ms DESC, id DESC",
             )
             .map_err(|error| format!("全部 Quick AI 对话语句无法准备：{error}"))?;
         let rows = statement
-            .query_map([], |row| {
-                Ok(RecentConversationSummary {
-                    id: row.get(0)?,
-                    title: row.get(1)?,
-                    updated_at_unix_ms: row.get(2)?,
-                })
+            .query_map([origin_filter], |row| {
+                Ok((
+                    row.get::<_, i64>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                    row.get::<_, i64>(3)?,
+                ))
             })
             .map_err(|error| format!("全部 Quick AI 对话读取失败：{error}"))?;
         let mut conversations = Vec::new();
         for row in rows {
-            conversations
-                .push(row.map_err(|error| format!("全部 Quick AI 对话行读取失败：{error}"))?);
+            let (id, title, origin, updated_at_unix_ms) =
+                row.map_err(|error| format!("全部 Quick AI 对话行读取失败：{error}"))?;
+            conversations.push(RecentConversationSummary {
+                id,
+                title,
+                origin: ConversationOrigin::from_storage(&origin)?,
+                updated_at_unix_ms,
+            });
         }
         Ok(conversations)
     }
@@ -1055,13 +1125,53 @@ pub(crate) mod tests {
             .create_with_exchange("deepseek-v4-flash", "Second topic", "Second answer")
             .unwrap();
 
-        let recent = store.list_recent(1).unwrap();
+        let recent = store.list_recent(1, None).unwrap();
         assert_eq!(recent.len(), 1);
         assert_eq!(recent[0].id, second.id);
         assert_eq!(recent[0].title, "Second topic");
-        let all = store.list_recent(10).unwrap();
+        let all = store.list_recent(10, None).unwrap();
         assert_eq!(all.len(), 2);
         assert_eq!(all[1].id, first.id);
+
+        drop(store);
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn conversation_origin_is_immutable_and_filters_overlay_history() {
+        let (root, path) = test_database_path();
+        let mut store = ConversationStore::open_path(&path).unwrap();
+        let main = store
+            .create_with_exchange("deepseek-v4-flash", "Main topic", "Main answer")
+            .unwrap();
+        let overlay = store
+            .create_with_origin("deepseek-v4-flash", ConversationOrigin::Overlay)
+            .unwrap();
+        let PreparedTurn::Pending {
+            user_message_id, ..
+        } = store.prepare_turn(overlay.id, 1, "Overlay topic").unwrap()
+        else {
+            panic!("overlay first turn must be pending");
+        };
+        let overlay = store
+            .complete_turn(overlay.id, 1, user_message_id, "Overlay answer")
+            .unwrap();
+
+        let overlay_recent = store
+            .list_recent(8, Some(ConversationOrigin::Overlay))
+            .unwrap();
+        assert_eq!(overlay_recent.len(), 1);
+        assert_eq!(overlay_recent[0].id, overlay.id);
+        assert_eq!(overlay_recent[0].origin, ConversationOrigin::Overlay);
+        assert_eq!(
+            store.get_required(main.id).unwrap().origin,
+            ConversationOrigin::Main
+        );
+        assert_eq!(store.list_all(None).unwrap().len(), 2);
+        assert!(store
+            .create_with_origin("deepseek-v4-flash", ConversationOrigin::Legacy)
+            .unwrap_err()
+            .contains("必须标明"));
 
         drop(store);
         let _ = fs::remove_dir_all(root);
@@ -1079,7 +1189,7 @@ pub(crate) mod tests {
             .unwrap();
         store.create("deepseek-v4-flash").unwrap();
 
-        let all = store.list_all().unwrap();
+        let all = store.list_all(None).unwrap();
         assert_eq!(all.len(), 2);
         assert!(all.iter().any(|item| item.id == first.id));
         assert!(all.iter().any(|item| item.id == second.id));

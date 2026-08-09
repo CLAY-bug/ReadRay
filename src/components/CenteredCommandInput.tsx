@@ -57,7 +57,11 @@ function CenteredCommandInput({
   function handleKeyDown(event: KeyboardEvent<HTMLInputElement>) {
     if (event.key === "Escape") {
       event.preventDefault();
-      onOpenChange(false);
+      if (value || loading || error) {
+        onValueChange("");
+      } else {
+        onOpenChange(false);
+      }
       return;
     }
 

@@ -169,7 +169,7 @@ function MainSidebar({
               <span>暂时无法读取</span>
               <button type="button" onClick={onRecentRetry}>重试</button>
             </div>
-          ) : recentConversations.length ? recentConversations.map((conversation) => (
+          ) : recentConversations.map((conversation) => (
             <button
               className={`rr-main-recent-item${
                 conversation.id === activeConversationId ? " is-active" : ""
@@ -187,9 +187,7 @@ function MainSidebar({
             >
               <RecentConversationTitle title={conversation.title} />
             </button>
-          )) : (
-            <div className="rr-main-recent-state">暂无 Quick AI 对话</div>
-          )}
+          ))}
         </div>
         <button
           className="rr-main-view-all"

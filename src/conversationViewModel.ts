@@ -1,3 +1,5 @@
+import type { ConversationOrigin } from "./types/quickAi";
+
 export type ConversationInline =
   | { kind: "text"; text: string }
   | { kind: "code"; text: string }
@@ -63,6 +65,7 @@ export type ConversationThread = {
 export type ConversationSummary = {
   id: string;
   title: string;
+  origin: ConversationOrigin;
   updatedAtUnixMs: number;
 };
 

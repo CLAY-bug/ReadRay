@@ -483,6 +483,7 @@ function ConversationPage({
   const toastTimerRef = useRef<number | undefined>(undefined);
   const messageIdRef = useRef(0);
   const scrollAnimationRef = useRef<number | undefined>(undefined);
+  const scrollPositionsRef = useRef<Map<string, number>>(new Map());
   const conversationCreationRef = useRef<{
     requestKey: number;
     service: ConversationService;
@@ -1015,7 +1016,14 @@ function ConversationPage({
       return;
     }
 
-    const update = () => updateScrollToBottomVisibility();
+    const update = () => {
+      // 记录当前会话的滚动位置（供切回时恢复），并更新按钮显隐
+      const currentId = threadRef.current?.id;
+      if (currentId) {
+        scrollPositionsRef.current.set(currentId, scroll.scrollTop);
+      }
+      updateScrollToBottomVisibility();
+    };
     update();
     scroll.addEventListener("scroll", update, { passive: true });
 
@@ -1057,19 +1065,36 @@ function ConversationPage({
       return;
     }
 
-    // 切换到新会话：滚动位置归零。显隐判断不在这里做——
-    // 此时异步加载的消息尚未渲染完成，scrollHeight 还是旧值。
-    scroll.scrollTop = 0;
-  }, [thread?.id]);
+    // 切换会话后恢复滚动位置：上次在底部（或新会话）→ 回到底部；
+    // 上次在上翻阅读 → 恢复到记录的位置。等一帧让异步加载的消息
+    // 完成布局后再设置，避免 scrollHeight 还是旧值导致恢复错误。
+    let cancelled = false;
+    const frame = requestAnimationFrame(() => {
+      if (cancelled || !thread) {
+        return;
+      }
+      const savedTop = scrollPositionsRef.current.get(thread.id) ?? null;
+      const atBottom =
+        savedTop === null ||
+        scroll.scrollHeight - savedTop - scroll.clientHeight < 80;
+      scroll.scrollTop = atBottom ? scroll.scrollHeight : savedTop!;
+      if (atBottom) {
+        scrollPositionsRef.current.delete(thread.id);
+      }
+      updateScrollToBottomVisibility();
+    });
+    return () => {
+      cancelled = true;
+      cancelAnimationFrame(frame);
+    };
+  }, [thread?.id, updateScrollToBottomVisibility]);
 
   useLayoutEffect(() => {
+    // 消息数量变化（发送/收到消息）后重算按钮显隐，不恢复滚动位置
     const scroll = scrollRef.current;
     if (!scroll) {
       return;
     }
-
-    // 消息数量变化（会话加载完成、发送/收到消息）后等一帧，
-    // 让浏览器完成布局，再重算"回到底部"按钮的显隐。
     let cancelled = false;
     const frame = requestAnimationFrame(() => {
       if (cancelled) {

@@ -1,14 +1,14 @@
 # ReadRay 交接记录
 
-最后更新：2026-08-07
+最后更新：2026-08-09
 
 ## TL;DR
 
 - 当前状态：阶段一至阶段七已经完成；阶段七设置与桌面生命周期已通过复审和真实 Tauri 人工验收。
 - 主题状态：ReadRayThemeV1、安全解析、SQLite v8、设置页导入/选择/删除、主窗口恢复以及随包 Flexoki（Light/Dark）与 30 个内置主题已通过独立审核和真实 Tauri 人工验收；主题工作不改变 DEVELOPMENT_PLAN 阶段状态。
 - 当前路线：Windows 原生，Tauri + React + TypeScript + Rust + SQLite。
-- 下一步：内置 Agent 体验升级的三个任务（流式输出 → 对话页 Markdown 渲染 → 系统提示词构建）已全部验收通过（2026-08-07）。系统提示词已从单一常量重构为组合式分节构建（`src-tauri/src/quick_ai_prompt.rs`），诚实边界升级为"负面+正面替代+回退"，Markdown 白名单精确对齐渲染器，推理模型非空规则 + reasoning 诊断日志落地。后续待定：是否需要继续 Agent 升级（如记忆注入、重新生成、超 8K 续写），或返回阶段八复习闭环讨论。
-- 阶段八：用户已明确暂缓复习阶段讨论；Agent 升级完成后按 `docs/DEVELOPMENT_PLAN.md` 再排期阶段八产品讨论。
+- 下一步：`doc/quick-ai-overlay-upgrade-task.md` 的任务 1～6 已完成，任务 7 自动回归已通过；当前只等待真实 Tauri 人工验收，验收后再决定继续 Agent 后续能力还是返回阶段八产品讨论。
+- 阶段八：用户已明确暂缓复习阶段讨论；Quick AI 浮层升级收口后再按 `docs/DEVELOPMENT_PLAN.md` 排期。
 - 整体性能探查（2026-08-07）：按四层（启动/前端渲染/SQLite/内存体积）实测，当前真实数据规模下**无用户可感知瓶颈**。SQLite 查询全部走索引且冷热均 <4ms；每 command 重开连接 + 8 次迁移检查经真实 rusqlite 基准测得约 1.45ms（迁移去重实测无效，1.450 vs 1.452ms，已回退）；前端流式渲染每 delta 约 0.68ms（520ms 节流下无感知）；首屏 204 DOM 节点；全部对话页实际只渲染 26 个有标题会话。明确**不要**为性能引入 SQLite 连接复用（rusqlite Connection 虽 Send，但 guard 跨 await 编译失败、流式 record_for_app 持锁会冻结 UI、Mutex 非重入、backup VACUUM 长持锁，四重风险而收益 <10ms/操作）。后续若数据规模显著增长（如数万学习记录），再重测 `list_all_quick_ai_conversations` 全量列表与流式重建成本。
 - 主题启动三段式加载修复（2026-08-07）：主窗口启动曾出现"透明空白 → ReadRay Default 硬编码色 → 已选主题"的闪烁。根因：`.rr-main-app` 的 CSS 硬编码了默认主题变量（`main-app.css`），真实主题要等 `useAppTheme` 挂载后的异步 IPC `get_theme_snapshot`（SQLite 读 ~6ms）才用 inline style 覆盖，且窗口在 setup 时即 `show()`，与前端挂载并行赛跑。修复：新增 `src/themePrefetch.ts`，`main.tsx` 在 React 挂载前（仅 `view=main`）用 Tauri IPC 预取已选主题（带 2s 超时兜底、失败静默回退），`useAppTheme` 挂载 effect 改为 `useLayoutEffect`，首帧绘制前即应用预取快照（`.rr-main-app` 首帧即为已选主题），随后仍 `reload()` 权威重读。overlay / 非 Tauri 预览路径零改动（跳过预取）。验证：前端 26/30/43 测试全绿（settings 含 5 个新增预取用例）、`pnpm build` 通过、Rust 未改动（140/4 同基线）；独立审计确认无启动失败/竞态/语义破坏风险。
 - DeepSeek 请求超时兜底（2026-08-07）：对话流式生成曾出现"一直生成中不中断"。根因：所有 reqwest 调用用 `Client::new()`（默认无超时），DeepSeek 流不关闭或网络半开时 `stream.next().await` 永久挂起，前端 invoke 永不 settle，UI 停在"正在生成"。修复：`deepseek_client.rs` 新增 `shared_http_client()`（`Client::builder().timeout(180s).read_timeout(60s)`，零新增依赖），替换全部 3 处 `Client::new()`（流式/非流式 chat + 余额 GET）及 `lib.rs` smoke test；`read_timeout` 每次读到 chunk 后重置，即"60s 无数据则中断"的流空闲检测，长回答不受影响。超时触发后链路：Rust Err → invoke reject → 前端恢复逻辑读库 → assistant 不存在 → 返回 pending → UI 显示"生成中断可重试"（既有闭环，无需改前端）。验证：Rust 141 pass / 4 ignored（含新增客户端创建用例）、前端 26/30/43 全绿、build/fmt/check 通过。
@@ -121,7 +121,7 @@
 - 今天页输入、新对话和最近对话均已进入完整对话页；正式 Tauri 装配通过 `TauriConversationRepository` 调用现有 create/get/send Quick AI commands，页面组件不直接 invoke。
 - `RepositoryConversationService` 将 Rust camelCase `ConversationSnapshot` 映射为现有 thread，以 SQLite 返回的真实消息 ID、标题、时间和 sequence 覆盖临时页面状态；尾部为 user 时映射为明确 pendingTurn，重启加载后页面直接进入可重试失败态。
 - Tauri 正式路径不静态读取或实例化 `FixtureConversationService`；fixture 被 Vite 拆为非 Tauri 预览动态 chunk，继续保留原有分片、停止/继续、重生成、导出和故障注入演示。
-- 阶段四收口时真实 Quick AI 是非流式完整响应，正式路径不显示可用的停止/继续，也未开放重生成、原生导出或记忆引用；阶段六现已补上原生导出，但停止、重生成和记忆引用仍保持禁用。
+- 阶段四收口时真实 Quick AI 还是非流式完整响应；当前已升级为可停止的 SSE 流式输出并支持中断后重试，阶段六也已补上原生导出。回答重生成和记忆引用仍保持禁用。
 - Quick AI 发送使用 `conversationId + expectedUserSequence` 作为稳定轮次身份：`prepare_turn` 先单独提交 user，再调用 DeepSeek；`complete_turn` 校验 message ID、sequence 和当前尾版本后只补一条 assistant。模型、进程或 assistant 保存失败都会留下可恢复 pending user。
 - 同一轮重试复用既有 user message ID/sequence；若 assistant 已存在，后端直接返回权威快照且不再次请求模型。若事务已提交但 IPC 回传和随后读取都失败，页面仍保留原 expected sequence，下一次重试同样由后端幂等识别，不依赖 prompt 文本猜测。
 - 本轮未追加 migration：现有 v2 `quick_ai_messages` 的自增 ID 和 `UNIQUE(conversation_id, sequence)` 已足够提供 pending 身份与 expected-version 约束；旧历史、并发不同内容或错误 message ID 会明确冲突，不会静默写入。
@@ -135,6 +135,7 @@
 
 ### 阶段六：会话管理闭环（已完成）
 
+- Quick AI Overlay 来源隔离返修已收口：Overlay 最近列表和完整历史只查询 `overlay`；主窗口侧栏最近对话显式查询 `main`，主窗口“全部对话”继续统一展示 `main + overlay` 并留在主窗口内打开。SQLite v10 一次性删除早期无法追溯且仅用于测试的 `legacy` 会话，消息由现有外键级联清理；前端不再暴露旧会话来源或筛选入口，后续创建入口只允许 `main` / `overlay`。
 - “查看全部对话”已接入 `list_all_quick_ai_conversations`，直接读取 SQLite 中全部有标题会话并按 `updated_at_unix_ms DESC, id DESC` 排列；独立页面覆盖 loading、empty、error 和 retry，不从侧栏最近六条推导历史。
 - 重命名和删除复用现有 `ConversationService` / `ConversationStore`，所有操作只提交数据库 conversation ID。侧栏最近项与全部历史均为左键打开、右键显示“重命名/导出/删除”，列表不保留常驻文字按钮或悬停更多按钮；两处共用 Shell 级管理浮层，不复制业务请求。当前会话标题单击后原地编辑，Enter 保存，Esc 或失焦安全取消。重命名成功后用 Rust 返回的完整权威快照同步当前 thread；删除依赖既有外键级联清理消息，删除当前会话后进入新的空会话。成功操作触发既有刷新令牌，使侧栏与全部历史重新读取。
 - 当前页的管理操作同时绑定 mounted、request key 与 conversation ID；父级再用实时页面、请求和会话 ref 复核删除回调。在操作期间切换到其他会话或“今天/记忆/写作/全部对话”后，迟到结果不会回写已卸载页面，也不会创建新对话或把用户带回会话页。重命名、删除失败保留当前对话和弹窗状态，可原地重试；不存在的删除不会提示成功。
@@ -216,9 +217,16 @@
 - 解释卡与写作分析提示词保持独立未并入（一致性重构留作后续可选）。
 - 验收：用户真实 Tauri 确认效果提升；Rust 137 通过 / 4 ignored、前端 25/30/38 全绿、build/fmt/check/diff 通过；4 项真实 DeepSeek live 测试（白名单、诚实边界、两轮上下文、解释卡回归）通过。
 
+### Quick AI 浮层体验升级（任务 7 自动回归通过，等待人工验收）
+
+- 浮层对话窗口已调整为约 `780 × 500px`，面板铺满原生窗口；输入栏密度、发送按钮和多行向上扩展已收紧，同时保留中文输入法和现有发送快捷键语义。
+- 浮层现已分离显示状态、页面状态和活动会话：失焦只隐藏，重新呼出恢复页面、会话、草稿与合理滚动位置；对话页 Esc/返回按钮回到搜索入口，搜索入口 Esc 隐藏。隐藏不会取消流式生成，迟到结果继续按会话和请求身份隔离。
+- 历史按钮提供新对话、Overlay 最近会话和完整历史；Overlay 历史只读取 `overlay` 来源，主窗口侧栏只读取 `main` 来源，主窗口全部历史仍统一归档两类会话。SQLite v10 已删除无法追溯且仅用于测试的 `legacy` 会话，后续创建入口只允许 `main` / `overlay`。
+- 任务 7 自动回归已覆盖窗口/抽屉外壳、单多行输入、失焦隐藏恢复、两层 Esc、返回、历史切换、`Ctrl+N`、流式停止恢复及 loading/error/stopped 状态。Overlay 8 项、会话 27 项、写作 30 项、设置/主题/生命周期 43 项通过；Rust 143 项通过、4 项真实联网测试按既有规则忽略；生产构建、Cargo fmt/check、RESOURCE_MAP YAML、SQLite v10 完整性和 `git diff --check` 均正常。未启动或操作 Tauri 窗口，当前只等待用户真实桌面验收。
+
 ## 下一步
 
-阶段一至阶段七已经完成，主题基础设施已通过独立审核与真实 Tauri 人工验收并收口。ReadRay 内置 Agent 体验升级（流式输出 → 对话页 Markdown 渲染 → 系统提示词构建）三个任务已全部验收通过（2026-08-07），`docs/AGENT_UPGRADE.md` 记录了完整任务书与验收结论。下一步待定：可继续 Agent 升级（记忆注入、重新生成、超 8K 续写等，均在任务书未决区登记），或按 `docs/DEVELOPMENT_PLAN.md` 返回阶段八复习闭环产品讨论（用户此前已明确暂缓）。
+阶段一至阶段七、主题基础设施和内置 Agent 三项升级均已完成并通过对应审核/人工验收。Quick AI 浮层升级任务 7 的自动回归已经完成，下一步仅由用户在真实 Tauri 中验收窗口/抽屉外壳、单多行输入、失焦恢复、两层 Esc、返回、历史切换、`Ctrl+N`、生成中隐藏/恢复及 loading/error/stopped 状态。验收通过后再把任务 7 标为完成，并决定继续 Agent 升级未决项或返回阶段八复习闭环产品讨论。
 
 - 已确认决策（详见 `docs/AGENT_UPGRADE.md`）：本轮不实现记忆注入，对话继续维持"不声称能访问本地学习记录/联网/长期记忆"的诚实边界；"重新生成"沿用覆盖式语义（与 ChatGPT 主流一致），本轮不实现。
 - 新环境仍可复制 `.env.example` 为 `.env` 填写开发期 `DEEPSEEK_API_KEY`；用户在设置页保存或清除后，以 Windows 安全存储中的持久化决定为准。真实 `.env` 不提交。
@@ -234,7 +242,7 @@
 - **解释体验限制**：查询类型依赖本地启发式规则，缩写、很短的多句文本或缺少句末标点的长句可能落入相邻类型；优先用真实样本调整，不为分类再增加一次 LLM 请求。
 - **解释体验限制**：CaptureInput 和 ExplanationCard 当前上限为 4096 字符，长段落还受模型 JSON 稳定性与浮窗最大高度约束，不代表整页翻译能力。
 - **阶段八边界**：记忆页还不能可靠生成重复出现次数或时间线，“过去的出现”入口保持隐藏；复习、去重和长期记忆留到对应阶段统一设计。
-- **后续体验优化**：Quick AI 当前按纯文本、非流式展示，模型仍可能返回 Markdown 标记；Markdown 渲染/规范化、真正流式输出和更可靠的对话策略不自动并入阶段六。
+- **Agent 后续边界**：Quick AI 已支持流式输出、停止/重试、白名单 Markdown 渲染和组合式系统提示词；记忆注入、回答重新生成和超 8K 续写仍是未决能力，不因浮层 UI 升级自动并入。
 - **主题后续边界**：Flexoki 与 Codex 主题已作为随包内置主题接入；当前不包含外部主题 adapter、社区商店、在线下载或自动更新。新增 adapter 仍必须转换到 ReadRayThemeV1 并通过同一安全校验，不能放宽任意 CSS、字体、图片或网络资源边界。
 - **对话后续边界**：阶段六的查看全部、重命名、删除和原生导出已经完成；回答重生成和记忆引用聚合属于更后续能力，当前 UI 继续诚实禁用。
 - **阶段七范围**：三批设置功能与桌面生命周期已经通过复审和真实 Tauri 人工验收，阶段七已完成；本次收口未进入阶段八。
