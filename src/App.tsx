@@ -1,6 +1,7 @@
 import {
   useCallback,
   useEffect,
+  useMemo,
   useRef,
   useState,
   type CSSProperties,
@@ -42,6 +43,14 @@ import {
   RepositoryMemoryService,
   type MemoryService,
 } from "./memoryService";
+import { TauriReviewRepository } from "./reviewRepository";
+import {
+  RepositoryReviewService,
+  type ReviewService,
+} from "./reviewService";
+import { ReviewPreparationCoordinator } from "./reviewPreparationCoordinator";
+import { ReviewBackgroundPreparationController } from "./reviewBackgroundPreparation";
+import { ReviewQualityCoordinator } from "./reviewQualitySaveQueue";
 import { TauriTodayRepository } from "./todayRepository";
 import {
   RepositoryTodayService,
@@ -71,6 +80,7 @@ import "./styles/main-app.css";
 import "./styles/conversation-page.css";
 import "./styles/writing-page.css";
 import "./styles/settings-page.css";
+import "./styles/review-page.css";
 
 type CheckState = "idle" | "running" | "ok" | "warn" | "error";
 
@@ -1256,9 +1266,58 @@ function MainAppWindow() {
       ? new RepositoryTodayService(new TauriTodayRepository())
       : null,
   );
+  const [reviewService, setReviewService] = useState<ReviewService | null>(() =>
+    isTauriRuntime
+      ? new RepositoryReviewService(new TauriReviewRepository())
+      : null,
+  );
+  const reviewPreparationCoordinator = useMemo(
+    () =>
+      reviewService ? new ReviewPreparationCoordinator(reviewService) : null,
+    [reviewService],
+  );
+  const reviewQualityCoordinator = useMemo(
+    () =>
+      reviewService
+        ? new ReviewQualityCoordinator(reviewService, {
+            recordMutation: () => desktopSaveCoordinator.recordMutation(),
+          })
+        : null,
+    [reviewService],
+  );
+  const reviewBackgroundPreparation = useMemo(
+    () =>
+      reviewService && reviewPreparationCoordinator
+        ? new ReviewBackgroundPreparationController(
+            reviewService,
+            reviewPreparationCoordinator,
+          )
+        : null,
+    [reviewPreparationCoordinator, reviewService],
+  );
   const [memoryRefreshToken, setMemoryRefreshToken] = useState(0);
   const [learningRecordsRefreshToken, setLearningRecordsRefreshToken] =
     useState(0);
+
+  useEffect(() => {
+    if (!isTauriRuntime || !reviewBackgroundPreparation) return;
+    void reviewBackgroundPreparation.warmFirstPage().catch((error) => {
+      console.error("ReadRay 复习卡片后台预热失败：", error);
+    });
+    return () => reviewBackgroundPreparation.invalidate();
+  }, [
+    isTauriRuntime,
+    learningRecordsRefreshToken,
+    reviewBackgroundPreparation,
+  ]);
+
+  useEffect(() => {
+    if (!reviewQualityCoordinator) return;
+    return desktopSaveCoordinator.register({
+      label: "复习卡片质量反馈",
+      flush: () => reviewQualityCoordinator.flush(),
+    });
+  }, [reviewQualityCoordinator]);
   const [conversationRefreshToken, setConversationRefreshToken] = useState(0);
   const [conversationService, setConversationService] =
     useState<ConversationService | null>(() =>
@@ -1439,6 +1498,13 @@ function MainAppWindow() {
         }
       },
     );
+    void import("./reviewFixtureService").then(
+      ({ createBrowserPreviewReviewService }) => {
+        if (!ignore) {
+          setReviewService(createBrowserPreviewReviewService());
+        }
+      },
+    );
     void import("./conversationFixtureService").then(
       ({ FixtureConversationService }) => {
         if (ignore) {
@@ -1547,7 +1613,7 @@ function MainAppWindow() {
     const failure = safeExitFailure;
     if (!failure) return;
     const confirmed = window.confirm(
-      "仍然退出 ReadRay？尚未落盘的设置或写作修改可能丢失。",
+      "仍然退出 ReadRay？尚未落盘的设置、写作或复习反馈可能丢失。",
     );
     if (!confirmed) return;
     safeExitGenerationRef.current += 1;
@@ -1609,6 +1675,10 @@ function MainAppWindow() {
       memoryViewModel={memoryPageViewModel}
       memoryService={memoryService}
       memoryRefreshToken={memoryRefreshToken}
+      reviewService={reviewService}
+      reviewPreparationCoordinator={reviewPreparationCoordinator}
+      reviewQualityCoordinator={reviewQualityCoordinator}
+      reviewRefreshToken={learningRecordsRefreshToken}
       todayService={todayService}
       learningRecordsRefreshToken={learningRecordsRefreshToken}
       conversationRefreshToken={conversationRefreshToken}

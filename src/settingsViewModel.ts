@@ -37,7 +37,11 @@ export type DatabaseBackupResult = {
 
 export type ModelUsageRange = "today" | "last7Days" | "last30Days" | "all";
 
-export type ModelUsageCategory = "explanation_query" | "quick_ai" | "writing";
+export type ModelUsageCategory =
+  | "explanation_query"
+  | "quick_ai"
+  | "writing"
+  | "review_card";
 
 export type ModelUsageCategorySummary = {
   category: ModelUsageCategory;

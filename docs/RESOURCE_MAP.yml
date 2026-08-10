@@ -4,8 +4,8 @@ project:
   repo_root: "."
 
 meta:
-  version: "1.45"
-  last_updated: "2026-08-09"
+  version: "1.52"
+  last_updated: "2026-08-10"
   updated_by: "Codex"
   source_of_truth: "docs/RESOURCE_MAP.yml"
   language: "zh-CN"
@@ -79,7 +79,7 @@ core_docs:
       - "执行或验收流式输出、对话页 Markdown 渲染、系统提示词构建任务。"
       - "恢复内置 Agent 升级的上下文或核对已确认决策。"
     notes: "执行顺序已确认：先流式输出 → 再 Markdown 渲染 → 最后专门讨论系统提示词构建。任务 1 流式输出、任务 2 对话页 Markdown 渲染、任务 3 系统提示词构建均已验收通过（2026-08-07）。系统提示词已重构为组合式分节构建（quick_ai_prompt.rs）。已确认决策包括本轮不实现记忆注入、重新生成沿用覆盖式语义。后续任务（记忆注入、重新生成、超 8K 续写）在任务书未决区登记。"
-    risk: "任务书不是阶段计划；本文件不改变 DEVELOPMENT_PLAN 的阶段边界，阶段八仍处于暂缓状态。"
+    risk: "任务书不是阶段计划；本文件不改变 DEVELOPMENT_PLAN 的阶段边界。阶段八首个开发任务正在独立复审，尚未标记阶段完成。"
 
   - path: "doc/quick-ai-overlay-upgrade-task.md"
     purpose: "Quick AI 浮层尺寸、外壳、输入密度、会话恢复、返回与历史导航的顺序任务书。"
@@ -169,8 +169,8 @@ source_areas:
     status: "active"
     read_when:
       - "开发解释卡、历史页、写作页、复盘页、设置页。"
-    notes: "Tauri + Vite + React + TypeScript 脚手架入口；App.tsx 按 URL 区分 main 与 overlay：main 只装配主应用窗口控制，默认入口继续承载 Ctrl+Alt+R 无选区解释、Quick AI 和 UIA 锚定卡链路。"
-    risk: "不要在前端入口塞入原生系统逻辑。"
+    notes: "Tauri + Vite + React + TypeScript 脚手架入口；App.tsx 按 URL 区分 main 与 overlay：main 只装配主应用窗口控制，默认入口继续承载 Ctrl+Alt+R 无选区解释、Quick AI 和 UIA 锚定卡链路。主应用在 App 层同时装配 ReviewPreparationCoordinator 与 ReviewQualityCoordinator，两者都跨 ReviewPage 卸载存活；装配层向外壳注入 ReviewService、后台预热控制器与两个协调器。ReviewQualityCoordinator 通过 DesktopSaveCoordinator mutation gate 拒绝退出期间的新反馈，并注册应用级 flush 供安全退出等待。"
+    risk: "不要在前端入口塞入原生系统逻辑，也不要让复习质量反馈协调器回到页面本地生命周期。"
 
   - path: "src/components/MainAppShell.tsx"
     purpose: "ReadRay 正常主应用的无边框外壳、标题栏和内容页装配边界。"
@@ -178,8 +178,8 @@ source_areas:
     read_when:
       - "调整正常主应用壳、标题栏、侧栏折叠或首页装配。"
       - "将主应用接入独立 Tauri 窗口。"
-    notes: "当前通过 ?view=main 进入主应用，并在同一外壳内切换“今天”“写作”“记忆”“对话”“全部对话”和“设置”；由装配层加载 TodayService、MemoryService、ConversationService、WritingService、SettingsService 与最近 Quick AI 对话，页面组件不直接读取数据库。侧栏和全部历史的右键管理统一由外壳装配，成功后复用既有刷新令牌同步列表；只有实时页面、请求键和目标 ID 仍匹配时才同步当前标题或删除后进入空会话。写作页保持挂载并在离开时隐藏，使失败草稿仍可返回重试。外壳在应用四周渲染 8 个方向的自定义 resize 手柄（.rr-main-resize-handle），透明窗口下替代系统 resize 命中区，mousedown 经 onStartResize 调用前端 getCurrentWindow().startResizeDragging。"
-    risk: "不要把快捷 overlay 状态机或 invoke 迁入页面组件；正式 Tauri 对话、写作和设置必须使用真实 service。"
+    notes: "当前通过 ?view=main 进入主应用，并在同一外壳内切换“今天”“复习”“写作”“记忆”“对话”“全部对话”和“设置”；由装配层加载 TodayService、ReviewService、MemoryService、ConversationService、WritingService、SettingsService 与最近 Quick AI 对话，页面组件不直接读取数据库。侧栏和全部历史的右键管理统一由外壳装配，成功后复用既有刷新令牌同步列表；只有实时页面、请求键和目标 ID 仍匹配时才同步当前标题或删除后进入空会话。复习来源可按 learningRecordId 进入记忆详情；写作页保持挂载并在离开时隐藏，使失败草稿仍可返回重试。外壳在应用四周渲染 8 个方向的自定义 resize 手柄（.rr-main-resize-handle），透明窗口下替代系统 resize 命中区，mousedown 经 onStartResize 调用前端 getCurrentWindow().startResizeDragging。"
+    risk: "不要把快捷 overlay 状态机或 invoke 迁入页面组件；正式 Tauri 对话、复习、写作和设置必须使用真实 service。"
 
   - path: "src/components/MainSidebar.tsx"
     purpose: "主应用全局左侧栏，包含新对话、学习导航、最近对话、查看全部和设置入口。"
@@ -196,6 +196,106 @@ source_areas:
       - "调整今天页内容层级、学习入口或首页输入交互。"
     notes: "消费 TodayService 映射后的本机日期、今日学习记录事实与状态；最近记录可进入记忆详情，写作入口继续进入文章库，输入框通过 callback 进入完整对话页。"
     risk: "不要在本组件调用 invoke/SQLite，不得显示待复习、高频词或趋势推断；输入只负责把 prompt 交给正式 ConversationService。"
+
+  - path: "src/components/ReviewPage.tsx"
+    purpose: "阶段八复习页的连续卡片 Feed、后台制卡、提示/翻转、学习结果、来源抽屉、撤销和卡片质量反馈交互。"
+    status: "active"
+    read_when:
+      - "调整复习页状态、卡片交互、完成统计或来源跳转。"
+      - "排查复习写回失败重试、撤销、反馈或迟到结果。"
+    notes: "复用 MainAppShell、MainSidebar、主题和字体，只消费 ReviewService、应用级 ReviewPreparationCoordinator 与应用级 ReviewQualityCoordinator。游标分页持续加载 Feed；学习事件中保存的完整英文语境直接展示，缺失语境或下一轮变体在进入可见 Feed 前后台生成并保存，pending 条目不发布。卡片实际进入滚动 viewport 后只登记该条目已浏览，不算完成，也不会越过或删除更早的 pending/失败条目；协调器仅在未浏览缓冲低于水位时按需补页。外部 learning-record 刷新遇到 outcome、undo 或质量反馈写回时延后；质量反馈的成功、权威确认模糊成功和确定失败都有明确终态，页面在每个终态读取条目级 SQLite 权威状态，并在全部 mutation 结束后释放延后刷新。打开、提示、翻转、来源、关闭与质量反馈均不完成条目；只有 remembered/forgotten 成功写回才更新完成统计。结果请求绑定页面 key、feedItemId、learningRecordId、expectedRevision 与稳定 requestKey；失败保留当前卡并原地重试。赞踩与撤销反馈全部交给应用级协调器：同一卡片连续切换合并到最后选择，不同卡片全部保留并依次使用各自最新 SQLite revision，任一失败在 Feed 卡片与详情框都可见并可重试；页面卸载不丢失已点击的保存/撤销意图。只有重新打开相同 polarity 才恢复已有原因和详情。所有生效 attempt（包括较早轮次和最后一项）均可撤销。"
+    risk: "不得直接 invoke/SQLite、读取 fixture/localStorage、把卡片质量当学习结果，或写入无证据的再次遇到、薄弱项和个性化承诺；质量反馈状态不得再回到页面本地生命周期。"
+
+  - path: "src/reviewRepository.ts"
+    purpose: "阶段八正式复习 typed Tauri command repository。"
+    status: "active"
+    read_when:
+      - "调整 Feed 分页、AI 制卡、结果/撤销或质量反馈 command 参数。"
+    notes: "只调用 get_review_feed_page、get_review_feed_item_state、prepare_review_feed_card、submit/undo_review_outcome 与 save/undo_review_quality_feedback；参数保持 camelCase typed 边界。"
+    risk: "不得读取 SQLite、拼装卡片事实、回退 fixture 或在 repository 中实现调度。"
+
+  - path: "src/reviewService.ts"
+    purpose: "正式复习协议校验、learning record/生成语境到卡片模型映射、本机日期边界、分页合并和 Feed 统计。"
+    status: "active"
+    read_when:
+      - "调整真实复习卡映射、来源统计、推荐理由或 mutation 结果应用。"
+    notes: "只把 learning_record.context_text 中保存的完整英文语境直接映射为卡片；ExplanationCard 的 AI 例句或 sourceSentence 不冒充学习时语境。无可用英文语境或进入后续轮次时标记为待制卡，接收 Rust 已持久化并验证的 AI 英文语境。按最终英文内容稳定映射 compact/regular/extended 密度和 lexical/editorial/quote 视觉类型，不使用随机布局。推荐理由只陈述今日到期、新记录或继续练习三类真实状态。Service 校验全局完成数必须等于 remembered/forgotten 之和，质量反馈更新不触碰完成统计；条目级权威快照用于 mutation 后对账。"
+    risk: "不得按 normalizedText 合并记录、把中文上下文冒充英文卡、在前端自行生成 AI 语境，或根据质量反馈声称已改变策略。"
+
+  - path: "src/reviewRequestIdentity.ts"
+    purpose: "复习 mutation 的页面/条目/requestKey 迟到结果守卫与稳定请求键生成。"
+    status: "active"
+    read_when:
+      - "调整双击、失败重试、迟到结果或 requestKey 语义。"
+    notes: "页面只接受 pageKey、queueItemId 与 pending requestKey 仍完全匹配的结果；失败重试复用原 key。"
+    risk: "不得在失败后静默换新 key，否则数据库已提交但 IPC 未确认时会产生模糊结果。"
+
+  - path: "src/reviewAuthorityRefresh.ts"
+    purpose: "外部学习记录刷新与复习写回之间的延后闸门。"
+    status: "active"
+    read_when:
+      - "调整 outcome、undo、质量反馈写回与外部 refreshToken 的竞态。"
+    notes: "任一复习 mutation 在途时只登记外部刷新；全部 mutation 结束并完成条目级 SQLite 对账后，才允许触发延后的全页权威读取。"
+    risk: "不得让外部刷新覆盖本地在途结果，也不得把失败的本地乐观状态当作 SQLite 权威事实。"
+
+  - path: "src/reviewBackgroundPreparation.ts"
+    purpose: "正式主应用启动与 learning-record 更新后的复习首屏后台预热控制器。"
+    status: "active"
+    read_when:
+      - "调整进入复习页前的首屏卡片准备时机。"
+      - "排查后台预热与 ReviewPage 同时读取 Feed 的竞态。"
+    notes: "仅由 Tauri 主应用装配调用：页面尚未挂载时通过 ReviewService 读取第一批 Feed，并交给同一个 ReviewPreparationCoordinator 填充 6/12 缓冲；学习记录更新会使旧预热读取失效并重新触发。ReviewPage 一旦挂载即成为页面消费者，迟到预热不得覆盖页面 Feed。"
+    risk: "不得直接 invoke、导入 fixture/localStorage、另建制卡队列，或在页面已接管时用旧首屏裁掉后续 pending/失败条目。"
+
+  - path: "src/reviewPreparationCoordinator.ts"
+    purpose: "应用级复习后台制卡队列、稳定制卡 request key、并发限制、失败隔离与页面重挂载缓存。"
+    status: "active"
+    read_when:
+      - "调整后台预生成水位、并发数、重试或迟到结果处理。"
+      - "排查 pending 卡片进入 Feed、重复模型请求或页面切换后的恢复。"
+    notes: "以尚未浏览的 Ready、queued 和 working 总数作为真实缓冲：低于 6 才按需补到高水位 12，生成并发上限 2；候选不足时才通知页面补一页，全部生成失败时暂停自动扩张。主应用后台预热与 ReviewPage 共用该协调器；页面消费者挂载后接管 Feed，迟到预热结果必须放弃。每张可见卡按 feedItemId 单独登记消费，后面的 Ready 卡不会使更早 pending/失败卡出队；SQLite 返回的未到期失败退避会直接进入 failed 状态，不在启动预热时再次请求模型，用户显式重试才携带 explicitRetry 并复用原 key。同一 Feed 条目按 dayStart/feedItemId/learningRecordId/cycleIndex 派生确定性 request key，全部队列与缓存也使用该复合身份。生成继续走 ReviewService 并由 Rust 写入 SQLite；页面卸载后结果只留协调器缓存，重挂载再按完整身份对账。"
+    risk: "不得导入 fixture、Tauri API 或 localStorage；不得让某一生成结果的全局 generation 排斥同批其他合法结果，也不得自动热重试失败项。"
+
+  - path: "src/types/review.ts"
+    purpose: "Rust 复习队列、target、attempt、质量反馈和 mutation 的 TypeScript 原始协议。"
+    status: "active"
+    read_when:
+      - "Rust 复习返回字段或 command 输入变化。"
+    notes: "一个 ReviewFeedItem 固定绑定一个 learningRecordId 和 cycleIndex；同一目标可跨轮次生成不同 Feed 条目。generatedCard 携带池有效期、最后使用时间和使用次数；generationFailure 携带稳定 key、失败次数和退避截止时间；attempt 与按具体 feed/generated 语境保存的 qualityFeedback 保持分离，反馈写入还携带 cardContextKey 防止迟到请求误写到已更换的语境。"
+    risk: "协议变化必须同步 Rust serde、repository、service 与聚焦测试。"
+
+  - path: "src/reviewQualitySaveQueue.ts"
+    purpose: "应用级卡片质量反馈保存/撤销协调器，跨 ReviewPage 卸载继续运行。"
+    status: "active"
+    read_when:
+      - "调整赞踩即时保存、快速切换、撤销反馈、revision 或失败重试。"
+    notes: "由主应用装配在 App 层持有，ReviewPage 只消费其状态与终态事件。按 feedItemId 与 learningRecordId 组成身份；尚未发送的同卡 save/undo 用户意图可以合并为最后选择，不同卡片全部按进入顺序保留。预读后第一次发送即冻结 requestKey、expectedRevision 与完整 payload；IPC 失败对账未知后的显式重试复用完全相同输入，预读已经证明目标状态达成时直接进入成功终态。直接成功与权威确认的模糊成功共用恰好一次 finished 收口，确定失败发出 failed 终态、按卡片独立记录且不阻塞后续卡片。flush/close 等待 queued、预读、sending 与 reconciling；未解决失败返回含卡片身份的错误阻止安全退出。createReviewFeedbackDraft 只在 polarity 相同时恢复原因与详情。"
+    risk: "不得用全局 desired 槽覆盖其他卡片，不得改写已发送冻结请求的 revision 或 payload，不得并发提交同一卡片的旧 revision，也不得把质量反馈并入学习结果或调度；协调器生命周期必须长于 ReviewPage，避免切页丢失已点击意图。"
+
+  - path: "src/reviewFixtureService.ts"
+    purpose: "非 Tauri 浏览器复习预览专用内存 fixture service。"
+    status: "preview-only"
+    read_when:
+      - "维护复习设计预览或浏览器交互样本。"
+    notes: "仅由 App 的非 Tauri 分支动态 import，不使用 localStorage；复用同一后台协调器演示预生成，但数据只在内存中，刷新不代表正式持久化。"
+    risk: "不得由 Tauri 正式装配静态导入、实例化或回退读取。"
+
+  - path: "tests/reviewService.test.mjs"
+    purpose: "复习 service 映射、真实统计、反馈分离、迟到结果与正式/fixture 隔离聚焦测试。"
+    status: "active"
+    read_when:
+      - "修改复习前端协议、装配、统计、request 身份或文案边界。"
+    notes: "使用 Node 内置 test runner，不新增依赖；覆盖本机日历边界、学习时英文语境选择、ExplanationCard AI 例句隔离、后台生成映射、稳定内容密度、pending 隐藏、跨轮次同目标、分页统计/合并、任意结果撤销、卡片级即时反馈（含页面只消费应用级协调器、不自行调用反馈 service 的静态守卫），以及外部刷新等待 mutation 后用 SQLite 条目快照对账。"
+    risk: "静态和纯逻辑测试不替代真实 Tauri/SQLite 与视觉人工验收。"
+
+  - path: "tests/reviewPreparationCoordinator.test.mjs"
+    purpose: "复习后台制卡并发、幂等、乱序完成、失败重试、重启恢复与卸载隔离聚焦测试。"
+    status: "active"
+    read_when:
+      - "修改 ReviewPreparationCoordinator、稳定 request key 或可见卡选择。"
+      - "修改应用级 ReviewQualityCoordinator 或质量反馈协调语义。"
+    notes: "使用 deferred Promise 精确覆盖真实 prepared→apply→sync 回路、Ready 水位 6/12、并发上限 2、重复调度去重、B 先 A 后仍同时保留、后序 Ready 消费不丢前序 pending/失败、候选不足分页信号、全部失败暂停、失败释放 slot、同 key 重试、跨日复合身份、错误响应隔离、已持久化卡跳过、dispose 隔离，以及页面未打开时首屏预热、页面接管拒绝迟到预热、learning-record 新刷新淘汰旧读取、重启退避跳过自动请求。质量反馈行为覆盖 A working 后 B/C 均保存、同卡连续赞踩及 save→undo 合并、失败隔离且不阻塞其他卡片、DB 已提交但 IPC 失败时恰好一次 finished 与刷新门禁释放、undo 首次对账失败后完整冻结输入重试、跨页面卸载继续保存、close 等待，以及安全退出等待全队列、失败阻止退出和退出后的新意图拒绝。"
+    risk: "纯 Node 协调器测试不能替代真实 DeepSeek 时延、SQLite 重启和滚动手感验收。"
 
   - path: "src/components/ConversationPage.tsx"
     purpose: "主应用完整对话页的消息流、输入、长提示折叠、生成状态、操作菜单和记忆引用抽屉。"
@@ -360,7 +460,7 @@ source_areas:
     status: "active"
     read_when:
       - "调整设置页面协议、数据计数或 Key 来源状态。"
-    notes: "校验 Key configured/source 一致性、模型/数据目录、三个非负 SQLite 计数、Windows 开机启动布尔状态，以及字体/字号/发送键/关闭策略/全局快捷键偏好；偏好只通过 repository 写入并返回数据库 revision。余额、使用量和备份结果继续执行既有严格校验。"
+    notes: "校验 Key configured/source 一致性、模型/数据目录、三个非负 SQLite 计数、Windows 开机启动布尔状态，以及字体/字号/发送键/关闭策略/全局快捷键偏好；偏好只通过 repository 写入并返回数据库 revision。余额、四类使用量和备份结果继续执行既有严格校验。"
     risk: "不得让页面绕过 service 使用 Rust 原始响应，也不得从前端推算本地数据概览。"
 
   - path: "src/settingsViewModel.ts"
@@ -368,7 +468,7 @@ source_areas:
     status: "active"
     read_when:
       - "调整设置快照字段、Key 页面校验或迟到结果处理。"
-    notes: "快照只包含 configured/source、模型、数据目录、计数、版本、非敏感偏好和可选的全局快捷键注册错误；另定义多币种余额、三类 Token 使用量和备份文件结果，不包含 Key 明文或遮罩尾号。本地日期格式化不使用 toISOString；显式 UTC+8 测试覆盖中国时区零点跨日。"
+    notes: "快照只包含 configured/source、模型、数据目录、计数、版本、非敏感偏好和可选的全局快捷键注册错误；另定义多币种余额、解释查询/Quick AI/写作/复习制卡四类 Token 使用量和备份文件结果，不包含 Key 明文或遮罩尾号。本地日期格式化不使用 toISOString；显式 UTC+8 测试覆盖中国时区零点跨日。"
     risk: "不得把敏感值加入长期页面模型或返回协议。"
 
   - path: "src/appPreferences.ts"
@@ -652,6 +752,14 @@ source_areas:
     notes: "全部使用 rr-settings-* 作用域并复用 main-app.css 变量；包含余额、使用量 loading/error/retry、数据操作和确认框状态。分类导航默认是 52px 顶部横向导航；应用容器不超过 900px 时表单与数据行纵向排列。所有 select 使用 appearance:none + 自定义 chevron、hover/focus 边框过渡与主题色焦点光晕。"
     risk: "不要复制 App Shell、重定义全局 token 或影响今天、写作、记忆、对话、overlay 和 UIA。"
 
+  - path: "src/styles/review-page.css"
+    purpose: "阶段八复习内容区、内容自适应 editorial Feed、紧凑 3D 翻转卡片、浅遮罩、来源/反馈浮层和恢复状态的独立样式。"
+    status: "active"
+    read_when:
+      - "调整复习页视觉、卡片交互层级或应用容器响应式布局。"
+    notes: "全部使用 rr-review-* 作用域，复用 MainAppShell 的主题与字体变量；Feed 由稳定内容密度自然形成错落列，使用主题派生纸张纹理、弱阴影和轻入场动效。翻转两面位于同一 grid area，自然高度到上限后内部滚动，并提供 reduced-motion 降级。只移植设计稿内容区，不包含外壳、标题栏或侧栏。"
+    risk: "不要重定义全局 token、复制 App Shell，或让视觉状态暗示未写回 SQLite 的条目已经完成。"
+
   - path: "src/assets/fonts/"
     purpose: "ReadRay 随应用分发的默认字体文件与许可证。"
     status: "active"
@@ -803,16 +911,16 @@ source_areas:
     read_when:
       - "新增或排查 DeepSeek 请求链路。"
       - "调整共享请求、HTTP 状态或响应结构错误分类。"
-    notes: "ExplanationCard、Quick AI、写作分析/问答和设置页官方余额 GET 共用该传输与 HTTP 错误边界；默认模型仍为 deepseek-v4-flash。三类正式 chat/completions 成功响应先严格校验 prompt/completion/total usage，再尽力写入 SQLite，随后才反序列化业务结构；因此合法 usage 在后续业务 JSON 失败时仍计数，统计写入失败不改变模型结果。候选 Key 验证使用无统计的显式 Key 边界，余额 GET 也不进入统计。运行时优先使用 Windows 凭据管理器中的 Key；不记录或返回 API key。"
+    notes: "ExplanationCard、Quick AI、写作分析/问答、复习英文制卡和设置页官方余额 GET 共用该传输与 HTTP 错误边界；默认模型仍为 deepseek-v4-flash。四类正式 chat/completions 成功响应先严格校验 prompt/completion/total usage，再尽力写入 SQLite，随后才反序列化业务结构；因此合法 usage 在后续业务 JSON 失败时仍计数，统计写入失败不改变模型结果。候选 Key 验证使用无统计的显式 Key 边界，余额 GET 也不进入统计。运行时优先使用 Windows 凭据管理器中的 Key；不记录或返回 API key。"
     risk: "这里只放共享传输和 usage 响应边界，不放 ExplanationCard、Quick AI 或写作业务 prompt；不得因统计写入失败改写模型调用结果。"
 
   - path: "src-tauri/src/model_usage.rs"
-    purpose: "ReadRay 三类模型使用量的 SQLite 写入、范围聚合和 Tauri command。"
+    purpose: "ReadRay 四类模型使用量的 SQLite 写入、范围聚合和 Tauri command。"
     status: "active"
     read_when:
       - "调整 Token 使用量分类、写入或设置页聚合协议。"
       - "排查今天/近 7 天/近 30 天/全部的统计结果。"
-    notes: "只接受 explanation_query、quick_ai、writing 三类和经过 deepseek_client 校验的真实 prompt/completion/total Token；使用数据库写入时刻，不保存提示词、回答、Key 或费用。查询使用前端 Service 生成的本机半开日历边界；任意范围的统计开始时间均为该范围内第一条真实 usage 的 created_at，空范围返回 null，不用筛选范围起点代替。"
+    notes: "只接受 explanation_query、quick_ai、writing、review_card 四类和经过 deepseek_client 校验的真实 prompt/completion/total Token；使用数据库写入时刻，不保存提示词、回答、Key 或费用。查询使用前端 Service 生成的本机半开日历边界；任意范围的统计开始时间均为该范围内第一条真实 usage 的 created_at，空范围返回 null，不用筛选范围起点代替。"
     risk: "不得补造 migration 前历史、估算 Token/费用或统计 API Key 验证、余额和其他应用调用。"
 
   - path: "src-tauri/src/secret_store.rs"
@@ -882,8 +990,17 @@ source_areas:
       - "调整学习记录 schema、迁移或存储字段。"
       - "实现学习记录窗口、搜索、筛选、单条读取或删除。"
       - "排查自动保存或应用数据目录中的 SQLite 问题。"
-    notes: "使用 rusqlite bundled，在 Tauri 应用数据目录创建 readray.sqlite3；v1 为学习记录、v2 为 Quick AI、v3/v4 为写作、v5 为 Token usage、v6 新建 app_preferences，v7 追加桌面生命周期偏好，v8 新建 custom_themes/theme_preferences。内置默认主题不写数据库，旧设置升级保持既有 revision 和偏好。"
-    risk: "学习记录仍只做事件存储，不做去重、聚合、remembered/forgotten、趋势或历史 UI；新增 schema 必须继续追加 migration，不能改写已发布迁移。"
+    notes: "使用 rusqlite bundled，在 Tauri 应用数据目录创建 readray.sqlite3；v1 为学习记录、v2 为 Quick AI、v3/v4 为写作、v5 为 Token usage、v6 新建 app_preferences，v7 追加桌面生命周期偏好，v8 新建 custom_themes/theme_preferences，v9/v10 为会话来源，v11 新建独立复习 target/daily item/attempt/quality 表；v12 追加 generated card/feed/feed attempt，并原样迁移 v11 队列与 attempt，同时给模型使用量增加 review_card 分类；v13 为 generated card 增加有效期/LRU 使用字段，并把质量反馈迁移为 Feed 条目与具体卡片语境身份；v14 清理旧版提前创建的、前序轮次不完整且自身没有任何 attempt 的后续 Feed（存在 active/undone attempt 或任何持久质量反馈或幂等日志的条目一律保留，避免删除独立于学习结果的真实用户反馈），并新增持久化制卡失败退避表；v15 对已执行旧 v14 的数据库按仍存在的 active attempts 审计并修复 review_targets 聚合，修复时只递增 revision；v16 检测已登记旧 v13 但仍缺少 card_context_key 的中间版质量反馈表，在同一迁移事务内保留数据并重建为 Feed 条目与卡片语境复合唯一结构。所有复习迁移都不给 learning_records 增加可变状态。"
+    risk: "learning_records 继续只做不可修改的原始事件，不做去重或覆盖；复习状态必须留在独立表，新增 schema 继续追加 migration，不能改写已发布迁移。"
+
+  - path: "src-tauri/src/review.rs"
+    purpose: "阶段八 SQLite 复习仓库、连续分页 Feed、AI 英文语境持久化、调度、结果/撤销、质量反馈和 typed Tauri commands。"
+    status: "active"
+    read_when:
+      - "调整 Feed 候选/轮次、语境生成、调度间隔、attempt、幂等或 revision 事务。"
+      - "调整卡片质量反馈保存、补充详情或撤销。"
+    notes: "按本机日历持久化无硬上限的游标 Feed：每轮每条 learning_record 只出现一次，优先今日到期目标，再排新记录和继续练习；当前轮每个条目都有生效 attempt 后才允许创建下一轮，避免进入页面就批量生成同目标变体。cycle 0 优先使用 learning_record 保存的完整英文语境，缺失语境或后续轮次由 prepare_review_feed_card 复用 deepseek_client 按需生成并严格验证。生成卡有效期 30 天，每目标与全局 3/256 均作为 LRU 软上限：仍被 Feed 引用的有效卡受保护，只有未引用复用缓存占用剩余容量，过期卡仍会淘汰；因此 257 个不同目标的绑定卡不会形成解绑重生成振荡，长期数据仍由有效期和软容量收缩。前三张优先形成不同语境，第四轮起轮换复用。模型、校验或保存失败按稳定 request key 持久化次数和指数退避，显式重试可绕过退避但不更换 key。调度为 forgotten 1 天、remembered+hint 2 天、remembered 无提示按连续成功 3/7/14/30 天。结果与撤销在 IMMEDIATE 事务内使用 expectedRevision 和唯一 requestKey；撤销任意生效 attempt 后从剩余 attempt 重算目标并继续递增 revision。质量反馈按 Feed 条目与 recorded/generated 卡片语境独立保存，输入携带 cardContextKey 并即时写入；详情可选，幂等日志不影响 target/attempt/调度；get_review_feed_item_state 提供 mutation 后 SQLite 权威对账。"
+    risk: "不得按 normalized_text 合并、修改 learning_records、让质量反馈改变学习结果、跨事务制造重复 attempt，或把本阶段扩展到写作/对话/长期学习者记忆和个性化排序。"
 
   - path: "scripts/"
     purpose: "辅助脚本目录。"
@@ -950,7 +1067,7 @@ app_scaffold:
     read_when:
       - "调整 npm/pnpm 脚本。"
       - "排查前端构建或 Tauri CLI 调用。"
-    notes: "包管理器使用 pnpm；当前脚本包含 dev、build、preview、test:conversation、test:writing、test:settings 和 tauri。官方 @tauri-apps/plugin-dialog 同时提供 Markdown 保存路径与本地主题目录选择；test:settings 包含主题聚焦测试。"
+    notes: "包管理器使用 pnpm；当前脚本包含 dev、build、preview、test:conversation、test:review、test:writing、test:settings 和 tauri。官方 @tauri-apps/plugin-dialog 同时提供 Markdown 保存路径与本地主题目录选择；test:settings 包含主题聚焦测试。"
     risk: "不要无依据新增运行时依赖。"
 
   - path: "pnpm-lock.yaml"

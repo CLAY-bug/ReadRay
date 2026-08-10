@@ -23,6 +23,9 @@ import type {
 } from "../mainAppViewModel";
 import type { MemoryPageViewModel } from "../memoryViewModel";
 import type { MemoryService } from "../memoryService";
+import type { ReviewService } from "../reviewService";
+import type { ReviewPreparationCoordinator } from "../reviewPreparationCoordinator";
+import type { ReviewQualityCoordinator } from "../reviewQualitySaveQueue";
 import {
   createTodayLoadingViewModel,
   type TodayService,
@@ -40,6 +43,7 @@ import ConversationManagementMenu, {
 import MainAppIcon from "./MainAppIcon";
 import MainSidebar from "./MainSidebar";
 import MemoryPage from "./MemoryPage";
+import ReviewPage from "./ReviewPage";
 import SettingsPage from "./SettingsPage";
 import TodayPage from "./TodayPage";
 import WritingPage from "./WritingPage";
@@ -59,6 +63,10 @@ type MainAppShellProps = {
   memoryViewModel: MemoryPageViewModel;
   memoryService: MemoryService | null;
   memoryRefreshToken: number;
+  reviewService: ReviewService | null;
+  reviewPreparationCoordinator: ReviewPreparationCoordinator | null;
+  reviewQualityCoordinator: ReviewQualityCoordinator | null;
+  reviewRefreshToken: number;
   todayService: TodayService | null;
   learningRecordsRefreshToken: number;
   conversationRefreshToken: number;
@@ -93,6 +101,10 @@ function MainAppShell({
   memoryViewModel,
   memoryService,
   memoryRefreshToken,
+  reviewService,
+  reviewPreparationCoordinator,
+  reviewQualityCoordinator,
+  reviewRefreshToken,
   todayService,
   learningRecordsRefreshToken,
   conversationRefreshToken,
@@ -314,6 +326,7 @@ function MainAppShell({
   function handleNavigate(id: MainAppNavigationId) {
     if (
       id === "today" ||
+      id === "review" ||
       id === "memory" ||
       id === "writing" ||
       id === "settings"
@@ -341,6 +354,12 @@ function MainAppShell({
       }
     }
     onTodayActionSelect(id);
+  }
+
+  function handleReviewSourceOpen(learningRecordId: string) {
+    setRequestedMemoryRecordId(learningRecordId);
+    updateActivePage("memory");
+    onNavigate("memory");
   }
 
   function nextConversationRequestKey() {
@@ -552,6 +571,8 @@ function MainAppShell({
             ? "全部对话"
             : activePageId === "memory"
             ? "记忆"
+            : activePageId === "review"
+            ? "复习"
             : activePageId === "writing"
               ? writingWindowTitle
               : activePageId === "settings"
@@ -649,6 +670,18 @@ function MainAppShell({
             service={memoryService}
             refreshToken={memoryRefreshToken}
             requestedRecordId={requestedMemoryRecordId}
+          />
+        ) : activePageId === "review" ? (
+          <ReviewPage
+            service={reviewService}
+            preparationCoordinator={reviewPreparationCoordinator}
+            qualityCoordinator={reviewQualityCoordinator}
+            refreshToken={reviewRefreshToken}
+            onOpenMemoryRecord={handleReviewSourceOpen}
+            onReturnToday={() => {
+              updateActivePage("today");
+              onNavigate("today");
+            }}
           />
         ) : activePageId === "settings" ? (
           <SettingsPage

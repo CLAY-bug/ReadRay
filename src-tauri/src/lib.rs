@@ -17,6 +17,7 @@ pub mod learning_records;
 pub mod model_usage;
 pub mod quick_ai;
 pub mod quick_ai_prompt;
+pub mod review;
 pub mod secret_store;
 pub mod settings;
 pub mod themes;
@@ -955,6 +956,13 @@ pub fn run() {
             learning_records::get_learning_record,
             learning_records::delete_learning_record,
             learning_records::get_today_learning_summary,
+            review::get_review_feed_page,
+            review::get_review_feed_item_state,
+            review::prepare_review_feed_card,
+            review::submit_review_outcome,
+            review::undo_review_outcome,
+            review::save_review_quality_feedback,
+            review::undo_review_quality_feedback,
             quick_ai::create_quick_ai_conversation,
             quick_ai::get_quick_ai_conversation,
             quick_ai::list_recent_quick_ai_conversations,

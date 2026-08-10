@@ -198,7 +198,7 @@ test("assistant 回答悬停浮现复制按钮且优先复制原始 Markdown", a
   assert.match(conversationPage, /<path d="m5 12 4 4L19 6" \/>/);
   assert.match(
     conversationStyles,
-    /\.rr-conversation-message \{\n  position: relative;\n  margin-top: 24px;\n\}/,
+    /\.rr-conversation-message \{\r?\n  position: relative;\r?\n  margin-top: 24px;\r?\n\}/,
   );
   assert.match(
     conversationStyles,
@@ -241,7 +241,7 @@ test("全部对话使用搜索、最近/其他分组和紧凑固定行", async (
   assert.match(historyStyles, /grid-template-columns: minmax\(0, 1fr\) 20px/);
   assert.match(historyStyles, /grid-template-rows: auto auto/);
   assert.match(historyStyles, /text-overflow: clip/);
-  assert.match(historyStyles, /font-size: calc\(14px \* var\(--rr-ui-font-scale\)\);\n  font-weight: 500/);
+  assert.match(historyStyles, /font-size: calc\(14px \* var\(--rr-ui-font-scale\)\);\r?\n  font-weight: 500/);
   assert.match(historyStyles, /\.rr-conversation-history-date \{[\s\S]*?font-family: var\(--rr-main-font-display\)/);
   assert.match(rustConversations, /const AUTO_TITLE_LEN: usize = 18/);
   assert.match(rustConversations, /\.take\(AUTO_TITLE_LEN\)/);

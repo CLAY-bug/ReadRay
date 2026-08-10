@@ -9,6 +9,7 @@ pub(crate) enum ModelUsageCategory {
     ExplanationQuery,
     QuickAi,
     Writing,
+    ReviewCard,
 }
 
 impl ModelUsageCategory {
@@ -17,6 +18,7 @@ impl ModelUsageCategory {
             Self::ExplanationQuery => "explanation_query",
             Self::QuickAi => "quick_ai",
             Self::Writing => "writing",
+            Self::ReviewCard => "review_card",
         }
     }
 
@@ -25,6 +27,7 @@ impl ModelUsageCategory {
             "explanation_query" => Ok(Self::ExplanationQuery),
             "quick_ai" => Ok(Self::QuickAi),
             "writing" => Ok(Self::Writing),
+            "review_card" => Ok(Self::ReviewCard),
             _ => Err(format!("模型使用量包含未知业务分类：{value}")),
         }
     }
@@ -161,6 +164,7 @@ fn summarize(
         ModelUsageCategorySummary::empty(ModelUsageCategory::ExplanationQuery),
         ModelUsageCategorySummary::empty(ModelUsageCategory::QuickAi),
         ModelUsageCategorySummary::empty(ModelUsageCategory::Writing),
+        ModelUsageCategorySummary::empty(ModelUsageCategory::ReviewCard),
     ];
     let mut statement = connection
         .prepare(
@@ -245,7 +249,7 @@ mod tests {
     }
 
     #[test]
-    fn aggregates_three_categories_and_respects_half_open_time_range() {
+    fn aggregates_four_categories_and_respects_half_open_time_range() {
         let (root, _path, connection) = test_database();
         record_at(
             &connection,
@@ -280,20 +284,32 @@ mod tests {
             3_000,
         )
         .unwrap();
+        record_at(
+            &connection,
+            ModelUsageCategory::ReviewCard,
+            ModelTokenUsage {
+                prompt_tokens: 7,
+                completion_tokens: 3,
+                total_tokens: 10,
+            },
+            2_500,
+        )
+        .unwrap();
 
         let selected = summarize(&connection, Some(500), Some(3_000)).unwrap();
-        assert_eq!(selected.prompt_tokens, 30);
-        assert_eq!(selected.completion_tokens, 13);
-        assert_eq!(selected.total_tokens, 43);
-        assert_eq!(selected.request_count, 2);
+        assert_eq!(selected.prompt_tokens, 37);
+        assert_eq!(selected.completion_tokens, 16);
+        assert_eq!(selected.total_tokens, 53);
+        assert_eq!(selected.request_count, 3);
         assert_eq!(selected.statistics_start_unix_ms, Some(1_000));
         assert_eq!(selected.categories[0].total_tokens, 15);
         assert_eq!(selected.categories[1].total_tokens, 28);
         assert_eq!(selected.categories[2].total_tokens, 0);
+        assert_eq!(selected.categories[3].total_tokens, 10);
 
         let all = summarize(&connection, None, None).unwrap();
-        assert_eq!(all.total_tokens, 85);
-        assert_eq!(all.request_count, 3);
+        assert_eq!(all.total_tokens, 95);
+        assert_eq!(all.request_count, 4);
         assert_eq!(all.statistics_start_unix_ms, Some(1_000));
         drop(connection);
         let _ = fs::remove_dir_all(root);

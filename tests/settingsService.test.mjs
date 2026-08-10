@@ -53,10 +53,10 @@ function snapshot(overrides = {}) {
 
 function usageSummary(overrides = {}) {
   return {
-    promptTokens: 60,
-    completionTokens: 25,
-    totalTokens: 85,
-    requestCount: 3,
+    promptTokens: 67,
+    completionTokens: 28,
+    totalTokens: 95,
+    requestCount: 4,
     statisticsStartUnixMs: 1_700_000_000_000,
     categories: [
       {
@@ -78,6 +78,13 @@ function usageSummary(overrides = {}) {
         promptTokens: 30,
         completionTokens: 12,
         totalTokens: 42,
+        requestCount: 1,
+      },
+      {
+        category: "review_card",
+        promptTokens: 7,
+        completionTokens: 3,
+        totalTokens: 10,
         requestCount: 1,
       },
     ],
@@ -650,7 +657,7 @@ test("余额隐藏和卸载清理计时，失败保留旧值且迟到请求不�
   assert.equal(maxActiveRequests, 1, "任意时刻最多一个余额请求");
 });
 
-test("使用量 service 映射三类真实统计，并允许读取失败后重试", async () => {
+test("使用量 service 映射四类真实统计，并允许读取失败后重试", async () => {
   let attempts = 0;
   const bounds = [];
   const service = new RepositorySettingsService({
@@ -675,9 +682,9 @@ test("使用量 service 映射三类真实统计，并允许读取失败后重�
   assert.equal(attempts, 2);
   assert.deepEqual(
     summary.categories.map((item) => item.category),
-    ["explanation_query", "quick_ai", "writing"],
+    ["explanation_query", "quick_ai", "writing", "review_card"],
   );
-  assert.equal(summary.totalTokens, 85);
+  assert.equal(summary.totalTokens, 95);
   assert.equal(bounds.length, 2);
   assert.ok(Number.isSafeInteger(bounds[0].startUnixMs));
   assert.ok(Number.isSafeInteger(bounds[0].endUnixMs));
@@ -810,6 +817,7 @@ test("正式设置页保持五类设计结构，确定性操作已接线且不�
   const explanation = await readFile("src-tauri/src/deepseek_explanation.rs", "utf8");
   const quickAi = await readFile("src-tauri/src/quick_ai.rs", "utf8");
   const writing = await readFile("src-tauri/src/writing.rs", "utf8");
+  const review = await readFile("src-tauri/src/review.rs", "utf8");
   const migrations = await readFile("src-tauri/src/learning_records.rs", "utf8");
 
   assert.doesNotMatch(page, /\binvoke\s*\(|localStorage|sessionStorage/);
@@ -933,6 +941,7 @@ test("正式设置页保持五类设计结构，确定性操作已接线且不�
   assert.match(explanation, /ModelUsageCategory::ExplanationQuery/);
   assert.match(quickAi, /ModelUsageCategory::QuickAi/);
   assert.match(writing, /ModelUsageCategory::Writing/);
+  assert.match(review, /ModelUsageCategory::ReviewCard/);
   assert.match(migrations, /CREATE TABLE model_usage_records/);
   assert.doesNotMatch(
     migrations.slice(

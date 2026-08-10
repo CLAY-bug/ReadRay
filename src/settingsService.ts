@@ -112,6 +112,7 @@ const usageCategoryOrder: ModelUsageCategory[] = [
   "explanation_query",
   "quick_ai",
   "writing",
+  "review_card",
 ];
 
 function validateUsageCounts(
@@ -139,8 +140,8 @@ export function validateModelUsageSummary(summary: ModelUsageSummary): ModelUsag
   ) {
     throw new Error("ReadRay 使用量统计开始时间无效。");
   }
-  if (!Array.isArray(summary.categories) || summary.categories.length !== 3) {
-    throw new Error("ReadRay 使用量必须包含三类业务明细。");
+  if (!Array.isArray(summary.categories) || summary.categories.length !== 4) {
+    throw new Error("ReadRay 使用量必须包含四类业务明细。");
   }
 
   const categories = new Map<ModelUsageCategory, ModelUsageCategorySummary>();

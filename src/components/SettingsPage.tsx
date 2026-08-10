@@ -1859,6 +1859,7 @@ function SettingsPage({
                           ["explanation_query", "解释查询"],
                           ["quick_ai", "Quick AI"],
                           ["writing", "写作"],
+                          ["review_card", "复习制卡"],
                         ] as const
                       ).map(([category, label]) => {
                         const item = usageSummary
