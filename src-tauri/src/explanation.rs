@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 
 pub const MAX_QUERY_TEXT_LEN: usize = 4_096;
-const MAX_CONTEXT_TEXT_LEN: usize = 4_096;
+pub(crate) const MAX_CONTEXT_TEXT_LEN: usize = 4_096;
 const MAX_SOURCE_APP_LEN: usize = 512;
 const MAX_SOURCE_TEXT_LEN: usize = 4_096;
 const MAX_HEADWORD_LEN: usize = 160;
@@ -129,6 +129,46 @@ impl ExplanationCard {
             | Self::Sentence { source_text, .. }
             | Self::Paragraph { source_text, .. } => source_text,
         }
+    }
+}
+
+pub(crate) fn is_primarily_chinese_source_sentence(value: &str) -> bool {
+    let mut han_count = 0_usize;
+    let mut latin_count = 0_usize;
+    for character in value.chars() {
+        if matches!(
+            character,
+            '\u{3400}'..='\u{4dbf}' | '\u{4e00}'..='\u{9fff}' | '\u{f900}'..='\u{faff}'
+        ) {
+            han_count += 1;
+        } else if character.is_ascii_alphabetic() {
+            latin_count += 1;
+        }
+    }
+
+    han_count > 0 && han_count.saturating_mul(2) >= latin_count
+}
+
+pub(crate) fn normalize_source_sentence_translation(card: &mut ExplanationCard) {
+    let (source_sentence, source_sentence_zh) = match card {
+        ExplanationCard::Word {
+            source_sentence,
+            source_sentence_zh,
+            ..
+        }
+        | ExplanationCard::Phrase {
+            source_sentence,
+            source_sentence_zh,
+            ..
+        } => (source_sentence, source_sentence_zh),
+        ExplanationCard::Sentence { .. } | ExplanationCard::Paragraph { .. } => return,
+    };
+
+    if source_sentence
+        .as_deref()
+        .is_some_and(is_primarily_chinese_source_sentence)
+    {
+        *source_sentence_zh = None;
     }
 }
 
@@ -462,9 +502,15 @@ fn validate_context_fields(
                 .to_string(),
         );
     }
-    if source_sentence.is_some() != source_sentence_zh.is_some() {
+    if source_sentence.is_none() && source_sentence_zh.is_some() {
         errors.push(
-            "explanationCard.sourceSentence 与 sourceSentenceZh 必须同时提供或同时省略。"
+            "explanationCard.sourceSentenceZh 只有在 sourceSentence 存在时才允许提供。".to_string(),
+        );
+    } else if source_sentence.is_some_and(|value| !is_primarily_chinese_source_sentence(value))
+        && source_sentence_zh.is_none()
+    {
+        errors.push(
+            "非中文主导的 explanationCard.sourceSentence 必须同时提供 sourceSentenceZh。"
                 .to_string(),
         );
     }
@@ -781,5 +827,125 @@ mod tests {
         let errors = validate_explanation_card(&input("market", None), &card).unwrap_err();
 
         assert!(errors.iter().any(|error| error.contains("contextMeaning")));
+    }
+
+    #[test]
+    fn source_sentence_without_translation_is_valid() {
+        let mut card = valid_word_card(None);
+        if let ExplanationCard::Word {
+            source_sentence,
+            source_sentence_zh,
+            ..
+        } = &mut card
+        {
+            *source_sentence = Some("这段逻辑会复用 Rust generation。".to_string());
+            *source_sentence_zh = None;
+        }
+
+        assert!(validate_explanation_card(
+            &input("market", Some("这段逻辑会复用 Rust generation。")),
+            &card,
+        )
+        .is_ok());
+    }
+
+    #[test]
+    fn source_sentence_translation_without_source_is_invalid() {
+        let mut card = valid_word_card(None);
+        if let ExplanationCard::Word {
+            source_sentence,
+            source_sentence_zh,
+            ..
+        } = &mut card
+        {
+            *source_sentence = None;
+            *source_sentence_zh = Some("这是一条没有原句的译文。".to_string());
+        }
+
+        let errors = validate_explanation_card(&input("market", None), &card).unwrap_err();
+        assert!(errors
+            .iter()
+            .any(|error| error.contains("sourceSentenceZh") && error.contains("sourceSentence")));
+    }
+
+    #[test]
+    fn english_source_sentence_without_translation_is_invalid() {
+        let mut card = valid_word_card(None);
+        if let ExplanationCard::Word {
+            source_sentence,
+            source_sentence_zh,
+            ..
+        } = &mut card
+        {
+            *source_sentence = Some("The market remained open after the request finished.".into());
+            *source_sentence_zh = None;
+        }
+
+        let errors = validate_explanation_card(
+            &input(
+                "market",
+                Some("The market remained open after the request finished."),
+            ),
+            &card,
+        )
+        .unwrap_err();
+        assert!(errors
+            .iter()
+            .any(|error| error.contains("非中文主导") && error.contains("sourceSentenceZh")));
+    }
+
+    #[test]
+    fn english_source_sentence_with_translation_is_valid() {
+        let mut card = valid_word_card(None);
+        if let ExplanationCard::Word {
+            source_sentence,
+            source_sentence_zh,
+            ..
+        } = &mut card
+        {
+            *source_sentence = Some("The market remained open after the request finished.".into());
+            *source_sentence_zh = Some("请求结束后市场仍然开放。".into());
+        }
+
+        assert!(validate_explanation_card(
+            &input(
+                "market",
+                Some("The market remained open after the request finished."),
+            ),
+            &card,
+        )
+        .is_ok());
+    }
+
+    #[test]
+    fn chinese_dominant_source_sentence_discards_redundant_translation() {
+        let mut card = valid_word_card(None);
+        if let ExplanationCard::Word {
+            source_sentence,
+            source_sentence_zh,
+            ..
+        } = &mut card
+        {
+            *source_sentence = Some(
+                "ReadRay 会在请求结束前检查 Rust generation，避免旧结果覆盖新结果。".to_string(),
+            );
+            *source_sentence_zh = Some("ReadRay 会检查请求代次，避免旧结果覆盖。".to_string());
+        }
+
+        normalize_source_sentence_translation(&mut card);
+
+        assert!(is_primarily_chinese_source_sentence(
+            "ReadRay 会在请求结束前检查 Rust generation，避免旧结果覆盖新结果。"
+        ));
+        assert!(matches!(
+            card,
+            ExplanationCard::Word {
+                source_sentence_zh: None,
+                ..
+            }
+        ));
+        assert!(!is_primarily_chinese_source_sentence(
+            "The Memory and Review pages keep the original learning record."
+        ));
     }
 }

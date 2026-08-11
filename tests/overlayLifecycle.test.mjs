@@ -91,8 +91,36 @@ test("首次 Quick AI 等待态左对齐，搜索入口使用两层 Esc", async 
     "async function submitCommand",
     "async function sendQuickAiMessage",
   );
-  assert.match(change, /commandRequestId\.current \+= 1/);
-  assert.match(submit, /commandRequestId\.current !== requestId/);
+  assert.match(change, /explanationRequests\.invalidate\("manual"\)/);
+  assert.match(submit, /explanationRequests\.begin\("manual"\)/);
+  assert.match(submit, /explanationRequests\.isCurrent\("manual", requestKey\)/);
+  assert.match(submit, /isExplanationRequestCancelled/);
+});
+
+test("ExplanationCard 通知、原始上下文与 Rust requestKey 权威保持同一链路", async () => {
+  const [app, rust, lib] = await Promise.all([
+    readFile("src/App.tsx", "utf8"),
+    readFile("src-tauri/src/deepseek_explanation.rs", "utf8"),
+    readFile("src-tauri/src/lib.rs", "utf8"),
+  ]);
+  const anchored = section(app, "const runAnchoredQuery", "const handleAnchoredContentSizeChange");
+  const manual = section(app, "async function submitCommand", "async function sendQuickAiMessage");
+
+  assert.match(anchored, /contextText: capturedContextForRecord\(capture\.contextText\)/);
+  assert.match(anchored, /minimalContextText: capture\.minimalContext \?\? null/);
+  assert.match(anchored, /requestScope: "anchored"/);
+  assert.match(anchored, /isCurrent\("anchored", requestKey\)[\s\S]*notifyLearningRecordCreated\(\)/);
+  assert.match(manual, /requestScope: "manual"/);
+  assert.match(manual, /minimalContextText: null/);
+  assert.match(manual, /isCurrent\("manual", requestKey\)[\s\S]*notifyLearningRecordCreated\(\)/);
+  assert.match(rust, /commit_if_current\([\s\S]*learning_records::save_for_app/);
+  assert.match(rust, /Abortable::new\(provider_request, abort_registration\)/);
+  assert.match(lib, /fn hide_overlay_window[\s\S]*cancel_explanation_scope/);
+  assert.match(lib, /fn hide_anchored_overlay_window[\s\S]*cancel_explanation_scope/);
+  assert.match(lib, /WindowEvent::Focused\(false\)[\s\S]*cancel_all_explanation_requests/);
+  assert.match(lib, /WindowEvent::CloseRequested[\s\S]*OVERLAY_WINDOW_LABEL[\s\S]*cancel_all_explanation_requests/);
+  assert.doesNotMatch(lib, /serde_json::to_string\(&capture\)/);
+  assert.match(lib, /READRAY_UIA_CAPTURE ok=\{\} selected_chars=\{\} has_context=\{\}/);
 });
 
 test("搜索框与 Quick AI 同宽同首行高，并从固定顶边向下展开", async () => {

@@ -28,6 +28,10 @@ import {
   mapExplanationCard,
   type ExplanationResult,
 } from "./explanationViewModel";
+import {
+  ExplanationRequestAuthority,
+  isExplanationRequestCancelled,
+} from "./explanationRequestAuthority";
 import type {
   CaptureInput,
   ExplanationCard,
@@ -148,6 +152,7 @@ type OverlayWindowStage =
 type WindowsUiaCapture = {
   selectedText?: string | null;
   contextText?: string | null;
+  minimalContext?: string | null;
   anchorRect?: AnchorRect | null;
   foreground?: {
     executablePath?: string | null;
@@ -210,9 +215,8 @@ function normalizeUiaText(value?: string | null) {
     .trim();
 }
 
-function contextForQuery(selectedText: string, contextText?: string | null) {
-  const normalized = normalizeUiaText(contextText);
-  return normalized && normalized !== selectedText ? normalized : null;
+function capturedContextForRecord(contextText?: string | null) {
+  return contextText?.trim() ? contextText : null;
 }
 
 function sourceAppForCapture(capture: WindowsUiaCapture) {
@@ -298,8 +302,15 @@ function OverlayApp() {
     "idle" | "loading" | "ready" | "error"
   >("idle");
   const [quickAiAllHistoryError, setQuickAiAllHistoryError] = useState<string>();
-  const anchoredRequestId = useRef(0);
-  const commandRequestId = useRef(0);
+  const [explanationRequests] = useState(
+    () =>
+      new ExplanationRequestAuthority((requestScope, requestKey) => {
+        void invoke("cancel_explanation_request", {
+          requestScope,
+          requestKey,
+        }).catch(() => undefined);
+      }),
+  );
   const quickAiRequestId = useRef(0);
   const quickAiHistoryRequestId = useRef(0);
   const quickAiSelectionRequestId = useRef(0);
@@ -405,20 +416,20 @@ function OverlayApp() {
   }, [setQuickAiConversation]);
 
   const showCommandOverlay = useCallback(() => {
-    anchoredRequestId.current += 1;
+    explanationRequests.invalidateAll();
     setPreviewMode("command");
     setCommandOpen(true);
-  }, []);
+  }, [explanationRequests]);
 
   const closeAnchoredOverlay = useCallback(async () => {
-    anchoredRequestId.current += 1;
+    explanationRequests.invalidate("anchored");
     setPopoverOpen(false);
     try {
       await invoke("hide_anchored_overlay_window");
     } catch (error) {
       setWindowCheck({ state: "warn", detail: formatError(error) });
     }
-  }, []);
+  }, [explanationRequests]);
 
   const runAnchoredQuery = useCallback(async (capture: WindowsUiaCapture) => {
     const selectedText = normalizeUiaText(capture.selectedText);
@@ -427,8 +438,8 @@ function OverlayApp() {
       return;
     }
 
-    const requestId = anchoredRequestId.current + 1;
-    anchoredRequestId.current = requestId;
+    explanationRequests.invalidate("manual");
+    const requestKey = explanationRequests.begin("anchored");
     anchoredSourceRect.current = capturedAnchorRect;
     setAnchoredQuery(selectedText);
     setAnchoredError(undefined);
@@ -444,7 +455,8 @@ function OverlayApp() {
         anchorRect: capturedAnchorRect,
       });
     } catch (error) {
-      if (anchoredRequestId.current === requestId) {
+      if (explanationRequests.isCurrent("anchored", requestKey)) {
+        explanationRequests.finish("anchored", requestKey);
         setAnchoredStage("error");
         setAnchoredError(`无法显示划词浮层：${formatError(error)}`);
       }
@@ -453,7 +465,7 @@ function OverlayApp() {
 
     const input: CaptureInput = {
       queryText: selectedText,
-      contextText: contextForQuery(selectedText, capture.contextText),
+      contextText: capturedContextForRecord(capture.contextText),
       sourceType: "windows_uia",
       sourceApp: sourceAppForCapture(capture),
     };
@@ -461,23 +473,32 @@ function OverlayApp() {
     try {
       const card = await invoke<ExplanationCard>("create_explanation_card", {
         input,
+        requestKey,
+        requestScope: "anchored",
+        minimalContextText: capture.minimalContext ?? null,
       });
-      notifyLearningRecordCreated();
-      if (anchoredRequestId.current !== requestId) {
+      if (!explanationRequests.isCurrent("anchored", requestKey)) {
         return;
       }
+      notifyLearningRecordCreated();
 
       await invoke("present_anchored_overlay_window", {
         stage: "result",
         anchorRect: capturedAnchorRect,
       });
-      if (anchoredRequestId.current !== requestId) {
+      if (!explanationRequests.isCurrent("anchored", requestKey)) {
         return;
       }
       setAnchoredResult(mapExplanationCard(card));
       setAnchoredStage("result");
+      explanationRequests.finish("anchored", requestKey);
     } catch (error) {
-      if (anchoredRequestId.current !== requestId) {
+      if (!explanationRequests.isCurrent("anchored", requestKey)) {
+        return;
+      }
+      explanationRequests.finish("anchored", requestKey);
+      if (isExplanationRequestCancelled(error)) {
+        setPopoverOpen(false);
         return;
       }
 
@@ -491,7 +512,7 @@ function OverlayApp() {
         anchorRect: capturedAnchorRect,
       }).catch(() => undefined);
     }
-  }, []);
+  }, [explanationRequests]);
 
   const handleAnchoredContentSizeChange = useCallback(
     (size: { width: number; height: number }) => {
@@ -553,7 +574,7 @@ function OverlayApp() {
     listen("readray://hidden", () => {
       setCommandOpen(false);
       setPopoverOpen(false);
-      anchoredRequestId.current += 1;
+      explanationRequests.invalidateAll();
     })
       .then((dispose) => {
         unlistenHidden = dispose;
@@ -567,10 +588,17 @@ function OverlayApp() {
       unlistenOverlayIntent?.();
       unlistenHidden?.();
     };
-  }, [consumeOverlayIntent]);
+  }, [consumeOverlayIntent, explanationRequests]);
+
+  useEffect(
+    () => () => {
+      explanationRequests.invalidateAll();
+    },
+    [explanationRequests],
+  );
 
   function showPreviewPopover() {
-    anchoredRequestId.current += 1;
+    explanationRequests.invalidateAll();
     clearCommandState();
     setPreviewMode("anchored");
     setAnchoredStage("mock");
@@ -618,6 +646,7 @@ function OverlayApp() {
   async function handleCommandOpenChange(nextOpen: boolean) {
     setCommandOpen(nextOpen);
     if (!nextOpen) {
+      explanationRequests.invalidate("manual");
       try {
         await invoke("hide_overlay_window");
       } catch (error) {
@@ -627,7 +656,7 @@ function OverlayApp() {
   }
 
   function handleCommandValueChange(nextValue: string) {
-    commandRequestId.current += 1;
+    explanationRequests.invalidate("manual");
     setCommandValue(nextValue);
     setCommandStage("input");
     setCommandError(undefined);
@@ -638,8 +667,7 @@ function OverlayApp() {
       return;
     }
 
-    const requestId = commandRequestId.current + 1;
-    commandRequestId.current = requestId;
+    const requestKey = explanationRequests.begin("manual");
     setCommandValue(value);
     setCommandStage("loading");
     setCommandError(undefined);
@@ -653,19 +681,26 @@ function OverlayApp() {
     try {
       const card = await invoke<ExplanationCard>("create_explanation_card", {
         input,
+        requestKey,
+        requestScope: "manual",
+        minimalContextText: null,
       });
-      notifyLearningRecordCreated();
-      if (commandRequestId.current !== requestId) {
+      if (!explanationRequests.isCurrent("manual", requestKey)) {
         return;
       }
+      notifyLearningRecordCreated();
       setCenteredResult(mapExplanationCard(card));
       setCommandStage("result");
+      explanationRequests.finish("manual", requestKey);
     } catch (error) {
-      if (commandRequestId.current !== requestId) {
+      if (!explanationRequests.isCurrent("manual", requestKey)) {
         return;
       }
+      explanationRequests.finish("manual", requestKey);
       setCommandStage("input");
-      setCommandError(formatError(error));
+      setCommandError(
+        isExplanationRequestCancelled(error) ? undefined : formatError(error),
+      );
     }
   }
 
@@ -740,6 +775,7 @@ function OverlayApp() {
 
   async function enterQuickAi(initialValue: string) {
     const initialMessage = initialValue.trim();
+    explanationRequests.invalidateAll();
     setCenteredMode("quick-ai");
     setQuickAiPage("conversation");
     setCommandValue("");

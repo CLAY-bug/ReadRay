@@ -32,7 +32,7 @@ function BilingualText({
   highlightText,
 }: {
   en: string;
-  zh: string;
+  zh?: string;
   highlightText?: string;
 }) {
   return (
@@ -40,7 +40,7 @@ function BilingualText({
       <p className="explanation-content__english">
         {renderHighlightedText(en, highlightText)}
       </p>
-      <p className="explanation-content__chinese">{zh}</p>
+      {zh ? <p className="explanation-content__chinese">{zh}</p> : null}
     </div>
   );
 }
@@ -135,7 +135,7 @@ function ExplanationResultContent({
           </section>
         ) : null}
 
-        {result.sourceSentence && result.sourceSentenceZh ? (
+        {result.sourceSentence ? (
           <section className="explanation-content__section explanation-content__source-sentence">
             {!isAnchored ? <h2>原句</h2> : null}
             <BilingualText
@@ -209,7 +209,7 @@ function ExplanationResultContent({
             <p>{result.basicMeaning}</p>
           </section>
         ) : null}
-        {result.sourceSentence && result.sourceSentenceZh ? (
+        {result.sourceSentence ? (
           <section className="explanation-content__section">
             <h2>原句</h2>
             <BilingualText

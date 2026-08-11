@@ -7,7 +7,7 @@
     "dev": "vite",
     "build": "tsc && vite build",
     "preview": "vite preview",
-    "test:overlay": "node --test tests/overlayLifecycle.test.mjs",
+    "test:overlay": "node --test tests/overlayLifecycle.test.mjs tests/explanationRequestAuthority.test.mjs tests/sourceSentenceDisplay.test.mjs",
     "test:conversation": "node --test tests/conversationService.test.mjs",
     "test:review": "node --test tests/reviewService.test.mjs tests/reviewPreparationCoordinator.test.mjs",
     "test:writing": "node --test tests/writing*.test.mjs",

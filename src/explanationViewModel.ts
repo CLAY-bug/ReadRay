@@ -5,6 +5,7 @@ import type {
   NearMeaningItem,
   PhraseItem,
 } from "./types/explanation";
+import { sourceSentenceForDisplay } from "./sourceSentenceDisplay";
 
 type SharedResult = {
   sourceText: string;
@@ -64,7 +65,11 @@ function optionalText(value?: string | null) {
 
 export function mapExplanationCard(card: ExplanationCard): ExplanationResult {
   switch (card.queryType) {
-    case "word":
+    case "word": {
+      const sourceSentence = sourceSentenceForDisplay(
+        card.sourceSentence,
+        card.sourceSentenceZh,
+      );
       return {
         kind: "word",
         sourceText: card.sourceText,
@@ -73,25 +78,29 @@ export function mapExplanationCard(card: ExplanationCard): ExplanationResult {
         phonetic: optionalText(card.phonetic),
         basicMeanings: card.basicMeanings,
         contextMeaning: optionalText(card.contextMeaning),
-        sourceSentence: optionalText(card.sourceSentence),
-        sourceSentenceZh: optionalText(card.sourceSentenceZh),
+        ...sourceSentence,
         phrases: card.phrases,
         nearMeanings: card.nearMeanings,
         examples: card.examples,
         reviewHint: optionalText(card.reviewHint),
       };
-    case "phrase":
+    }
+    case "phrase": {
+      const sourceSentence = sourceSentenceForDisplay(
+        card.sourceSentence,
+        card.sourceSentenceZh,
+      );
       return {
         kind: "phrase",
         sourceText: card.sourceText,
         basicMeaning: card.basicMeaning,
         contextMeaning: optionalText(card.contextMeaning),
         composition: optionalText(card.composition),
-        sourceSentence: optionalText(card.sourceSentence),
-        sourceSentenceZh: optionalText(card.sourceSentenceZh),
+        ...sourceSentence,
         examples: card.examples,
         reviewHint: optionalText(card.reviewHint),
       };
+    }
     case "sentence":
       return {
         kind: "sentence",

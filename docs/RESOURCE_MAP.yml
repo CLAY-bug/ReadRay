@@ -4,8 +4,8 @@ project:
   repo_root: "."
 
 meta:
-  version: "1.52"
-  last_updated: "2026-08-10"
+  version: "1.58"
+  last_updated: "2026-08-11"
   updated_by: "Codex"
   source_of_truth: "docs/RESOURCE_MAP.yml"
   language: "zh-CN"
@@ -79,7 +79,7 @@ core_docs:
       - "执行或验收流式输出、对话页 Markdown 渲染、系统提示词构建任务。"
       - "恢复内置 Agent 升级的上下文或核对已确认决策。"
     notes: "执行顺序已确认：先流式输出 → 再 Markdown 渲染 → 最后专门讨论系统提示词构建。任务 1 流式输出、任务 2 对话页 Markdown 渲染、任务 3 系统提示词构建均已验收通过（2026-08-07）。系统提示词已重构为组合式分节构建（quick_ai_prompt.rs）。已确认决策包括本轮不实现记忆注入、重新生成沿用覆盖式语义。后续任务（记忆注入、重新生成、超 8K 续写）在任务书未决区登记。"
-    risk: "任务书不是阶段计划；本文件不改变 DEVELOPMENT_PLAN 的阶段边界。阶段八首个开发任务正在独立复审，尚未标记阶段完成。"
+    risk: "任务书不是阶段计划；本文件不改变 DEVELOPMENT_PLAN 的阶段边界。阶段八已完成，长期学习者记忆、记忆注入和个性化排序属于阶段九。"
 
   - path: "doc/quick-ai-overlay-upgrade-task.md"
     purpose: "Quick AI 浮层尺寸、外壳、输入密度、会话恢复、返回与历史导航的顺序任务书。"
@@ -89,6 +89,16 @@ core_docs:
       - "恢复本轮 Quick AI 交互优化上下文。"
     notes: "严格一次只执行一个任务；任务 1～6 已通过用户验收。任务 7 自动回归已通过，当前只等待真实 Tauri 视觉与交互验收；验收前不得把任务 7 标为完成或进入后续工作。任务 6 经用户确认允许最小修改主窗口统一历史，并为既有会话表增加创建来源字段。"
     risk: "除任务 6 已明确的主窗口历史来源展示和 SQLite 来源字段外，不得扩展到选区解释浮层、模型能力、第二套会话存储或未规划功能。"
+
+  - path: "doc/selection-translation-optimization-task.md"
+    purpose: "Ctrl+Alt+U 划词查询的 DeepSeek 快路径、最小上下文、取消、中文反查、规范英文学习目标和本地缓存分阶段任务书。"
+    status: "active"
+    read_when:
+      - "实现或验收划词解释速度优化。"
+      - "排查 DeepSeek reasoning 报错、划词长等待或迟到结果落库。"
+      - "修复中文查询进入记忆、今天或复习页面。"
+    notes: "严格按任务 1～5 单步执行；任务 1 模型与 HTTP 快路径已通过用户真实使用验收，任务 2 已完成最小可靠上下文、请求取消、迟到结果隔离与重复原句验收返修并合入主项目，当前等待用户真实桌面验收；任务 3 必须等待用户明确继续。已确认 ExplanationCard 关闭 thinking、纯中文直接译英文、不做质量/Provider 对照测评、不增加深入理解、不维护滚动会话。"
+    risk: "不得照搬整页翻译批处理或 Google 非公开接口，不得把 queryText 覆盖成译文；原始学习事件保持追加式，规范英文目标通过正式持久化投影提供给页面。"
 
   - path: "docs/THEME_PROTOCOL.md"
     purpose: "ReadRayThemeV1 的 manifest、语义颜色、回退、安全解析、持久化和外部 adapter 边界。"
@@ -169,8 +179,24 @@ source_areas:
     status: "active"
     read_when:
       - "开发解释卡、历史页、写作页、复盘页、设置页。"
-    notes: "Tauri + Vite + React + TypeScript 脚手架入口；App.tsx 按 URL 区分 main 与 overlay：main 只装配主应用窗口控制，默认入口继续承载 Ctrl+Alt+R 无选区解释、Quick AI 和 UIA 锚定卡链路。主应用在 App 层同时装配 ReviewPreparationCoordinator 与 ReviewQualityCoordinator，两者都跨 ReviewPage 卸载存活；装配层向外壳注入 ReviewService、后台预热控制器与两个协调器。ReviewQualityCoordinator 通过 DesktopSaveCoordinator mutation gate 拒绝退出期间的新反馈，并注册应用级 flush 供安全退出等待。"
+    notes: "Tauri + Vite + React + TypeScript 脚手架入口；App.tsx 按 URL 区分 main 与 overlay：main 只装配主应用窗口控制，默认入口继续承载 Ctrl+Alt+R 无选区解释、Quick AI 和 UIA 锚定卡链路。ExplanationCard 的 manual/anchored 请求通过 explanationRequestAuthority 以实例级随机 nonce + sequence 分作用域生成 requestKey，编辑、隐藏、切换模式和卸载会使旧 key 失效并调用 Rust 取消，只有当前 key 可通知学习记录刷新。主应用在 App 层同时装配 ReviewPreparationCoordinator 与 ReviewQualityCoordinator，两者都跨 ReviewPage 卸载存活；装配层向外壳注入 ReviewService、后台预热控制器与两个协调器。ReviewQualityCoordinator 通过 DesktopSaveCoordinator mutation gate 拒绝退出期间的新反馈，并注册应用级 flush 供安全退出等待。"
     risk: "不要在前端入口塞入原生系统逻辑，也不要让复习质量反馈协调器回到页面本地生命周期。"
+
+  - path: "src/explanationRequestAuthority.js"
+    purpose: "Overlay ExplanationCard 的 manual/anchored 分作用域 requestKey、取消和迟到结果守卫。"
+    status: "active"
+    read_when:
+      - "修改 ExplanationCard 请求、取消或迟到结果生命周期。"
+    notes: "零依赖纯状态模块；生产默认使用 crypto.randomUUID（缺失时使用原生 getRandomValues）生成经白名单和长度校验的实例 nonce，requestKey 格式为 scope:nonce:sequence，使旧实例迟到 cancel 与新实例 key 隔离。新请求取消同作用域旧 key，invalidateAll 用于隐藏、模式切换和卸载，失败完成后新 key 可重试。App 仍负责调用 typed Tauri command，Rust 才是落库权威。"
+    risk: "前端守卫不能替代 Rust 可取消 future 与保存前权威检查；manual/anchored 不得互相误取消。"
+
+  - path: "tests/explanationRequestAuthority.test.mjs"
+    purpose: "ExplanationCard 前端 requestKey、取消、作用域隔离、迟到和失败重试聚焦测试。"
+    status: "active"
+    read_when:
+      - "修改 explanationRequestAuthority 或 App 的 ExplanationCard 请求生命周期。"
+    notes: "由 test:overlay 运行；覆盖独立 authority 实例首 key 隔离、旧实例迟到 invalidate、nonce 校验、A→B、manual/anchored 隔离、编辑/隐藏/模式切换/卸载、失败重试和稳定取消分类。"
+    risk: "纯状态和静态装配测试不替代真实 Tauri invoke、窗口失焦与 UIA 人工验收。"
 
   - path: "src/components/MainAppShell.tsx"
     purpose: "ReadRay 正常主应用的无边框外壳、标题栏和内容页装配边界。"
@@ -701,7 +727,7 @@ source_areas:
     read_when:
       - "调整四类解释卡在记忆页的字段映射。"
       - "调整真实来源应用、时间分组或详情读取。"
-    notes: "按本地日期分为今天/昨天/更早；来源优先使用 sourceApp，缺失时只按真实 sourceType 标记；正式映射不生成过去出现次数。"
+    notes: "按本地日期分为今天/昨天/更早；来源优先使用 sourceApp，缺失时只按真实 sourceType 标记；正式映射不生成过去出现次数。word/phrase 的 SQLite 旧卡片复用 sourceSentenceForDisplay，中文主导原句不再重复显示中译。"
     risk: "不得补造后端缺失的语境义、翻译、难度或重复出现聚合。"
 
   - path: "src/memoryPageFixture.ts"
@@ -783,7 +809,7 @@ source_areas:
     read_when:
       - "调整不同查询类型的信息优先级、空字段隐藏或视觉层级。"
       - "同步锚定解释卡与无选区结果面板的内容结构。"
-    notes: "单词优先语境义和原句，句子/段落优先完整翻译；只在字段有值时渲染区块，避免把搭配误映射成用法。"
+    notes: "单词优先语境义和原句，句子/段落优先完整翻译；word/phrase 原句共用可选中译渲染，中文主导原句只显示一行，英文原句继续显示中译；只在字段有值时渲染区块。"
     risk: "该组件只负责展示，不应承担协议校验、查询分类或原生窗口控制。"
 
   - path: "src/explanationViewModel.ts"
@@ -792,8 +818,24 @@ source_areas:
     read_when:
       - "调整协议字段到 UI 的映射。"
       - "调整四类结果的锚定窗口建议宽度。"
-    notes: "保留后端有价值字段并规范化可选数组；word/phrase/sentence/paragraph 的建议宽度分别为 500/540/640/700 像素。"
+    notes: "保留后端有价值字段并规范化可选数组；word/phrase 复用 sourceSentenceForDisplay 兼容旧卡片的中文主导重复中译；四类建议宽度分别为 500/540/640/700 像素。"
     risk: "不要在映射层重新推断 queryType 或补造后端没有返回的学习信息。"
+
+  - path: "src/sourceSentenceDisplay.js"
+    purpose: "word/phrase 原句是否需要显示中译的确定性前端纯函数。"
+    status: "active"
+    read_when:
+      - "调整中英混排原句的重复展示或旧 ExplanationCard 兼容。"
+    notes: "统计汉字与 ASCII 拉丁字母；汉字存在且两倍汉字数不小于拉丁字母数时视为中文主导并隐藏 sourceSentenceZh。explanationViewModel 与 memoryService 共用。"
+    risk: "不得扩展为语义相似度、语言模型调用或脆弱词表。"
+
+  - path: "tests/sourceSentenceDisplay.test.mjs"
+    purpose: "中英混排原句单行展示和英文原句双语回归的零依赖聚焦测试。"
+    status: "active"
+    read_when:
+      - "修改 sourceSentenceDisplay 或 word/phrase 原句展示。"
+    notes: "由 test:overlay 运行；覆盖 Rust/generation、Memory/Review、普通英文、原句单独存在和孤立译文。"
+    risk: "纯函数测试与 pnpm build 不替代真实 Tauri 和历史 SQLite 页面人工验收。"
 
   - path: "src/types/explanation.ts"
     purpose: "前端使用的 ExplanationCard TypeScript 判别联合类型。"
@@ -873,7 +915,7 @@ source_areas:
       - "验证或扩展 Windows 跨应用选区捕获。"
       - "排查 selectedText、contextText、anchorRect 或前台应用诊断。"
       - "调整开发期 Ctrl+Alt+U 捕获快捷键。"
-    notes: "仅 Windows 编译；按焦点元素、窗口根、ElementFromPoint、Raw View 祖先和必要时子树的顺序寻找 TextPattern2/TextPattern。Ctrl+Alt+U 先在源应用前台完成捕获并输出 READRAY_UIA_CAPTURE，再由前端事件链调用 DeepSeek 和锚定解释卡；Obsidian 1.12.7 与 Codex App 已完成真实端到端验证。"
+    notes: "仅 Windows 编译；按焦点元素、窗口根、ElementFromPoint、Raw View 祖先和必要时子树的顺序寻找 TextPattern2/TextPattern。Ctrl+Alt+U 先在源应用前台完成捕获并输出 READRAY_UIA_CAPTURE；选区 TextRange 仍有效时从同一 Paragraph 精确派生前缀/后缀并生成模型专用 minimalContext，原始 contextText 独立保留。随后由前端事件链调用 DeepSeek 和锚定解释卡；Obsidian 1.12.7 与 Codex App 已完成既有真实端到端验证，新增最小上下文仍待真实桌面复验。"
     risk: "不同应用仍需分别验证；本轮未实现 MSAA/IAccessible2、剪贴板辅助或专用应用适配器。选区查询上限与协议一致为 4096 字符，不属于整页翻译能力。"
 
   - path: "src-tauri/src/desktop_lifecycle.rs"
@@ -892,7 +934,7 @@ source_areas:
       - "接入 DeepSeek 结构化输出。"
       - "调整解释卡 schema、字段限长或校验规则。"
       - "把解释卡映射到 compact UI 或后续 SQLite 本地记忆。"
-    notes: "schema 是 ReadRay 中间协议，不是前端组件 props；当前使用 serde tagged enum 明确区分 word/phrase/sentence/paragraph。输入 queryText/contextText 上限为 4096 字符；CaptureInput 可选携带 sourceApp；无 contextText 时不允许 contextMeaning；句子和段落以完整 translation 为核心，不继承单词卡必填项。"
+    notes: "schema 是 ReadRay 中间协议，不是前端组件 props；当前使用 serde tagged enum 明确区分 word/phrase/sentence/paragraph。输入 queryText/contextText 上限为 4096 字符；CaptureInput 可选携带 sourceApp；无 contextText 时不允许 contextMeaning。word/phrase 只允许中文主导 sourceSentence 单独存在；普通英文原句仍必须同时有 sourceSentenceZh，译文永远不能脱离原句；确定性规范化会移除中文主导原句的冗余中译。"
     risk: "不要在这里接真实 DeepSeek 查询链路、SQLite schema 或 UI 交互逻辑。"
 
   - path: "src-tauri/src/deepseek_explanation.rs"
@@ -902,7 +944,7 @@ source_areas:
       - "调整 create_explanation_card command。"
       - "排查 DeepSeek 结构化 JSON 输出、serde 解析或 validator 失败。"
       - "将 ExplanationCard 接入 compact UI 前的 Rust 层查询链路。"
-    notes: "command 输入为 CaptureInput，先在本地判断 word/phrase/sentence/paragraph，再使用对应 JSON schema prompt；请求使用 response_format=json_object，解析前以捕获输入覆盖 sourceText，随后 serde 解析并调用 validate_explanation_card。正式请求通过 deepseek_client 标记 explanation_query usage；校验成功后统一调用 learning_records 自动保存。manual 无选区输入和 windows_uia 划词解释卡共用该链路。"
+    notes: "command 输入保留原始 CaptureInput，并单独接收模型 minimalContext、manual/anchored requestScope 与 requestKey；本地判断 word/phrase/sentence/paragraph 后使用对应 JSON schema prompt。请求保持 response_format=json_object、thinking disabled、10 秒总超时和一次瞬态重试；解析前以捕获输入覆盖 sourceText，serde 后先清除中文主导 sourceSentence 的冗余 sourceSentenceZh，再调用完整 validator。Prompt 只让英文主导原句提供中译。Rust 内部 generation 与客户端唯一 key 的双层取消身份保持不变，学习记录仅能在同步保存前的最终权威检查内写入。"
     risk: "不要在日志、文档或提交文件中写入真实 DEEPSEEK_API_KEY；保存失败必须返回清晰错误，不能伪装为查询成功。"
 
   - path: "src-tauri/src/deepseek_client.rs"
@@ -911,7 +953,7 @@ source_areas:
     read_when:
       - "新增或排查 DeepSeek 请求链路。"
       - "调整共享请求、HTTP 状态或响应结构错误分类。"
-    notes: "ExplanationCard、Quick AI、写作分析/问答、复习英文制卡和设置页官方余额 GET 共用该传输与 HTTP 错误边界；默认模型仍为 deepseek-v4-flash。四类正式 chat/completions 成功响应先严格校验 prompt/completion/total usage，再尽力写入 SQLite，随后才反序列化业务结构；因此合法 usage 在后续业务 JSON 失败时仍计数，统计写入失败不改变模型结果。候选 Key 验证使用无统计的显式 Key 边界，余额 GET 也不进入统计。运行时优先使用 Windows 凭据管理器中的 Key；不记录或返回 API key。"
+    notes: "ExplanationCard、Quick AI、写作分析/问答、复习英文制卡和设置页官方余额 GET 共用该传输与 HTTP 错误边界；默认模型仍为 deepseek-v4-flash。ExplanationCard 的 policy 扩展点可在 Provider 响应后、usage 前后执行 requestKey 权威检查，取消不作为模型/schema/网络错误；其他调用保持原行为。四类正式 chat/completions 成功响应先严格校验 prompt/completion/total usage，再尽力写入 SQLite，随后才反序列化业务结构；统计写入失败不改变模型结果。候选 Key 验证使用无统计的显式 Key 边界，余额 GET 也不进入统计。运行时优先使用 Windows 凭据管理器中的 Key；不记录或返回 API key。"
     risk: "这里只放共享传输和 usage 响应边界，不放 ExplanationCard、Quick AI 或写作业务 prompt；不得因统计写入失败改写模型调用结果。"
 
   - path: "src-tauri/src/model_usage.rs"

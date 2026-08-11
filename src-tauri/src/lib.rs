@@ -489,6 +489,7 @@ fn set_overlay_window_always_on_top(
 #[tauri::command]
 fn prepare_overlay_input_window(window: WebviewWindow) -> Result<(), String> {
     ensure_overlay_window(&window)?;
+    deepseek_explanation::cancel_all_explanation_requests();
     resize_overlay_window(&window, OverlayWindowStage::Input)?;
     window.set_always_on_top(true).map_err(tauri_err)?;
     show_and_focus(&window)
@@ -511,6 +512,9 @@ fn set_overlay_window_stage(window: WebviewWindow, stage: &str) -> Result<(), St
 #[tauri::command]
 fn hide_overlay_window(window: WebviewWindow) -> Result<(), String> {
     ensure_overlay_window(&window)?;
+    deepseek_explanation::cancel_explanation_scope(
+        deepseek_explanation::ExplanationRequestScope::Manual,
+    );
     let _ = remember_overlay_position(&window);
     window.hide().map_err(tauri_err)
 }
@@ -583,7 +587,12 @@ fn present_anchored_overlay_window(
 ) -> Result<(), String> {
     ensure_overlay_window(&window)?;
     let anchored_stage = match stage {
-        "loading" => AnchoredOverlayStage::Loading,
+        "loading" => {
+            deepseek_explanation::cancel_explanation_scope(
+                deepseek_explanation::ExplanationRequestScope::Manual,
+            );
+            AnchoredOverlayStage::Loading
+        }
         "result" => AnchoredOverlayStage::Result,
         "error" => AnchoredOverlayStage::Error,
         other => return Err(format!("未知 anchored overlay stage：{other}")),
@@ -612,6 +621,9 @@ fn resize_anchored_overlay_window(
 #[tauri::command]
 fn hide_anchored_overlay_window(window: WebviewWindow) -> Result<(), String> {
     ensure_overlay_window(&window)?;
+    deepseek_explanation::cancel_explanation_scope(
+        deepseek_explanation::ExplanationRequestScope::Anchored,
+    );
     window.hide().map_err(tauri_err)
 }
 
@@ -792,12 +804,19 @@ pub fn run() {
                         match event.state() {
                             ShortcutState::Pressed => {
                                 let capture = windows_uia::capture_foreground();
-                                match serde_json::to_string(&capture) {
-                                    Ok(json) => eprintln!("READRAY_UIA_CAPTURE={json}"),
-                                    Err(error) => {
-                                        eprintln!("READRAY_UIA_CAPTURE_SERIALIZE_ERROR={error}")
-                                    }
-                                }
+                                eprintln!(
+                                    "READRAY_UIA_CAPTURE ok={} selected_chars={} has_context={} has_minimal_context={} has_anchor={} text_pattern={}",
+                                    capture.ok,
+                                    capture
+                                        .selected_text
+                                        .as_deref()
+                                        .map(|text| text.chars().count())
+                                        .unwrap_or(0),
+                                    capture.context_text.is_some(),
+                                    capture.minimal_context.is_some(),
+                                    capture.anchor_rect.is_some(),
+                                    capture.text_pattern.unwrap_or("none")
+                                );
 
                                 match pending_uia_capture().lock() {
                                     Ok(mut pending) => *pending = Some(capture),
@@ -911,6 +930,7 @@ pub fn run() {
                     eprintln!("READRAY_OVERLAY_FOCUS=lost_ignored");
                 } else {
                     eprintln!("READRAY_OVERLAY_FOCUS=lost");
+                    deepseek_explanation::cancel_all_explanation_requests();
                     let _ = window.hide();
                     let _ = window.emit("readray://hidden", ());
                 }
@@ -921,6 +941,7 @@ pub fn run() {
             }
             WindowEvent::CloseRequested { api, .. } if window.label() == OVERLAY_WINDOW_LABEL => {
                 api.prevent_close();
+                deepseek_explanation::cancel_all_explanation_requests();
                 let _ = window.hide();
                 let _ = window.emit("readray://hidden", ());
             }
@@ -951,6 +972,7 @@ pub fn run() {
             drag_overlay_window,
             finish_overlay_window_drag,
             deepseek_explanation::create_explanation_card,
+            deepseek_explanation::cancel_explanation_request,
             learning_records::list_learning_records,
             learning_records::search_learning_records,
             learning_records::get_learning_record,

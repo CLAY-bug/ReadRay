@@ -8,6 +8,7 @@ import type {
 } from "./memoryRepository";
 import type { QueryType, SourceType } from "./types/explanation";
 import type { LearningRecord } from "./types/learningRecord";
+import { sourceSentenceForDisplay } from "./sourceSentenceDisplay";
 
 export type MemoryRecordPageModel = {
   records: MemoryRecordItem[];
@@ -131,6 +132,10 @@ export function mapLearningRecordToMemoryItem(
   switch (card.queryType) {
     case "word": {
       const definition = card.basicMeanings.join("；");
+      const sourceSentence = sourceSentenceForDisplay(
+        card.sourceSentence,
+        card.sourceSentenceZh,
+      );
       return {
         ...shared,
         summary: cleanText(card.contextMeaning) || definition,
@@ -139,12 +144,16 @@ export function mapLearningRecordToMemoryItem(
         definition,
         meaning: cleanText(card.contextMeaning),
         sentence:
-          cleanDisplayedSource(card.sourceSentence) ||
+          cleanDisplayedSource(sourceSentence.sourceSentence) ||
           contextualSource(record, card.sourceText),
-        translation: cleanText(card.sourceSentenceZh),
+        translation: cleanText(sourceSentence.sourceSentenceZh),
       };
     }
-    case "phrase":
+    case "phrase": {
+      const sourceSentence = sourceSentenceForDisplay(
+        card.sourceSentence,
+        card.sourceSentenceZh,
+      );
       return {
         ...shared,
         summary: cleanText(card.contextMeaning) || card.basicMeaning,
@@ -153,10 +162,11 @@ export function mapLearningRecordToMemoryItem(
         definition: card.basicMeaning,
         meaning: cleanText(card.contextMeaning),
         sentence:
-          cleanDisplayedSource(card.sourceSentence) ||
+          cleanDisplayedSource(sourceSentence.sourceSentence) ||
           contextualSource(record, card.sourceText),
-        translation: cleanText(card.sourceSentenceZh),
+        translation: cleanText(sourceSentence.sourceSentenceZh),
       };
+    }
     case "sentence":
       return {
         ...shared,

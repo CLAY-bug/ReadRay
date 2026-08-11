@@ -1,3 +1,4 @@
+use crate::explanation::{classify_query_type, QueryType};
 use serde::{Deserialize, Serialize};
 use std::ffi::c_void;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -15,7 +16,8 @@ use windows::Win32::System::Threading::{
 };
 use windows::Win32::UI::Accessibility::{
     CUIAutomation8, IUIAutomation, IUIAutomationElement, IUIAutomationTextPattern,
-    IUIAutomationTextPattern2, IUIAutomationTextRange, IUIAutomationTreeWalker, TextUnit_Paragraph,
+    IUIAutomationTextPattern2, IUIAutomationTextRange, IUIAutomationTreeWalker,
+    TextPatternRangeEndpoint_End, TextPatternRangeEndpoint_Start, TextUnit_Paragraph,
     UIA_TextPattern2Id, UIA_TextPatternId,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
@@ -59,6 +61,7 @@ pub struct WindowsUiaCapture {
     pub capture_phase: &'static str,
     pub selected_text: Option<String>,
     pub context_text: Option<String>,
+    pub minimal_context: Option<String>,
     pub anchor_rect: Option<ScreenRect>,
     pub coordinate_space: &'static str,
     pub foreground: ForegroundDiagnostics,
@@ -83,6 +86,7 @@ impl WindowsUiaCapture {
             capture_phase: "beforeReadRayShowAndFocus",
             selected_text: None,
             context_text: None,
+            minimal_context: None,
             anchor_rect: None,
             coordinate_space: "physicalScreenPixels",
             foreground: ForegroundDiagnostics::default(),
@@ -468,13 +472,16 @@ unsafe fn try_capture_selection(
     let mut selected_parts = Vec::new();
     let mut rectangles = Vec::new();
     let mut context_text = None;
+    let mut minimal_context = None;
     for index in 0..selection_count {
         let range = unsafe { selection.GetElement(index) }
             .map_err(|error| format!("读取第 {index} 个 UIA 选区失败：{error}"))?;
         let selected_text = text_from_range(&range, MAX_SELECTED_TEXT_CHARS)?;
         if !selected_text.is_empty() {
             if context_text.is_none() {
-                context_text = context_from_range(&range)?;
+                let context = context_from_range(&range, selection_count == 1)?;
+                context_text = context.context_text;
+                minimal_context = context.minimal_context;
             }
             selected_parts.push(selected_text);
             rectangles.extend(bounding_rectangles(&range)?);
@@ -490,6 +497,7 @@ unsafe fn try_capture_selection(
     capture.selection_range_count = Some(selection_count);
     capture.selected_text = Some(selected_parts.join("\n"));
     capture.context_text = context_text;
+    capture.minimal_context = minimal_context;
     capture.bounding_rectangle_count = rectangles.len();
     capture.anchor_rect = union_rectangles(&rectangles);
     if capture.context_text.is_none() {
@@ -592,14 +600,260 @@ fn text_from_range(range: &IUIAutomationTextRange, max_chars: i32) -> Result<Str
         .map_err(|error| format!("读取 UIA 文本失败：{error}"))
 }
 
-fn context_from_range(range: &IUIAutomationTextRange) -> Result<Option<String>, String> {
+struct CapturedContext {
+    context_text: Option<String>,
+    minimal_context: Option<String>,
+}
+
+fn context_from_range(
+    range: &IUIAutomationTextRange,
+    has_single_selection: bool,
+) -> Result<CapturedContext, String> {
     let context_range =
         unsafe { range.Clone() }.map_err(|error| format!("复制 UIA 选区失败：{error}"))?;
     unsafe { context_range.ExpandToEnclosingUnit(TextUnit_Paragraph) }
         .map_err(|error| format!("扩展 UIA Paragraph 上下文失败：{error}"))?;
     let context = text_from_range(&context_range, MAX_CONTEXT_TEXT_CHARS)?;
+    if context.is_empty() {
+        return Ok(CapturedContext {
+            context_text: None,
+            minimal_context: None,
+        });
+    }
 
-    Ok((!context.is_empty()).then_some(context))
+    let selected = raw_text_from_range(range, MAX_SELECTED_TEXT_CHARS).ok();
+    let before = prefix_text_from_ranges(&context_range, range).ok();
+    let after = suffix_text_from_ranges(&context_range, range).ok();
+    let minimal_context = match (selected.as_deref(), before.as_deref(), after.as_deref()) {
+        (Some(selected), Some(before), Some(after)) => {
+            derive_minimal_context(selected, &context, before, after, has_single_selection)
+        }
+        _ => fallback_minimal_context(&context, selected.as_deref()),
+    };
+
+    Ok(CapturedContext {
+        context_text: Some(context),
+        minimal_context,
+    })
+}
+
+fn raw_text_from_range(range: &IUIAutomationTextRange, max_chars: i32) -> Result<String, String> {
+    unsafe { range.GetText(max_chars) }
+        .map(|value| value.to_string().replace("\r\n", "\n").replace('\r', "\n"))
+        .map_err(|error| format!("读取 UIA 文本失败：{error}"))
+}
+
+fn prefix_text_from_ranges(
+    context_range: &IUIAutomationTextRange,
+    selection_range: &IUIAutomationTextRange,
+) -> Result<String, String> {
+    let prefix = unsafe { context_range.Clone() }
+        .map_err(|error| format!("复制 UIA Paragraph 前缀失败：{error}"))?;
+    unsafe {
+        prefix.MoveEndpointByRange(
+            TextPatternRangeEndpoint_End,
+            selection_range,
+            TextPatternRangeEndpoint_Start,
+        )
+    }
+    .map_err(|error| format!("定位 UIA 选区前边界失败：{error}"))?;
+    raw_text_from_range(&prefix, MAX_CONTEXT_TEXT_CHARS)
+}
+
+fn suffix_text_from_ranges(
+    context_range: &IUIAutomationTextRange,
+    selection_range: &IUIAutomationTextRange,
+) -> Result<String, String> {
+    let suffix = unsafe { context_range.Clone() }
+        .map_err(|error| format!("复制 UIA Paragraph 后缀失败：{error}"))?;
+    unsafe {
+        suffix.MoveEndpointByRange(
+            TextPatternRangeEndpoint_Start,
+            selection_range,
+            TextPatternRangeEndpoint_End,
+        )
+    }
+    .map_err(|error| format!("定位 UIA 选区后边界失败：{error}"))?;
+    raw_text_from_range(&suffix, MAX_CONTEXT_TEXT_CHARS)
+}
+
+fn derive_minimal_context(
+    selected_text: &str,
+    paragraph_text: &str,
+    prefix_text: &str,
+    suffix_text: &str,
+    has_single_selection: bool,
+) -> Option<String> {
+    let paragraph = clean_model_context(paragraph_text);
+    if paragraph.is_empty() {
+        return None;
+    }
+
+    let selected = clean_model_context(selected_text);
+    let prefix = normalize_model_context_fragment(prefix_text);
+    let suffix = normalize_model_context_fragment(suffix_text);
+    let exact_position = has_single_selection
+        && !selected.is_empty()
+        && clean_model_context(&format!("{prefix_text}{selected_text}{suffix_text}")) == paragraph;
+    let Ok(query_type) = classify_query_type(&selected) else {
+        return Some(paragraph);
+    };
+
+    match query_type {
+        QueryType::Paragraph => None,
+        QueryType::Sentence => {
+            if exact_position {
+                reliable_previous_sentence(&prefix)
+            } else {
+                None
+            }
+        }
+        QueryType::Word | QueryType::Phrase => {
+            if !exact_position {
+                return Some(paragraph);
+            }
+            let Ok(sentence_start) = last_reliable_sentence_boundary(&prefix) else {
+                return Some(paragraph);
+            };
+            let Ok(sentence_end) = first_reliable_sentence_boundary(&suffix) else {
+                return Some(paragraph);
+            };
+            let prefix_part = &prefix[sentence_start.unwrap_or(0)..];
+            let suffix_part = &suffix[..sentence_end.unwrap_or(suffix.len())];
+            let sentence = clean_model_context(&format!("{prefix_part}{selected}{suffix_part}"));
+            if sentence.contains(&selected) {
+                Some(sentence)
+            } else {
+                Some(paragraph)
+            }
+        }
+    }
+}
+
+fn fallback_minimal_context(paragraph_text: &str, selected_text: Option<&str>) -> Option<String> {
+    let paragraph = clean_model_context(paragraph_text);
+    let query_type = selected_text
+        .map(clean_model_context)
+        .filter(|selected| !selected.is_empty())
+        .and_then(|selected| classify_query_type(&selected).ok());
+    match query_type {
+        Some(QueryType::Sentence | QueryType::Paragraph) => None,
+        _ => (!paragraph.is_empty()).then_some(paragraph),
+    }
+}
+
+fn clean_model_context(text: &str) -> String {
+    normalize_model_context_fragment(text).trim().to_string()
+}
+
+fn normalize_model_context_fragment(text: &str) -> String {
+    let normalized = text
+        .replace("\r\n", "\n")
+        .replace('\r', "\n")
+        .replace('\u{200b}', "")
+        .replace('\u{fffc}', "");
+    let mut lines = Vec::new();
+    let mut previous_was_blank = false;
+    for line in normalized.split('\n') {
+        let is_blank = line.trim().is_empty();
+        if is_blank {
+            if !previous_was_blank {
+                lines.push("");
+            }
+        } else {
+            lines.push(line);
+        }
+        previous_was_blank = is_blank;
+    }
+    lines.join("\n")
+}
+
+fn reliable_previous_sentence(prefix: &str) -> Option<String> {
+    let prefix = prefix.trim_end();
+    if prefix.is_empty() {
+        return None;
+    }
+    let boundaries = reliable_sentence_boundaries(prefix).ok()?;
+    let last = *boundaries.last()?;
+    if last != prefix.len() {
+        return None;
+    }
+    let start = if boundaries.len() >= 2 {
+        boundaries[boundaries.len() - 2]
+    } else {
+        0
+    };
+    let sentence = clean_model_context(&prefix[start..last]);
+    (!sentence.is_empty()).then_some(sentence)
+}
+
+fn last_reliable_sentence_boundary(text: &str) -> Result<Option<usize>, ()> {
+    Ok(reliable_sentence_boundaries(text)?.last().copied())
+}
+
+fn first_reliable_sentence_boundary(text: &str) -> Result<Option<usize>, ()> {
+    Ok(reliable_sentence_boundaries(text)?.first().copied())
+}
+
+fn reliable_sentence_boundaries(text: &str) -> Result<Vec<usize>, ()> {
+    let mut boundaries = Vec::new();
+    let characters: Vec<(usize, char)> = text.char_indices().collect();
+    let mut index = 0;
+    while index < characters.len() {
+        let (byte_index, character) = characters[index];
+        let mut boundary_end = byte_index + character.len_utf8();
+        match character {
+            '。' | '！' | '？' | '!' | '?' | '\n' => {}
+            '.' => {
+                if !ascii_period_is_reliable(text, byte_index) {
+                    return Err(());
+                }
+            }
+            _ => {
+                index += 1;
+                continue;
+            }
+        }
+
+        let mut next = index + 1;
+        while let Some((closing_index, closing)) = characters.get(next).copied() {
+            if matches!(
+                closing,
+                '"' | '\'' | '”' | '’' | ')' | ']' | '}' | '》' | '」' | '』'
+            ) {
+                boundary_end = closing_index + closing.len_utf8();
+                next += 1;
+            } else {
+                break;
+            }
+        }
+        boundaries.push(boundary_end);
+        index = next;
+    }
+    Ok(boundaries)
+}
+
+fn ascii_period_is_reliable(text: &str, byte_index: usize) -> bool {
+    let before = &text[..byte_index];
+    let after = &text[byte_index + 1..];
+    let previous = before.chars().next_back();
+    let next = after.chars().next();
+    if previous.is_some_and(|value| value.is_ascii_digit())
+        && next.is_some_and(|value| value.is_ascii_digit())
+    {
+        return false;
+    }
+    if next.is_some_and(|value| {
+        !value.is_whitespace() && !matches!(value, '"' | '\'' | '”' | '’' | ')' | ']' | '}')
+    }) {
+        return false;
+    }
+    let token: String = before
+        .chars()
+        .rev()
+        .take_while(|value| value.is_ascii_alphabetic())
+        .collect();
+    !(1..=3).contains(&token.len())
 }
 
 fn bounding_rectangles(range: &IUIAutomationTextRange) -> Result<Vec<ScreenRect>, String> {
@@ -703,7 +957,10 @@ fn unix_time_ms() -> u64 {
 
 #[cfg(test)]
 mod tests {
-    use super::{normalize_text, truncate_diagnostic, union_rectangles, ScreenRect};
+    use super::{
+        clean_model_context, derive_minimal_context, normalize_text, reliable_previous_sentence,
+        truncate_diagnostic, union_rectangles, ScreenRect,
+    };
 
     #[test]
     fn normalizes_uia_text() {
@@ -741,5 +998,107 @@ mod tests {
         assert_eq!(result.y, 200.0);
         assert_eq!(result.width, 80.0);
         assert_eq!(result.height, 45.0);
+    }
+
+    #[test]
+    fn derives_word_and_phrase_context_from_the_exact_selection_position() {
+        let repeated = derive_minimal_context(
+            "market",
+            "The first market closed. The second market remained open.",
+            "The first market closed. The second ",
+            " remained open.",
+            true,
+        );
+        assert_eq!(
+            repeated.as_deref(),
+            Some("The second market remained open.")
+        );
+
+        let phrase = derive_minimal_context(
+            "in progress",
+            "前一项已完成。The migration is still in progress! 后一项稍后开始。",
+            "前一项已完成。The migration is still ",
+            "! 后一项稍后开始。",
+            true,
+        );
+        assert_eq!(
+            phrase.as_deref(),
+            Some("The migration is still in progress!")
+        );
+    }
+
+    #[test]
+    fn sentence_context_uses_only_a_reliable_previous_sentence() {
+        assert_eq!(
+            reliable_previous_sentence("The cache is local.").as_deref(),
+            Some("The cache is local.")
+        );
+        let context = derive_minimal_context(
+            "It remains available.",
+            "The cache is local. It remains available. A later sentence follows.",
+            "The cache is local. ",
+            " A later sentence follows.",
+            true,
+        );
+        assert_eq!(context.as_deref(), Some("The cache is local."));
+
+        let unavailable = derive_minimal_context(
+            "This remains available.",
+            "An unfinished lead-in this remains available.",
+            "An unfinished lead-in ",
+            "",
+            true,
+        );
+        assert_eq!(unavailable, None);
+    }
+
+    #[test]
+    fn paragraph_context_is_never_duplicated() {
+        let paragraph = "The first sentence is here. The second sentence is also here.";
+        assert_eq!(
+            derive_minimal_context(paragraph, paragraph, "", "", false),
+            None
+        );
+    }
+
+    #[test]
+    fn uncertain_boundaries_fall_back_to_the_cleaned_paragraph() {
+        let paragraph = "Mr. Smith opened the first line\nwithout a reliable sentence ending";
+        let context = derive_minimal_context(
+            "first",
+            paragraph,
+            "Mr. Smith opened the ",
+            " line\nwithout a reliable sentence ending",
+            true,
+        );
+        assert_eq!(context.as_deref(), Some(paragraph));
+
+        let uncertain_position = derive_minimal_context(
+            "target",
+            "prefix target suffix",
+            "unrelated ",
+            " suffix",
+            true,
+        );
+        assert_eq!(uncertain_position.as_deref(), Some("prefix target suffix"));
+    }
+
+    #[test]
+    fn deterministic_cleanup_removes_only_known_uia_noise() {
+        assert_eq!(
+            clean_model_context("  first\r\n\u{200b}\u{fffc}\n\n\nsecond  "),
+            "first\n\nsecond"
+        );
+        assert_eq!(
+            derive_minimal_context(
+                "目标",
+                "上一句。这里是目标！下一句。",
+                "上一句。这里是",
+                "！下一句。",
+                true,
+            )
+            .as_deref(),
+            Some("这里是目标！")
+        );
     }
 }

@@ -765,7 +765,7 @@ mod tests {
     }
 
     #[test]
-    fn streaming_request_body_keeps_existing_model_parameters() {
+    fn quick_ai_request_bodies_keep_existing_model_parameters_and_thinking_default() {
         let history = vec![message(ConversationRole::User, "Stream this", 1)];
         let body = build_quick_ai_streaming_request_body("deepseek-v4-flash", &history);
 
@@ -777,6 +777,13 @@ mod tests {
         assert_eq!(body["messages"][0]["role"], "system");
         assert_eq!(body["messages"][1]["role"], "user");
         assert_eq!(body["messages"][1]["content"], "Stream this");
+        assert!(body.get("thinking").is_none());
+
+        let non_streaming = build_quick_ai_request_body("deepseek-v4-flash", &history);
+        assert_eq!(non_streaming["stream"], false);
+        assert_eq!(non_streaming["max_tokens"], QUICK_AI_MAX_TOKENS);
+        assert_eq!(non_streaming["temperature"], QUICK_AI_TEMPERATURE);
+        assert!(non_streaming.get("thinking").is_none());
     }
 
     #[test]
