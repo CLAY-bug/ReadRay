@@ -847,7 +847,9 @@ fn ensure_feed_page(
 ) -> Result<(), String> {
     let total_records: i64 = transaction
         .query_row(
-            "SELECT COUNT(*) FROM learning_records WHERE created_at_unix_ms <= ?1",
+            "SELECT COUNT(*) FROM learning_records lr
+             JOIN learning_record_targets lrt ON lrt.learning_record_id = lr.id
+             WHERE lr.created_at_unix_ms <= ?1",
             [now_unix_ms],
             |row| row.get(0),
         )
@@ -868,8 +870,9 @@ fn ensure_feed_page(
     loop {
         let available: i64 = transaction
             .query_row(
-                "SELECT COUNT(*) FROM review_feed_items
-                 WHERE day_start_unix_ms = ?1 AND ordinal > ?2",
+                "SELECT COUNT(*) FROM review_feed_items fi
+                 JOIN learning_record_targets lrt ON lrt.learning_record_id = fi.learning_record_id
+                 WHERE fi.day_start_unix_ms = ?1 AND fi.ordinal > ?2",
                 params![day_start_unix_ms, cursor],
                 |row| row.get(0),
             )
@@ -894,6 +897,7 @@ fn ensure_feed_page(
                               ELSE 2
                             END AS priority
                      FROM learning_records lr
+                     JOIN learning_record_targets lrt ON lrt.learning_record_id = lr.id
                      LEFT JOIN review_targets rt ON rt.learning_record_id = lr.id
                      WHERE lr.created_at_unix_ms <= ?2
                        AND NOT EXISTS (
@@ -942,6 +946,7 @@ fn ensure_feed_page(
                               WHERE a.feed_item_id = fi.id AND a.undone_at_unix_ms IS NULL
                             ) THEN 1 ELSE 0 END), 0)
                      FROM review_feed_items fi
+                     JOIN learning_record_targets lrt ON lrt.learning_record_id = fi.learning_record_id
                      WHERE fi.day_start_unix_ms = ?1 AND fi.cycle_index = ?2",
                     params![day_start_unix_ms, cycle_index],
                     |row| Ok((row.get(0)?, row.get(1)?)),
@@ -1022,11 +1027,12 @@ fn read_feed_page(
     let feed_rows = {
         let mut statement = connection
             .prepare(
-                "SELECT id, ordinal, cycle_index, reason_code,
-                        learning_record_id, generated_card_id
-                 FROM review_feed_items
-                 WHERE day_start_unix_ms = ?1 AND ordinal > ?2
-                 ORDER BY ordinal ASC, id ASC
+                "SELECT fi.id, fi.ordinal, fi.cycle_index, fi.reason_code,
+                        fi.learning_record_id, fi.generated_card_id
+                 FROM review_feed_items fi
+                 JOIN learning_record_targets lrt ON lrt.learning_record_id = fi.learning_record_id
+                 WHERE fi.day_start_unix_ms = ?1 AND fi.ordinal > ?2
+                 ORDER BY fi.ordinal ASC, fi.id ASC
                  LIMIT ?3",
             )
             .map_err(|error| format!("复习 Feed 读取语句无法准备：{error}"))?;
@@ -1084,6 +1090,7 @@ fn read_feed_page(
                     COALESCE(SUM(CASE WHEN a.outcome = 'forgotten' THEN 1 ELSE 0 END), 0)
              FROM review_feed_attempts a
              JOIN review_feed_items fi ON fi.id = a.feed_item_id
+             JOIN learning_record_targets lrt ON lrt.learning_record_id = fi.learning_record_id
              WHERE fi.day_start_unix_ms = ?1 AND a.undone_at_unix_ms IS NULL",
             [day_start_unix_ms],
             |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
@@ -1127,9 +1134,11 @@ fn read_feed_item_state(
         generated_card_id,
     ): (i64, i64, i64, i64, String, i64, Option<i64>) = connection
         .query_row(
-            "SELECT day_start_unix_ms, day_end_unix_ms, ordinal, cycle_index, reason_code,
-                    learning_record_id, generated_card_id
-             FROM review_feed_items WHERE id = ?1",
+            "SELECT fi.day_start_unix_ms, fi.day_end_unix_ms, fi.ordinal, fi.cycle_index, fi.reason_code,
+                    fi.learning_record_id, fi.generated_card_id
+             FROM review_feed_items fi
+             JOIN learning_record_targets lrt ON lrt.learning_record_id = fi.learning_record_id
+             WHERE fi.id = ?1",
             [feed_item_id],
             |row| {
                 Ok((
@@ -1173,6 +1182,7 @@ fn read_feed_item_state(
                     COALESCE(SUM(CASE WHEN a.outcome = 'forgotten' THEN 1 ELSE 0 END), 0)
              FROM review_feed_attempts a
              JOIN review_feed_items fi ON fi.id = a.feed_item_id
+             JOIN learning_record_targets lrt ON lrt.learning_record_id = fi.learning_record_id
              WHERE fi.day_start_unix_ms = ?1 AND a.undone_at_unix_ms IS NULL",
             [day_start_unix_ms],
             |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
@@ -1201,8 +1211,9 @@ fn feed_can_continue(
     let has_saved_rows_after: bool = connection
         .query_row(
             "SELECT EXISTS(
-               SELECT 1 FROM review_feed_items
-               WHERE day_start_unix_ms = ?1 AND ordinal > ?2
+               SELECT 1 FROM review_feed_items fi
+               JOIN learning_record_targets lrt ON lrt.learning_record_id = fi.learning_record_id
+               WHERE fi.day_start_unix_ms = ?1 AND fi.ordinal > ?2
              )",
             params![day_start_unix_ms, after_ordinal],
             |row| row.get(0),
@@ -1222,7 +1233,11 @@ fn feed_can_continue(
     let Some(cycle_index) = cycle_index else {
         return connection
             .query_row(
-                "SELECT EXISTS(SELECT 1 FROM learning_records WHERE created_at_unix_ms <= ?1)",
+                "SELECT EXISTS(
+                   SELECT 1 FROM learning_records lr
+                   JOIN learning_record_targets lrt ON lrt.learning_record_id = lr.id
+                   WHERE lr.created_at_unix_ms <= ?1
+                 )",
                 [now_unix_ms],
                 |row| row.get(0),
             )
@@ -1233,6 +1248,7 @@ fn feed_can_continue(
         .query_row(
             "SELECT EXISTS(
                SELECT 1 FROM learning_records lr
+               JOIN learning_record_targets lrt ON lrt.learning_record_id = lr.id
                WHERE lr.created_at_unix_ms <= ?1
                  AND NOT EXISTS (
                    SELECT 1 FROM review_feed_items fi
@@ -1257,6 +1273,7 @@ fn feed_can_continue(
                       WHERE a.feed_item_id = fi.id AND a.undone_at_unix_ms IS NULL
                     ) THEN 1 ELSE 0 END), 0)
              FROM review_feed_items fi
+             JOIN learning_record_targets lrt ON lrt.learning_record_id = fi.learning_record_id
              WHERE fi.day_start_unix_ms = ?1 AND fi.cycle_index = ?2",
             params![day_start_unix_ms, cycle_index],
             |row| Ok((row.get(0)?, row.get(1)?)),
@@ -1563,7 +1580,8 @@ fn build_generated_card_request(
     let model = configured_model();
     let record_json = serde_json::to_string_pretty(&json!({
         "learningRecordId": record.id,
-        "queryText": record.query_text,
+        "learningTargetText": record.learning_target_text,
+        "sourceText": record.query_text,
         "queryType": record.query_type,
         "savedExplanation": record.explanation_card,
         "variantIndex": variant_index,
@@ -1574,7 +1592,7 @@ fn build_generated_card_request(
         "messages": [
             {
                 "role": "system",
-                "content": "You create one concise English review context for ReadRay. Return exactly one JSON object with camelCase fields englishContext, englishContextZh, and hint. englishContext must be natural English, contain queryText exactly (case-insensitive), contain no Chinese, and be one or two sentences. englishContextZh is an accurate Chinese translation. hint is a short Chinese retrieval cue that does not reveal queryText. Use only the saved explanation as semantic authority; do not invent a different meaning, product fact, source, or user history. Return no Markdown or commentary."
+                "content": "You create one concise English review context for ReadRay. Return exactly one JSON object with camelCase fields englishContext, englishContextZh, and hint. englishContext must be natural English, contain learningTargetText exactly (case-insensitive), contain no Chinese, and be one or two sentences. englishContextZh is an accurate Chinese translation. hint is a short Chinese retrieval cue that does not reveal learningTargetText. Use only the saved explanation as semantic authority; do not invent a different meaning, product fact, source, or user history. Return no Markdown or commentary."
             },
             {
                 "role": "user",
@@ -1635,7 +1653,7 @@ fn validate_generated_card_payload(
         MAX_GENERATED_TRANSLATION_CHARS,
     )?;
     validate_generated_text(&payload.hint, "AI 复习卡提示", MAX_GENERATED_HINT_CHARS)?;
-    let query = record.query_text.trim();
+    let query = record.learning_target_text.trim();
     if query.is_empty() || !context_has_complete_query(&payload.english_context, query) {
         return Err("AI 复习卡英文语境没有包含目标表达。".to_string());
     }
@@ -2752,6 +2770,15 @@ mod tests {
                 ],
             )
             .unwrap();
+        connection
+            .execute(
+                "INSERT INTO learning_record_targets (
+                   learning_record_id, query_direction, learning_target_text,
+                   normalized_target_text, created_at_unix_ms
+                 ) VALUES (?1, 'en_to_zh', ?2, ?3, ?4)",
+                params![id, query, query.to_lowercase(), created_at],
+            )
+            .unwrap();
     }
 
     fn setup(record_count: i64) -> (PathBuf, PathBuf, ReviewStore) {
@@ -2904,6 +2931,46 @@ mod tests {
         assert_eq!(next_cycle.items.len(), 2);
         assert!(next_cycle.items.iter().all(|item| item.cycle_index == 1));
         drop(reopened);
+        fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn review_feed_excludes_records_without_reliable_english_target() {
+        let (directory, _path, mut store) = setup(1);
+        let chinese_card = json!({
+            "queryType": "word",
+            "sourceText": "旧中文记录",
+            "headword": "旧中文记录",
+            "basicMeanings": ["历史记录"],
+            "phrases": [],
+            "nearMeanings": [],
+            "examples": []
+        });
+        store
+            .connection
+            .execute(
+                "INSERT INTO learning_records (
+                   id, query_text, normalized_text, query_type, source_type, source_app,
+                   context_text, explanation_card_json, schema_version, created_at_unix_ms, difficulty
+                 ) VALUES (99, '旧中文记录', '旧中文记录', 'word', 'manual', NULL,
+                           '原始中文来源继续保留', ?1, 1, ?2, NULL)",
+                params![chinese_card.to_string(), NOW - 99_000],
+            )
+            .unwrap();
+
+        let page = store
+            .load_feed_page(DAY_START, DAY_END, None, 10, NOW)
+            .unwrap();
+        assert_eq!(page.items.len(), 1);
+        assert_eq!(page.items[0].learning_record.learning_target_text, "same 1");
+        let raw_count: i64 = store
+            .connection
+            .query_row("SELECT COUNT(*) FROM learning_records", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        assert_eq!(raw_count, 2);
+        drop(store);
         fs::remove_dir_all(directory).unwrap();
     }
 
@@ -3141,7 +3208,8 @@ mod tests {
         store
             .connection
             .execute_batch(
-                "DELETE FROM schema_migrations WHERE version = 16;
+                "DELETE FROM schema_migrations WHERE version IN (16, 17);
+                 DROP TABLE learning_record_targets;
                  DROP TABLE review_quality_feedback;
                  CREATE TABLE review_quality_feedback (
                    id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -3274,7 +3342,7 @@ mod tests {
             )
             .unwrap();
 
-        assert_eq!(version, 16);
+        assert_eq!(version, 17);
         assert_eq!(context_column_count, 1);
         assert!(
             quality_feedback_unique_indexes(&upgraded.connection).contains(&vec![

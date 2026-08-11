@@ -7,6 +7,8 @@ import type {
 export type LearningRecord = {
   id: number;
   queryText: string;
+  learningTargetText: string;
+  queryDirection: "enToZh" | "zhToEn";
   normalizedText: string;
   queryType: QueryType;
   sourceType: SourceType;

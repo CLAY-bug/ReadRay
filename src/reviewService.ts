@@ -161,7 +161,13 @@ function cleanText(value?: string | null) {
 function hasCjk(value: string) {
   return [...value].some((character) => {
     const code = character.codePointAt(0) ?? 0;
-    return code >= 0x3400 && code <= 0x9fff;
+    return (
+      (code >= 0x3400 && code <= 0x9fff) ||
+      (code >= 0xf900 && code <= 0xfaff) ||
+      (code >= 0x20000 && code <= 0x2ebef) ||
+      (code >= 0x2f800 && code <= 0x2fa1f) ||
+      (code >= 0x30000 && code <= 0x3134f)
+    );
   });
 }
 
@@ -263,7 +269,7 @@ function recordSourceExcerpt(record: LearningRecord) {
 }
 
 function recordedEnglishContext(record: LearningRecord) {
-  const query = cleanText(record.queryText);
+  const query = cleanText(record.learningTargetText);
   const candidates = [record.contextText];
   return candidates.map(cleanText).find((value) => isUsableEnglishContext(value, query));
 }
@@ -316,7 +322,7 @@ function answerContent(record: LearningRecord) {
 function cardContent(item: ReviewFeedItem) {
   const record = item.learningRecord;
   const card = record.explanationCard;
-  const query = cleanText(record.queryText);
+  const query = cleanText(record.learningTargetText);
   const sourceExcerpt = recordSourceExcerpt(record);
   const answer = answerContent(record);
   const generated = item.generatedCard ?? undefined;
@@ -517,6 +523,13 @@ function validateLearningRecord(value: unknown): LearningRecord {
   }
   assertInteger(record.id, "复习学习记录 id", 1);
   assertString(record.queryText, "复习学习记录 queryText");
+  if (record.queryDirection !== "enToZh" && record.queryDirection !== "zhToEn") {
+    throw new Error("复习学习记录 queryDirection 无效。");
+  }
+  assertString(record.learningTargetText, "复习学习记录 learningTargetText");
+  if (hasCjk(String(record.learningTargetText)) || !/[A-Za-z]/.test(String(record.learningTargetText))) {
+    throw new Error("复习学习记录 learningTargetText 不是规范英文目标。");
+  }
   assertInteger(record.createdAtUnixMs, "复习学习记录 createdAtUnixMs");
   return value as LearningRecord;
 }
@@ -713,7 +726,7 @@ function mapFeedItem(item: ReviewFeedItem): ReviewCardModel {
     sourceApp,
     sourceTypeLabel: sourceTypeLabels[record.sourceType],
     sourceTime: formatSourceTime(record.createdAtUnixMs),
-    query: cleanText(record.queryText),
+    query: cleanText(record.learningTargetText),
     ...content,
     ...reviewCardPresentation({
       promptText: content.promptText,

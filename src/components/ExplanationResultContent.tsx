@@ -197,7 +197,7 @@ function ExplanationResultContent({
     return (
       <div className="explanation-content is-phrase">
         <header className="explanation-content__header">
-          <h1>{result.sourceText}</h1>
+          <h1>{result.learningTargetText}</h1>
         </header>
         <section className="explanation-content__primary">
           <h2>{result.contextMeaning ? "当前语境" : "整体含义"}</h2>

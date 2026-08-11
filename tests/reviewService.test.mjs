@@ -26,6 +26,8 @@ function learningRecord(id = 11, overrides = {}) {
   return {
     id,
     queryText: "robust",
+    learningTargetText: "robust",
+    queryDirection: "enToZh",
     normalizedText: "robust",
     queryType: "word",
     sourceType: "windows_uia",
@@ -35,6 +37,7 @@ function learningRecord(id = 11, overrides = {}) {
     explanationCard: {
       queryType: "word",
       sourceText: "robust",
+      learningTargetText: "robust",
       headword: "robust",
       partOfSpeech: "adjective",
       phonetic: "/rəʊˈbʌst/",

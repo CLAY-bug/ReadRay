@@ -75,6 +75,8 @@ function learningRecord(
   return {
     id,
     queryText,
+    learningTargetText: queryText,
+    queryDirection: "enToZh",
     normalizedText: queryText.toLowerCase(),
     queryType: queryText.includes(" ") ? "phrase" : "word",
     sourceType: "windows_uia",
@@ -84,6 +86,7 @@ function learningRecord(
       ? {
           queryType: "phrase",
           sourceText: sourceSentence,
+          learningTargetText: queryText,
           basicMeaning: meaning,
           contextMeaning: meaning,
           sourceSentence,
@@ -93,6 +96,7 @@ function learningRecord(
       : {
           queryType: "word",
           sourceText: sourceSentence,
+          learningTargetText: queryText,
           headword: queryText,
           basicMeanings: [meaning],
           contextMeaning: meaning,

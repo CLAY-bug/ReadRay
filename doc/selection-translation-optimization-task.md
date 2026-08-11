@@ -1,7 +1,7 @@
 # ReadRay 划词翻译速度优化任务书
 
 最后更新：2026-08-11  
-状态：实施中；任务 1 已通过真实使用验收；任务 2 已完成重复原句验收返修、代码审查与聚焦验证并合入主项目，等待真实桌面验收；任务 3～5 未开始
+状态：实施中；任务 1～3 已通过真实使用验收；任务 4～5 未开始
 
 ## 目标
 
@@ -133,7 +133,7 @@ Ctrl+Alt+U
 
 ## 任务 2：最小上下文、请求取消与迟到结果隔离
 
-状态：已完成重复原句验收返修、代码审查与聚焦验证并合入主项目（2026-08-11），等待用户真实桌面验收
+状态：已完成重复原句验收返修、代码审查、聚焦验证和用户真实桌面验收（2026-08-11）
 
 验证边界：UIA 上下文聚焦测试 8 项、ExplanationCard 请求权威测试 13 项通过且 1 项 ignored、DeepSeek 客户端 17 项、Quick AI 请求体回归 1 项、前端请求权威 8 项、overlay 生命周期 14 项均通过；`pnpm build`、`cargo fmt --check`、`cargo check`、RESOURCE_MAP YAML 解析与 `git diff --check` 通过。未运行全量测试，未启动或操作真实 Tauri，也未运行真实 UIA/SQLite/DeepSeek 与 ignored 联网测试。
 
@@ -175,7 +175,11 @@ Ctrl+Alt+U
 
 ## 任务 3：中文反查与规范英文学习目标
 
-状态：未开始
+状态：已完成代码审查、聚焦验证、合回主项目和真实使用验收（2026-08-11）
+
+验证边界：ExplanationCard/方向判断 37 项通过、1 项 ignored 联网测试；learning_records migration/事务/查询 25 项通过；Review Rust 23 项通过；Memory/Today/Review 规范英文消费者 3 项、Review 前端 49 项、任务 1/2 overlay 回归 20 项通过；`pnpm build`、`cargo fmt --check`、`cargo check`、RESOURCE_MAP YAML 解析与 `git diff --check` 通过。未运行全量测试或 ignored 联网测试；用户已在真实使用场景确认效果良好，任务 3 真实使用验收通过。
+
+实现结果：Rust 以确定性字符规则产生 `queryDirection`，纯中文按 `zhToEn`，存在 ASCII 拉丁目标按 `enToZh`，只有数字/符号时在联网前拒绝；中文查询的四类 Prompt 均要求自然英文主结果，英文查询的 `learningTargetText` 由 Rust 覆盖，中文查询的模型目标先合并空白并写回卡片，再验证必须含有效拉丁英文且不得含中文，同时同步四类主结果。混合中文查询删除汉字和明显包装符号，但保守保留 `C++`、`.NET`、`C#`、`node.js` 等代码或专有名词边界。SQLite v17 新建 `learning_record_targets` 伴生投影；新事件与目标同事务写入，旧英文 query 确定性回填，旧中文原始事件保留但不进入正式学习目标列表。Memory、Today、Review 与搜索在 SQL/typed command/repository/service 链路消费规范英文目标，搜索仍可匹配英文目标、原始 query 与 context；未进入任务 4 的缓存或 single-flight。
 
 ### 目标
 

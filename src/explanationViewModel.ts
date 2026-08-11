@@ -9,6 +9,7 @@ import { sourceSentenceForDisplay } from "./sourceSentenceDisplay";
 
 type SharedResult = {
   sourceText: string;
+  learningTargetText: string;
 };
 
 export type WordExplanationResult = SharedResult & {
@@ -73,6 +74,7 @@ export function mapExplanationCard(card: ExplanationCard): ExplanationResult {
       return {
         kind: "word",
         sourceText: card.sourceText,
+        learningTargetText: card.learningTargetText,
         headword: card.headword,
         partOfSpeech: optionalText(card.partOfSpeech),
         phonetic: optionalText(card.phonetic),
@@ -93,6 +95,7 @@ export function mapExplanationCard(card: ExplanationCard): ExplanationResult {
       return {
         kind: "phrase",
         sourceText: card.sourceText,
+        learningTargetText: card.learningTargetText,
         basicMeaning: card.basicMeaning,
         contextMeaning: optionalText(card.contextMeaning),
         composition: optionalText(card.composition),
@@ -105,6 +108,7 @@ export function mapExplanationCard(card: ExplanationCard): ExplanationResult {
       return {
         kind: "sentence",
         sourceText: card.sourceText,
+        learningTargetText: card.learningTargetText,
         translation: card.translation,
         keyPoints: card.keyPoints,
         explanation: optionalText(card.explanation),
@@ -114,6 +118,7 @@ export function mapExplanationCard(card: ExplanationCard): ExplanationResult {
       return {
         kind: "paragraph",
         sourceText: card.sourceText,
+        learningTargetText: card.learningTargetText,
         translation: card.translation,
         keyPoints: card.keyPoints,
         summary: optionalText(card.summary),

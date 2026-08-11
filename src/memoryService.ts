@@ -8,7 +8,7 @@ import type {
 } from "./memoryRepository";
 import type { QueryType, SourceType } from "./types/explanation";
 import type { LearningRecord } from "./types/learningRecord";
-import { sourceSentenceForDisplay } from "./sourceSentenceDisplay";
+import { sourceSentenceForDisplay } from "./sourceSentenceDisplay.js";
 
 export type MemoryRecordPageModel = {
   records: MemoryRecordItem[];
@@ -111,7 +111,7 @@ export function mapLearningRecordToMemoryItem(
   const shared = {
     id: String(record.id),
     ...timeParts(record.createdAtUnixMs, now),
-    query: cleanDisplayedSource(record.queryText),
+    query: cleanDisplayedSource(record.learningTargetText),
     app: sourceApp(record),
     type: record.queryType,
     typeLabel: typeLabels[record.queryType],
@@ -193,7 +193,11 @@ export function mapLearningRecordToMemoryItem(
 }
 
 export class RepositoryMemoryService implements MemoryService {
-  constructor(private readonly repository: MemoryRepository) {}
+  private readonly repository: MemoryRepository;
+
+  constructor(repository: MemoryRepository) {
+    this.repository = repository;
+  }
 
   async listRecords(query: LearningRecordQuery) {
     const result = await this.repository.list(query);

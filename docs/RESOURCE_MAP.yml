@@ -4,7 +4,7 @@ project:
   repo_root: "."
 
 meta:
-  version: "1.58"
+  version: "1.60"
   last_updated: "2026-08-11"
   updated_by: "Codex"
   source_of_truth: "docs/RESOURCE_MAP.yml"
@@ -97,7 +97,7 @@ core_docs:
       - "实现或验收划词解释速度优化。"
       - "排查 DeepSeek reasoning 报错、划词长等待或迟到结果落库。"
       - "修复中文查询进入记忆、今天或复习页面。"
-    notes: "严格按任务 1～5 单步执行；任务 1 模型与 HTTP 快路径已通过用户真实使用验收，任务 2 已完成最小可靠上下文、请求取消、迟到结果隔离与重复原句验收返修并合入主项目，当前等待用户真实桌面验收；任务 3 必须等待用户明确继续。已确认 ExplanationCard 关闭 thinking、纯中文直接译英文、不做质量/Provider 对照测评、不增加深入理解、不维护滚动会话。"
+    notes: "严格按任务 1～5 单步执行；任务 1～3 已通过用户真实使用验收；任务 3 中文反查、规范英文学习目标与 SQLite v17 投影已正式完成并合回主项目；任务 4～5 未开始。已确认 ExplanationCard 关闭 thinking、纯中文直接译英文、不做质量/Provider 对照测评、不增加深入理解、不维护滚动会话。"
     risk: "不得照搬整页翻译批处理或 Google 非公开接口，不得把 queryText 覆盖成译文；原始学习事件保持追加式，规范英文目标通过正式持久化投影提供给页面。"
 
   - path: "docs/THEME_PROTOCOL.md"
@@ -245,7 +245,7 @@ source_areas:
     status: "active"
     read_when:
       - "调整真实复习卡映射、来源统计、推荐理由或 mutation 结果应用。"
-    notes: "只把 learning_record.context_text 中保存的完整英文语境直接映射为卡片；ExplanationCard 的 AI 例句或 sourceSentence 不冒充学习时语境。无可用英文语境或进入后续轮次时标记为待制卡，接收 Rust 已持久化并验证的 AI 英文语境。按最终英文内容稳定映射 compact/regular/extended 密度和 lexical/editorial/quote 视觉类型，不使用随机布局。推荐理由只陈述今日到期、新记录或继续练习三类真实状态。Service 校验全局完成数必须等于 remembered/forgotten 之和，质量反馈更新不触碰完成统计；条目级权威快照用于 mutation 后对账。"
+    notes: "卡片标题、完形答案与制卡输入统一消费 learningTargetText；queryText/contextText 只作为可追溯来源。只把 learning_record.context_text 中保存且包含英文目标的完整英文语境直接映射为卡片；ExplanationCard 的 AI 例句或 sourceSentence 不冒充学习时语境。无可用英文语境或进入后续轮次时标记为待制卡，接收 Rust 已持久化并验证的 AI 英文语境。按最终英文内容稳定映射密度与视觉类型。Service 校验规范英文目标、查询方向、全局完成数与反馈身份。"
     risk: "不得按 normalizedText 合并记录、把中文上下文冒充英文卡、在前端自行生成 AI 语境，或根据质量反馈声称已改变策略。"
 
   - path: "src/reviewRequestIdentity.ts"
@@ -676,7 +676,7 @@ source_areas:
     read_when:
       - "排查今日自动刷新、日期范围或 Today 状态。"
       - "调整首页真实摘要和三个学习入口。"
-    notes: "用本机当天起止时间生成仅由真实数据支持的文案和入口，并复用 LearningRecord 展示映射。"
+    notes: "用本机当天起止时间生成仅由真实数据支持的文案和入口，并复用 LearningRecord 展示映射；最近记录标题只显示 learningTargetText，原始中文 query 不作为学习目标。"
     risk: "不得读取写作 fixture/localStorage 作为正式统计，也不得生成复习数量、高频或趋势推断。"
 
   - path: "src/mainAppFixture.ts"
@@ -709,7 +709,7 @@ source_areas:
     read_when:
       - "Rust learning_records command 返回字段发生变化。"
       - "排查记忆页分页、单条详情或 ExplanationCard 协议映射。"
-    notes: "直接复用 QueryType、SourceType 和 ExplanationCard 判别联合；字段名与 Rust serde camelCase 协议一致。"
+    notes: "直接复用 QueryType、SourceType 和 ExplanationCard 判别联合；包含 camelCase 的 learningTargetText 与 enToZh/zhToEn queryDirection，字段名与 Rust serde 协议一致。"
     risk: "协议变化时必须同步 Rust 类型、前端类型、repository 和映射。"
 
   - path: "src/memoryRepository.ts"
@@ -727,7 +727,7 @@ source_areas:
     read_when:
       - "调整四类解释卡在记忆页的字段映射。"
       - "调整真实来源应用、时间分组或详情读取。"
-    notes: "按本地日期分为今天/昨天/更早；来源优先使用 sourceApp，缺失时只按真实 sourceType 标记；正式映射不生成过去出现次数。word/phrase 的 SQLite 旧卡片复用 sourceSentenceForDisplay，中文主导原句不再重复显示中译。"
+    notes: "按本地日期分为今天/昨天/更早；主标题只消费 learningTargetText，queryText/contextText 继续用于详情来源追溯；来源优先使用 sourceApp，缺失时只按真实 sourceType 标记；正式映射不生成过去出现次数。word/phrase 的 SQLite 旧卡片复用 sourceSentenceForDisplay，中文主导原句不再重复显示中译。"
     risk: "不得补造后端缺失的语境义、翻译、难度或重复出现聚合。"
 
   - path: "src/memoryPageFixture.ts"
@@ -837,13 +837,21 @@ source_areas:
     notes: "由 test:overlay 运行；覆盖 Rust/generation、Memory/Review、普通英文、原句单独存在和孤立译文。"
     risk: "纯函数测试与 pnpm build 不替代真实 Tauri 和历史 SQLite 页面人工验收。"
 
+  - path: "tests/learningTargetConsumers.test.mjs"
+    purpose: "Memory、Today、Review 规范英文学习目标消费与原始中文来源追溯的聚焦测试。"
+    status: "active"
+    read_when:
+      - "修改 learningTargetText 前端协议或三个正式消费者映射。"
+    notes: "覆盖中文 query 的 Memory 主标题、Today 摘要/入口、Review 标题/提示答案/制卡目标均只显示英文，同时 context/query 原始中文仍作为来源。"
+    risk: "Node 聚焦测试与 build 不替代真实 Tauri、历史 SQLite 升级和页面人工验收。"
+
   - path: "src/types/explanation.ts"
     purpose: "前端使用的 ExplanationCard TypeScript 判别联合类型。"
     status: "active"
     read_when:
       - "Rust ExplanationCard schema 发生变化。"
       - "排查 Tauri command 返回值的前端类型。"
-    notes: "字段名与 Rust serde camelCase 协议保持一致。"
+    notes: "四类 ExplanationCard 统一包含 learningTargetText；字段名与 Rust serde camelCase 协议保持一致。"
     risk: "协议变更时必须同步 Rust 类型、TypeScript 类型、映射和测试。"
 
   - path: "src/components/CenteredCommandInput.tsx"
@@ -934,7 +942,7 @@ source_areas:
       - "接入 DeepSeek 结构化输出。"
       - "调整解释卡 schema、字段限长或校验规则。"
       - "把解释卡映射到 compact UI 或后续 SQLite 本地记忆。"
-    notes: "schema 是 ReadRay 中间协议，不是前端组件 props；当前使用 serde tagged enum 明确区分 word/phrase/sentence/paragraph。输入 queryText/contextText 上限为 4096 字符；CaptureInput 可选携带 sourceApp；无 contextText 时不允许 contextMeaning。word/phrase 只允许中文主导 sourceSentence 单独存在；普通英文原句仍必须同时有 sourceSentenceZh，译文永远不能脱离原句；确定性规范化会移除中文主导原句的冗余中译。"
+    notes: "schema 是 ReadRay 中间协议，不是前端组件 props；serde tagged enum 区分 word/phrase/sentence/paragraph，并统一携带 learningTargetText。本地字符规则确定 enToZh/zhToEn：有 ASCII 拉丁目标优先 enToZh，纯中文为 zhToEn，只有数字符号则拒绝；英文目标本地规范化，目标必须含有效拉丁英文且不得含中文。既有上下文和 sourceSentence 非对称规则保持不变。"
     risk: "不要在这里接真实 DeepSeek 查询链路、SQLite schema 或 UI 交互逻辑。"
 
   - path: "src-tauri/src/deepseek_explanation.rs"
@@ -944,7 +952,7 @@ source_areas:
       - "调整 create_explanation_card command。"
       - "排查 DeepSeek 结构化 JSON 输出、serde 解析或 validator 失败。"
       - "将 ExplanationCard 接入 compact UI 前的 Rust 层查询链路。"
-    notes: "command 输入保留原始 CaptureInput，并单独接收模型 minimalContext、manual/anchored requestScope 与 requestKey；本地判断 word/phrase/sentence/paragraph 后使用对应 JSON schema prompt。请求保持 response_format=json_object、thinking disabled、10 秒总超时和一次瞬态重试；解析前以捕获输入覆盖 sourceText，serde 后先清除中文主导 sourceSentence 的冗余 sourceSentenceZh，再调用完整 validator。Prompt 只让英文主导原句提供中译。Rust 内部 generation 与客户端唯一 key 的双层取消身份保持不变，学习记录仅能在同步保存前的最终权威检查内写入。"
+    notes: "command 保留原始 CaptureInput，并单独接收 minimalContext、requestScope 与 requestKey；本地判断 queryType/queryDirection 后使用四类方向化 schema Prompt。enToZh 的 learningTargetText 由 Rust 覆盖模型改写；zhToEn 的模型目标严格验证并对齐四类主结果，sourceText 始终由原始 query 覆盖。请求继续使用 response_format=json_object、thinking disabled、10 秒总超时、一次瞬态重试与既有取消/generation 权威。"
     risk: "不要在日志、文档或提交文件中写入真实 DEEPSEEK_API_KEY；保存失败必须返回清晰错误，不能伪装为查询成功。"
 
   - path: "src-tauri/src/deepseek_client.rs"
@@ -1032,7 +1040,7 @@ source_areas:
       - "调整学习记录 schema、迁移或存储字段。"
       - "实现学习记录窗口、搜索、筛选、单条读取或删除。"
       - "排查自动保存或应用数据目录中的 SQLite 问题。"
-    notes: "使用 rusqlite bundled，在 Tauri 应用数据目录创建 readray.sqlite3；v1 为学习记录、v2 为 Quick AI、v3/v4 为写作、v5 为 Token usage、v6 新建 app_preferences，v7 追加桌面生命周期偏好，v8 新建 custom_themes/theme_preferences，v9/v10 为会话来源，v11 新建独立复习 target/daily item/attempt/quality 表；v12 追加 generated card/feed/feed attempt，并原样迁移 v11 队列与 attempt，同时给模型使用量增加 review_card 分类；v13 为 generated card 增加有效期/LRU 使用字段，并把质量反馈迁移为 Feed 条目与具体卡片语境身份；v14 清理旧版提前创建的、前序轮次不完整且自身没有任何 attempt 的后续 Feed（存在 active/undone attempt 或任何持久质量反馈或幂等日志的条目一律保留，避免删除独立于学习结果的真实用户反馈），并新增持久化制卡失败退避表；v15 对已执行旧 v14 的数据库按仍存在的 active attempts 审计并修复 review_targets 聚合，修复时只递增 revision；v16 检测已登记旧 v13 但仍缺少 card_context_key 的中间版质量反馈表，在同一迁移事务内保留数据并重建为 Feed 条目与卡片语境复合唯一结构。所有复习迁移都不给 learning_records 增加可变状态。"
+    notes: "使用 rusqlite bundled；v1～v16 保持既有学习记录、Quick AI、写作、usage、偏好、主题、来源与复习 schema。v17 追加 learning_record_targets 伴生投影，保存新事件时在同一事务写入 queryDirection/learningTargetText；升级只为可靠旧英文 query 确定性回填，旧中文不调用模型、不猜译文且原始事件继续保留。list/search/get/Today 在 SQL 层联结投影，分页与计数一致；搜索匹配英文目标及原始 query/context。"
     risk: "learning_records 继续只做不可修改的原始事件，不做去重或覆盖；复习状态必须留在独立表，新增 schema 继续追加 migration，不能改写已发布迁移。"
 
   - path: "src-tauri/src/review.rs"
@@ -1041,7 +1049,7 @@ source_areas:
     read_when:
       - "调整 Feed 候选/轮次、语境生成、调度间隔、attempt、幂等或 revision 事务。"
       - "调整卡片质量反馈保存、补充详情或撤销。"
-    notes: "按本机日历持久化无硬上限的游标 Feed：每轮每条 learning_record 只出现一次，优先今日到期目标，再排新记录和继续练习；当前轮每个条目都有生效 attempt 后才允许创建下一轮，避免进入页面就批量生成同目标变体。cycle 0 优先使用 learning_record 保存的完整英文语境，缺失语境或后续轮次由 prepare_review_feed_card 复用 deepseek_client 按需生成并严格验证。生成卡有效期 30 天，每目标与全局 3/256 均作为 LRU 软上限：仍被 Feed 引用的有效卡受保护，只有未引用复用缓存占用剩余容量，过期卡仍会淘汰；因此 257 个不同目标的绑定卡不会形成解绑重生成振荡，长期数据仍由有效期和软容量收缩。前三张优先形成不同语境，第四轮起轮换复用。模型、校验或保存失败按稳定 request key 持久化次数和指数退避，显式重试可绕过退避但不更换 key。调度为 forgotten 1 天、remembered+hint 2 天、remembered 无提示按连续成功 3/7/14/30 天。结果与撤销在 IMMEDIATE 事务内使用 expectedRevision 和唯一 requestKey；撤销任意生效 attempt 后从剩余 attempt 重算目标并继续递增 revision。质量反馈按 Feed 条目与 recorded/generated 卡片语境独立保存，输入携带 cardContextKey 并即时写入；详情可选，幂等日志不影响 target/attempt/调度；get_review_feed_item_state 提供 mutation 后 SQLite 权威对账。"
+    notes: "按本机日历持久化无硬上限游标 Feed；候选、已保存页、统计与 canContinue 均联结 learning_record_targets，旧中文或其他无可靠英文目标的原始事件不会进入 Feed，也不会造成分页不足。制卡 Prompt、英文语境包含校验和卡片目标统一使用 learningTargetText，queryText 只保留为来源。既有轮次、缓存池、退避、调度、attempt/撤销、质量反馈和条目级权威对账语义保持不变。"
     risk: "不得按 normalized_text 合并、修改 learning_records、让质量反馈改变学习结果、跨事务制造重复 attempt，或把本阶段扩展到写作/对话/长期学习者记忆和个性化排序。"
 
   - path: "scripts/"

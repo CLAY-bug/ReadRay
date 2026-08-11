@@ -1,4 +1,5 @@
 export type QueryType = "word" | "phrase" | "sentence" | "paragraph";
+export type QueryDirection = "enToZh" | "zhToEn";
 
 export type SourceType =
   | "manual"
@@ -37,6 +38,7 @@ export type KeyPointItem = {
 export type WordExplanationCard = {
   queryType: "word";
   sourceText: string;
+  learningTargetText: string;
   headword: string;
   partOfSpeech?: string | null;
   phonetic?: string | null;
@@ -53,6 +55,7 @@ export type WordExplanationCard = {
 export type PhraseExplanationCard = {
   queryType: "phrase";
   sourceText: string;
+  learningTargetText: string;
   basicMeaning: string;
   contextMeaning?: string | null;
   composition?: string | null;
@@ -65,6 +68,7 @@ export type PhraseExplanationCard = {
 export type SentenceExplanationCard = {
   queryType: "sentence";
   sourceText: string;
+  learningTargetText: string;
   translation: string;
   keyPoints: KeyPointItem[];
   explanation?: string | null;
@@ -74,6 +78,7 @@ export type SentenceExplanationCard = {
 export type ParagraphExplanationCard = {
   queryType: "paragraph";
   sourceText: string;
+  learningTargetText: string;
   translation: string;
   keyPoints: KeyPointItem[];
   summary?: string | null;

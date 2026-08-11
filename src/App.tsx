@@ -169,6 +169,7 @@ const idle: CheckResult = { state: "idle", detail: "未验证" };
 const mockExplanationResult: ExplanationResult = {
   kind: "word",
   sourceText: "marketed",
+  learningTargetText: "marketed",
   headword: "market",
   phonetic: "/ˈmɑːrkɪtɪd/",
   partOfSpeech: "动词 market 的过去式 / 过去分词",

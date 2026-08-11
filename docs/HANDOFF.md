@@ -7,7 +7,7 @@
 - 当前状态：阶段一至阶段八已经完成；阶段八基于真实学习记录的复习闭环已通过独立审核、自动验证和真实 Tauri/SQLite/DeepSeek 与视觉交互人工验收。
 - 主题状态：ReadRayThemeV1、安全解析、SQLite v8、设置页导入/选择/删除、主窗口恢复以及随包 Flexoki（Light/Dark）与 30 个内置主题已通过独立审核和真实 Tauri 人工验收；主题工作不改变 DEVELOPMENT_PLAN 阶段状态。
 - 当前路线：Windows 原生，Tauri + React + TypeScript + Rust + SQLite。
-- 划词优化：任务 1“模型与 HTTP 快路径”已通过真实使用验收；任务 2 已完成重复原句验收返修、代码审查与聚焦验证并合入主项目，等待用户真实桌面验收。UIA 最小可靠上下文、客户端唯一 key、Rust generation 和取消/迟到落库隔离保持不变；word/phrase 只允许中文主导原句单独存在，普通英文原句仍必须有中译，译文永远不能脱离原句；前后端以同一确定性字符规则清除或隐藏中文主导原句的冗余中译。任务 3 必须等待用户另行安排。
+- 划词优化：任务 1～3 均已通过用户真实使用验收；任务 3“中文反查与规范英文学习目标”已正式完成并合回主项目。Rust 本地确定 `enToZh/zhToEn`，SQLite v17 以 `learning_record_targets` 保存规范英文投影，原始 `queryText/contextText` 和 `learning_records` 事件保持不变；旧英文可确定性回填，旧中文不猜译文且不进入 Memory/Today/Review 正式列表。不得提前进入任务 4/5。
 - 下一步：进入阶段九，先明确长期学习者记忆的数据来源、后台提炼、用户控制、回退和个性化使用边界，再拆分实现任务。Quick AI 浮层任务 7 的真实桌面验收仍是独立待办。
 - 阶段八：基于真实 `learning_records` 的最小复习闭环、后台英文制卡、学习结果/撤销、来源追溯、卡片质量反馈、缓存与重启恢复均已收口；写作、Quick AI、长期学习者记忆、主动表达和 Markdown 未并入本阶段，基于长期记忆的个性化排序属于阶段九。
 - 整体性能探查（2026-08-07）：按四层（启动/前端渲染/SQLite/内存体积）实测，当前真实数据规模下**无用户可感知瓶颈**。SQLite 查询全部走索引且冷热均 <4ms；每 command 重开连接 + 8 次迁移检查经真实 rusqlite 基准测得约 1.45ms（迁移去重实测无效，1.450 vs 1.452ms，已回退）；前端流式渲染每 delta 约 0.68ms（520ms 节流下无感知）；首屏 204 DOM 节点；全部对话页实际只渲染 26 个有标题会话。明确**不要**为性能引入 SQLite 连接复用（rusqlite Connection 虽 Send，但 guard 跨 await 编译失败、流式 record_for_app 持锁会冻结 UI、Mutex 非重入、backup VACUUM 长持锁，四重风险而收益 <10ms/操作）。后续若数据规模显著增长（如数万学习记录），再重测 `list_all_quick_ai_conversations` 全量列表与流式重建成本。
@@ -27,7 +27,7 @@
 - `docs/THEME_PROTOCOL.md` / `src-tauri/src/themes.rs` / `src/themeProtocol.ts`：ReadRayThemeV1、安全解析、规范化持久化和主窗口应用边界。
 - `src/App.tsx` / `src/components/MainAppShell.tsx` / `src/components/MainSidebar.tsx`：设置入口、主窗口装配和页面导航边界。
 - `src/components/ReviewPage.tsx` / `src/reviewBackgroundPreparation.ts` / `src/reviewPreparationCoordinator.ts` / `src/reviewAuthorityRefresh.ts` / `src/reviewQualitySaveQueue.ts` / `src/reviewService.ts` / `src/reviewRepository.ts`：复习内容区、进入页面前的首屏预热、后台制卡协调、外部刷新延后、应用级卡片质量反馈协调（跨 ReviewPage 卸载存活）、业务映射和正式 Tauri 读取/写回链路；页面不得直接调用 command。
-- `src-tauri/src/review.rs` / `src-tauri/src/learning_records.rs`：复习 Feed、有界英文卡片池、调度、事务写回、条目级权威读取、任意 attempt 撤销、卡片语境级质量反馈和 SQLite v13–v16 schema（v14 清理自身没有 attempt 且没有持久质量反馈/幂等日志的旧版提前后续 Feed，v15 审计并修复被旧 v14 破坏的 target 聚合，v16 修复已登记旧 v13 的中间版质量反馈表）；`learning_records` 仍是不可修改的原始事件。
+- `src-tauri/src/review.rs` / `src-tauri/src/learning_records.rs`：复习 Feed、有界英文卡片池、调度、事务写回、条目级权威读取、任意 attempt 撤销、卡片语境级质量反馈和 SQLite v13–v17 schema（v14 清理旧版提前 Feed，v15 修复 target 聚合，v16 修复中间版质量反馈表，v17 新建规范英文学习目标伴生投影并只回填可靠旧英文 query）；`learning_records` 仍是不可修改的原始事件，Review 候选与制卡只消费投影目标。
 - `src-tauri/src/lib.rs` / `src-tauri/tauri.conf.json`：主窗口与 overlay 的命令、快捷键、关闭/隐藏和生命周期入口。
 - `.env.example` / `src-tauri/src/deepseek_client.rs` / `src-tauri/src/secret_store.rs`：DeepSeek 开发环境回退、共享请求和 Windows 安全存储边界；不得把真实密钥写入仓库、SQLite、前端持久化或普通日志。
 - `package.json` / `src-tauri/Cargo.toml` / `src-tauri/capabilities/default.json`：前端、Rust 插件和最小权限装配；新增设置能力前先确认是否能复用现有依赖。
@@ -83,7 +83,9 @@
 
 ### Overlay、解释卡与 UIA
 
-- 划词速度优化任务 2 于 2026-08-11 完成重复原句验收返修、代码审查与聚焦验证并合入主项目，当前仍等待用户真实桌面验收：既有最小可靠上下文和双层请求身份保持不变。word/phrase 只允许中文主导的 `sourceSentence` 单独存在；普通英文原句仍必须同时有 `sourceSentenceZh`，译文不得脱离原句。Rust 在模型卡片进入 validator/落库前按汉字与 ASCII 拉丁字母计数清除中文主导原句的冗余中译，前端 `sourceSentenceForDisplay` 对即时结果和 SQLite 旧卡片应用同一规则，overlay 与 Memory 均只显示中文主导原句一次，普通英文原句仍保留中译。未运行全量测试、真实 Tauri/UIA/SQLite/DeepSeek 或 ignored 联网测试，任务 3 未开始。
+- 划词速度优化任务 3 已于 2026-08-11 通过代码审查、聚焦验证、合回主项目和用户真实使用验收：纯中文查询由 Rust 本地判为 `zhToEn` 并使用四类方向化 Prompt，模型返回的 `learningTargetText` 先合并首尾和连续空白、写回卡片并同步主结果，再验证必须有有效 ASCII 拉丁字母且不得含汉字；存在英文目标的查询保持 `enToZh`，目标由 Rust 确定性规范化并覆盖模型改写，中文 `contextText` 不改变英文方向。混合中文查询保守保留 `C++`、`.NET`、`C#`、`node.js` 等代码或专有名词边界。SQLite v17 通过 `learning_record_targets` 保存 `queryDirection` 和规范英文目标，新事件与投影同事务提交；历史英文 query 确定性回填，历史中文不批量调用模型、不猜译文、不物理删除。Memory、Today、Review、搜索与复习制卡均经正式 page → service → repository → typed Rust command 消费英文目标，原始中文仍可在详情来源中追溯。聚焦 Rust 85 项通过，另有 1 项联网测试 ignored；前端 72 项与 build 通过。未运行全量测试或 ignored 联网测试；用户确认真实使用效果良好，任务 3 正式收口，任务 4/5 未开始。
+
+- 划词速度优化任务 2 于 2026-08-11 完成重复原句验收返修、代码审查、聚焦验证和用户真实桌面验收；用户确认返修后的体验明显改善。既有最小可靠上下文和双层请求身份保持不变。word/phrase 只允许中文主导的 `sourceSentence` 单独存在；普通英文原句仍必须同时有 `sourceSentenceZh`，译文不得脱离原句。Rust 在模型卡片进入 validator/落库前按汉字与 ASCII 拉丁字母计数清除中文主导原句的冗余中译，前端 `sourceSentenceForDisplay` 对即时结果和 SQLite 旧卡片应用同一规则，overlay 与 Memory 均只显示中文主导原句一次，普通英文原句仍保留中译。任务 2 正式收口，任务 3 未开始。
 
 - 划词速度优化任务 2 已于 2026-08-11 完成代码审查、聚焦验证并合入主项目：选区 TextRange 存活时从同一 Paragraph 精确取得前缀/后缀，按 word/phrase/sentence/paragraph 派生模型专用 `minimalContext`；不可靠时保守回退，原始 `contextText` 不被覆盖。ExplanationCard 请求采用双层身份：前端每个 authority 实例以原生加密随机 nonce + sequence 生成分作用域唯一 key，旧实例迟到 cancel 不会命中新实例；Rust 注册时另分配内部 generation，使同客户端 key 复用时旧 guard 的 checkpoint、commit 和 Drop 均失效。注册新请求会中止同作用域旧 future，窗口隐藏、关闭、编辑、切换模式和卸载也会取消；模型响应后、usage 处理前后与学习记录同步保存前均复核权威，前端只为当前 key 发出学习记录刷新通知。未运行全量测试、真实 Tauri/UIA/SQLite/DeepSeek 或 ignored 联网测试，任务 3 未开始。
 

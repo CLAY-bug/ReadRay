@@ -3,7 +3,7 @@ import type {
   TodayActionItem,
   TodayPageViewModel,
 } from "./mainAppViewModel";
-import { mapLearningRecordToMemoryItem } from "./memoryService";
+import { mapLearningRecordToMemoryItem } from "./memoryService.ts";
 import type { TodayRepository } from "./todayRepository";
 
 export interface TodayService {
@@ -54,7 +54,11 @@ export function createTodayLoadingViewModel(now = new Date()): TodayPageViewMode
 }
 
 export class RepositoryTodayService implements TodayService {
-  constructor(private readonly repository: TodayRepository) {}
+  private readonly repository: TodayRepository;
+
+  constructor(repository: TodayRepository) {
+    this.repository = repository;
+  }
 
   async loadToday(now = new Date()): Promise<TodayPageViewModel> {
     const start = new Date(now.getFullYear(), now.getMonth(), now.getDate());

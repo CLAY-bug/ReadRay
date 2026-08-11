@@ -1,5 +1,6 @@
 use crate::explanation::{
-    validate_explanation_card, CaptureInput, ExplanationCard, QueryType, SourceType,
+    determine_query_direction, normalize_english_learning_target, validate_explanation_card,
+    CaptureInput, ExplanationCard, QueryDirection, QueryType, SourceType,
 };
 use rusqlite::{
     params, params_from_iter, types::Value, Connection, OptionalExtension, Transaction,
@@ -11,9 +12,9 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use tauri::{AppHandle, Manager};
 
 const DATABASE_FILE_NAME: &str = "readray.sqlite3";
-const DATABASE_SCHEMA_VERSION: i64 = 16;
+const DATABASE_SCHEMA_VERSION: i64 = 17;
 const REVIEW_DAY_UNIX_MS: i64 = 24 * 60 * 60 * 1_000;
-pub const EXPLANATION_CARD_SCHEMA_VERSION: i64 = 1;
+pub const EXPLANATION_CARD_SCHEMA_VERSION: i64 = 2;
 const DEFAULT_PAGE: u32 = 1;
 const DEFAULT_PAGE_SIZE: u32 = 20;
 const MAX_PAGE_SIZE: u32 = 100;
@@ -594,6 +595,19 @@ const MIGRATION_16: &str = r#"
 -- 在同一迁移事务内执行。
 "#;
 
+const MIGRATION_17: &str = r#"
+CREATE TABLE learning_record_targets (
+  learning_record_id INTEGER PRIMARY KEY REFERENCES learning_records(id) ON DELETE CASCADE,
+  query_direction TEXT NOT NULL CHECK (query_direction IN ('en_to_zh', 'zh_to_en')),
+  learning_target_text TEXT NOT NULL,
+  normalized_target_text TEXT NOT NULL,
+  created_at_unix_ms INTEGER NOT NULL
+);
+
+CREATE INDEX idx_learning_record_targets_normalized
+  ON learning_record_targets(normalized_target_text, learning_record_id);
+"#;
+
 const MIGRATIONS: &[(i64, &str)] = &[
     (1, MIGRATION_1),
     (2, MIGRATION_2),
@@ -610,7 +624,8 @@ const MIGRATIONS: &[(i64, &str)] = &[
     (13, MIGRATION_13),
     (14, MIGRATION_14),
     (15, MIGRATION_15),
-    (DATABASE_SCHEMA_VERSION, MIGRATION_16),
+    (16, MIGRATION_16),
+    (DATABASE_SCHEMA_VERSION, MIGRATION_17),
 ];
 
 #[derive(Clone, Debug, Serialize)]
@@ -618,6 +633,8 @@ const MIGRATIONS: &[(i64, &str)] = &[
 pub struct LearningRecord {
     pub id: i64,
     pub query_text: String,
+    pub learning_target_text: String,
+    pub query_direction: QueryDirection,
     pub normalized_text: String,
     pub query_type: QueryType,
     pub source_type: SourceType,
@@ -657,6 +674,8 @@ struct StoredLearningRecord {
     schema_version: i64,
     created_at_unix_ms: i64,
     difficulty: Option<String>,
+    learning_target_text: String,
+    query_direction: String,
 }
 
 struct LearningRecordStore {
@@ -683,7 +702,11 @@ impl LearningRecordStore {
         let created_at_unix_ms = unix_time_ms()?;
         let normalized_text = normalize_query_text(&input.query_text);
 
-        self.connection
+        let transaction = self
+            .connection
+            .unchecked_transaction()
+            .map_err(|error| format!("学习记录写入事务无法开始：{error}"))?;
+        transaction
             .execute(
                 "INSERT INTO learning_records (
                     query_text, normalized_text, query_type, source_type, source_app, context_text,
@@ -703,8 +726,29 @@ impl LearningRecordStore {
                 ],
             )
             .map_err(|error| format!("学习记录写入失败：{error}"))?;
+        let learning_record_id = transaction.last_insert_rowid();
+        let query_direction = determine_query_direction(&input.query_text)?;
+        let learning_target_text = card.learning_target_text().trim();
+        transaction
+            .execute(
+                "INSERT INTO learning_record_targets (
+                   learning_record_id, query_direction, learning_target_text,
+                   normalized_target_text, created_at_unix_ms
+                 ) VALUES (?1, ?2, ?3, ?4, ?5)",
+                params![
+                    learning_record_id,
+                    query_direction_to_storage(query_direction),
+                    learning_target_text,
+                    normalize_query_text(learning_target_text),
+                    created_at_unix_ms,
+                ],
+            )
+            .map_err(|error| format!("规范英文学习目标写入失败：{error}"))?;
+        transaction
+            .commit()
+            .map_err(|error| format!("学习记录写入事务无法提交：{error}"))?;
 
-        self.get(self.connection.last_insert_rowid())?
+        self.get(learning_record_id)?
             .ok_or_else(|| "学习记录写入后无法读取新记录。".to_string())
     }
 
@@ -730,7 +774,10 @@ impl LearningRecordStore {
     ) -> Result<LearningRecordPage, String> {
         let (page, page_size) = validate_pagination(page, page_size)?;
         let (where_clause, mut values) = build_filter(keyword, query_type)?;
-        let count_sql = format!("SELECT COUNT(*) FROM learning_records {where_clause}");
+        let count_sql = format!(
+            "SELECT COUNT(*) FROM learning_records lr
+             JOIN learning_record_targets lrt ON lrt.learning_record_id = lr.id {where_clause}"
+        );
         let total: i64 = self
             .connection
             .query_row(&count_sql, params_from_iter(values.iter()), |row| {
@@ -742,7 +789,7 @@ impl LearningRecordStore {
         values.push(Value::Integer(i64::from(page_size)));
         values.push(Value::Integer(offset));
         let list_sql = format!(
-            "{} {where_clause} ORDER BY created_at_unix_ms DESC, id DESC LIMIT ? OFFSET ?",
+            "{} {where_clause} ORDER BY lr.created_at_unix_ms DESC, lr.id DESC LIMIT ? OFFSET ?",
             select_learning_record_sql("")
         );
         let mut statement = self
@@ -779,8 +826,9 @@ impl LearningRecordStore {
         let record_count: i64 = self
             .connection
             .query_row(
-                "SELECT COUNT(*) FROM learning_records
-                 WHERE created_at_unix_ms >= ?1 AND created_at_unix_ms < ?2",
+                "SELECT COUNT(*) FROM learning_records lr
+                 JOIN learning_record_targets lrt ON lrt.learning_record_id = lr.id
+                 WHERE lr.created_at_unix_ms >= ?1 AND lr.created_at_unix_ms < ?2",
                 params![start_unix_ms, end_unix_ms],
                 |row| row.get(0),
             )
@@ -788,8 +836,8 @@ impl LearningRecordStore {
         let mut statement = self
             .connection
             .prepare(&format!(
-                "{} WHERE created_at_unix_ms >= ?1 AND created_at_unix_ms < ?2
-                 ORDER BY created_at_unix_ms DESC, id DESC LIMIT 1",
+                "{} WHERE lr.created_at_unix_ms >= ?1 AND lr.created_at_unix_ms < ?2
+                 ORDER BY lr.created_at_unix_ms DESC, lr.id DESC LIMIT 1",
                 select_learning_record_sql("")
             ))
             .map_err(|error| format!("今日最近学习记录语句无法准备：{error}"))?;
@@ -1181,7 +1229,7 @@ pub(crate) fn get_learning_record_from_connection(
     id: i64,
 ) -> Result<Option<LearningRecord>, String> {
     let mut statement = connection
-        .prepare(&select_learning_record_sql("WHERE id = ?1"))
+        .prepare(&select_learning_record_sql("WHERE lr.id = ?1"))
         .map_err(|error| format!("学习记录读取语句无法准备：{error}"))?;
     let stored = statement
         .query_row([id], read_stored_learning_record)
@@ -1288,6 +1336,9 @@ fn migrate(connection: &mut Connection) -> Result<(), String> {
             if version == 16 {
                 repair_review_quality_feedback_v16(&transaction)?;
             }
+            if version == 17 {
+                backfill_learning_record_targets_v17(&transaction)?;
+            }
             transaction
                 .execute(
                     "INSERT INTO schema_migrations (version, applied_at_unix_ms) VALUES (?1, ?2)",
@@ -1316,11 +1367,18 @@ fn build_filter(
         if normalized_keyword.is_empty() {
             return Err("学习记录搜索关键词不能为空。".to_string());
         }
-        clauses.push("instr(normalized_text, ?) > 0".to_string());
+        clauses.push(
+            "(instr(lrt.normalized_target_text, ?) > 0
+               OR instr(lr.normalized_text, ?) > 0
+               OR instr(lower(COALESCE(lr.context_text, '')), ?) > 0)"
+                .to_string(),
+        );
+        values.push(Value::Text(normalized_keyword.clone()));
+        values.push(Value::Text(normalized_keyword.clone()));
         values.push(Value::Text(normalized_keyword));
     }
     if let Some(query_type) = query_type {
-        clauses.push("query_type = ?".to_string());
+        clauses.push("lr.query_type = ?".to_string());
         values.push(Value::Text(query_type_to_storage(query_type).to_string()));
     }
 
@@ -1350,9 +1408,11 @@ fn validate_pagination(page: Option<u32>, page_size: Option<u32>) -> Result<(u32
 
 fn select_learning_record_sql(where_clause: &str) -> String {
     format!(
-        "SELECT id, query_text, normalized_text, query_type, source_type, source_app, context_text, \
-         explanation_card_json, schema_version, created_at_unix_ms, difficulty \
-         FROM learning_records {where_clause}"
+        "SELECT lr.id, lr.query_text, lr.normalized_text, lr.query_type, lr.source_type,
+         lr.source_app, lr.context_text, lr.explanation_card_json, lr.schema_version,
+         lr.created_at_unix_ms, lr.difficulty, lrt.learning_target_text, lrt.query_direction
+         FROM learning_records lr
+         JOIN learning_record_targets lrt ON lrt.learning_record_id = lr.id {where_clause}"
     )
 }
 
@@ -1369,13 +1429,15 @@ fn read_stored_learning_record(row: &rusqlite::Row<'_>) -> rusqlite::Result<Stor
         schema_version: row.get(8)?,
         created_at_unix_ms: row.get(9)?,
         difficulty: row.get(10)?,
+        learning_target_text: row.get(11)?,
+        query_direction: row.get(12)?,
     })
 }
 
 fn decode_learning_record(stored: StoredLearningRecord) -> Result<LearningRecord, String> {
     let query_type = query_type_from_storage(&stored.query_type)?;
     let source_type = source_type_from_storage(&stored.source_type)?;
-    let explanation_card: ExplanationCard = serde_json::from_str(&stored.explanation_card_json)
+    let mut explanation_card: ExplanationCard = serde_json::from_str(&stored.explanation_card_json)
         .map_err(|error| {
             format!(
                 "学习记录 {} 的 ExplanationCard JSON 无法解析：{error}",
@@ -1383,6 +1445,7 @@ fn decode_learning_record(stored: StoredLearningRecord) -> Result<LearningRecord
             )
         })?;
 
+    explanation_card.set_learning_target_text(stored.learning_target_text.clone());
     if explanation_card.query_type() != query_type {
         return Err(format!(
             "学习记录 {} 的 queryType 与 ExplanationCard JSON 不一致。",
@@ -1393,6 +1456,8 @@ fn decode_learning_record(stored: StoredLearningRecord) -> Result<LearningRecord
     Ok(LearningRecord {
         id: stored.id,
         query_text: stored.query_text,
+        learning_target_text: stored.learning_target_text,
+        query_direction: query_direction_from_storage(&stored.query_direction)?,
         normalized_text: stored.normalized_text,
         query_type,
         source_type,
@@ -1411,6 +1476,62 @@ fn normalize_query_text(value: &str) -> String {
         .collect::<Vec<_>>()
         .join(" ")
         .to_lowercase()
+}
+
+fn query_direction_to_storage(direction: QueryDirection) -> &'static str {
+    match direction {
+        QueryDirection::EnToZh => "en_to_zh",
+        QueryDirection::ZhToEn => "zh_to_en",
+    }
+}
+
+fn query_direction_from_storage(value: &str) -> Result<QueryDirection, String> {
+    match value {
+        "en_to_zh" => Ok(QueryDirection::EnToZh),
+        "zh_to_en" => Ok(QueryDirection::ZhToEn),
+        _ => Err(format!("未知的学习目标查询方向：{value}")),
+    }
+}
+
+fn backfill_learning_record_targets_v17(transaction: &Transaction<'_>) -> Result<(), String> {
+    let records = {
+        let mut statement = transaction
+            .prepare("SELECT id, query_text, created_at_unix_ms FROM learning_records ORDER BY id")
+            .map_err(|error| format!("v17 历史学习目标读取语句无法准备：{error}"))?;
+        let rows = statement
+            .query_map([], |row| {
+                Ok((
+                    row.get::<_, i64>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, i64>(2)?,
+                ))
+            })
+            .map_err(|error| format!("v17 历史学习目标读取失败：{error}"))?;
+        rows.collect::<Result<Vec<_>, _>>()
+            .map_err(|error| format!("v17 历史学习目标行读取失败：{error}"))?
+    };
+
+    for (learning_record_id, query_text, created_at_unix_ms) in records {
+        if determine_query_direction(&query_text).ok() != Some(QueryDirection::EnToZh) {
+            continue;
+        }
+        let learning_target_text = normalize_english_learning_target(&query_text)?;
+        transaction
+            .execute(
+                "INSERT INTO learning_record_targets (
+                   learning_record_id, query_direction, learning_target_text,
+                   normalized_target_text, created_at_unix_ms
+                 ) VALUES (?1, 'en_to_zh', ?2, ?3, ?4)",
+                params![
+                    learning_record_id,
+                    learning_target_text,
+                    normalize_query_text(&learning_target_text),
+                    created_at_unix_ms,
+                ],
+            )
+            .map_err(|error| format!("v17 历史英文学习目标回填失败：{error}"))?;
+    }
+    Ok(())
 }
 
 fn query_type_to_storage(query_type: QueryType) -> &'static str {
@@ -1490,6 +1611,7 @@ mod tests {
     fn word_card(query_text: &str) -> ExplanationCard {
         ExplanationCard::Word {
             source_text: query_text.to_string(),
+            learning_target_text: query_text.to_string(),
             headword: query_text.to_string(),
             part_of_speech: Some("noun".to_string()),
             phonetic: None,
@@ -1518,6 +1640,7 @@ mod tests {
             QueryType::Word => word_card(query_text),
             QueryType::Phrase => ExplanationCard::Phrase {
                 source_text: query_text.to_string(),
+                learning_target_text: query_text.to_string(),
                 basic_meaning: "正在进行中".to_string(),
                 context_meaning: None,
                 composition: None,
@@ -1528,6 +1651,7 @@ mod tests {
             },
             QueryType::Sentence => ExplanationCard::Sentence {
                 source_text: query_text.to_string(),
+                learning_target_text: query_text.to_string(),
                 translation: "这项工作仍在进行中。".to_string(),
                 key_points: vec![KeyPointItem {
                     expression: "in progress".to_string(),
@@ -1538,6 +1662,7 @@ mod tests {
             },
             QueryType::Paragraph => ExplanationCard::Paragraph {
                 source_text: query_text.to_string(),
+                learning_target_text: query_text.to_string(),
                 translation: "第一句说明状态，第二句说明下一步。".to_string(),
                 key_points: vec![],
                 summary: None,
@@ -2940,6 +3065,136 @@ mod tests {
         assert!(read.difficulty.is_none());
         drop(store);
         let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn version_seventeen_backfills_only_reliable_english_targets() {
+        let (directory, path) = test_database_path();
+        fs::create_dir_all(&directory).unwrap();
+        let store = LearningRecordStore::open(&path).unwrap();
+        for (id, query_text) in [(41_i64, "legacy target"), (42_i64, "旧中文记录")] {
+            let card = word_card(query_text);
+            store
+                .connection
+                .execute(
+                    "INSERT INTO learning_records (
+                       id, query_text, normalized_text, query_type, source_type, source_app,
+                       context_text, explanation_card_json, schema_version, created_at_unix_ms, difficulty
+                     ) VALUES (?1, ?2, ?3, 'word', 'manual', NULL, NULL, ?4, 1, ?5, NULL)",
+                    params![
+                        id,
+                        query_text,
+                        normalize_query_text(query_text),
+                        serde_json::to_string(&card).unwrap(),
+                        1_000 + id,
+                    ],
+                )
+                .unwrap();
+        }
+        store
+            .connection
+            .execute_batch(
+                "DELETE FROM schema_migrations WHERE version = 17;
+                 DROP TABLE learning_record_targets;",
+            )
+            .unwrap();
+        drop(store);
+
+        let upgraded = LearningRecordStore::open(&path).unwrap();
+        let raw_count: i64 = upgraded
+            .connection
+            .query_row("SELECT COUNT(*) FROM learning_records", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        let target_count: i64 = upgraded
+            .connection
+            .query_row("SELECT COUNT(*) FROM learning_record_targets", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        let page = upgraded.list(Some(1), Some(20), None, None).unwrap();
+        assert_eq!(raw_count, 2);
+        assert_eq!(target_count, 1);
+        assert_eq!(page.total, 1);
+        assert_eq!(page.records[0].learning_target_text, "legacy target");
+        assert_eq!(page.records[0].query_direction, QueryDirection::EnToZh);
+        assert!(upgraded.get(42).unwrap().is_none());
+        drop(upgraded);
+        fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn learning_event_and_target_projection_are_atomic() {
+        let (directory, path) = test_database_path();
+        fs::create_dir_all(&directory).unwrap();
+        let store = LearningRecordStore::open(&path).unwrap();
+        store
+            .connection
+            .execute_batch(
+                "CREATE TRIGGER reject_learning_target
+                 BEFORE INSERT ON learning_record_targets
+                 BEGIN SELECT RAISE(ABORT, 'target rejected'); END;",
+            )
+            .unwrap();
+        let error = store
+            .save(&input("market", SourceType::Manual), &word_card("market"))
+            .unwrap_err();
+        let raw_count: i64 = store
+            .connection
+            .query_row("SELECT COUNT(*) FROM learning_records", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        assert!(error.contains("规范英文学习目标写入失败"));
+        assert_eq!(raw_count, 0);
+        drop(store);
+        fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn chinese_record_is_searchable_by_target_and_source_but_displays_english() {
+        let (directory, path) = test_database_path();
+        fs::create_dir_all(&directory).unwrap();
+        let store = LearningRecordStore::open(&path).unwrap();
+        let chinese_input = CaptureInput {
+            query_text: "界面".to_string(),
+            context_text: Some("这个界面支持本地学习记录。".to_string()),
+            source_type: SourceType::WindowsUia,
+            source_app: Some("Obsidian.exe".to_string()),
+        };
+        let card = ExplanationCard::Word {
+            source_text: "界面".to_string(),
+            learning_target_text: "interface".to_string(),
+            headword: "interface".to_string(),
+            part_of_speech: Some("noun".to_string()),
+            phonetic: None,
+            basic_meanings: vec!["界面".to_string()],
+            context_meaning: Some("interface".to_string()),
+            source_sentence: Some("这个界面支持本地学习记录。".to_string()),
+            source_sentence_zh: None,
+            phrases: vec![],
+            near_meanings: vec![],
+            examples: vec![],
+            review_hint: None,
+        };
+        let saved = store.save(&chinese_input, &card).unwrap();
+        assert_eq!(saved.query_text, "界面");
+        assert_eq!(saved.learning_target_text, "interface");
+        assert_eq!(saved.query_direction, QueryDirection::ZhToEn);
+        for keyword in ["interface", "界面", "本地学习"] {
+            let page = store.list(Some(1), Some(20), Some(keyword), None).unwrap();
+            assert_eq!(page.total, 1, "keyword={keyword}");
+            assert_eq!(page.records[0].learning_target_text, "interface");
+        }
+        let summary = store.summarize_range(0, i64::MAX).unwrap();
+        assert_eq!(summary.record_count, 1);
+        assert_eq!(
+            summary.latest_record.unwrap().learning_target_text,
+            "interface"
+        );
+        drop(store);
+        fs::remove_dir_all(directory).unwrap();
     }
 
     #[test]

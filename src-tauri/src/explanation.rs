@@ -4,6 +4,7 @@ pub const MAX_QUERY_TEXT_LEN: usize = 4_096;
 pub(crate) const MAX_CONTEXT_TEXT_LEN: usize = 4_096;
 const MAX_SOURCE_APP_LEN: usize = 512;
 const MAX_SOURCE_TEXT_LEN: usize = 4_096;
+pub const MAX_LEARNING_TARGET_TEXT_LEN: usize = 4_096;
 const MAX_HEADWORD_LEN: usize = 160;
 const MAX_PART_OF_SPEECH_LEN: usize = 80;
 const MAX_PHONETIC_LEN: usize = 80;
@@ -40,6 +41,13 @@ pub enum QueryType {
     Paragraph,
 }
 
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum QueryDirection {
+    EnToZh,
+    ZhToEn,
+}
+
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum SourceType {
@@ -69,6 +77,8 @@ pub struct CaptureInput {
 pub enum ExplanationCard {
     Word {
         source_text: String,
+        #[serde(default)]
+        learning_target_text: String,
         headword: String,
         part_of_speech: Option<String>,
         phonetic: Option<String>,
@@ -86,6 +96,8 @@ pub enum ExplanationCard {
     },
     Phrase {
         source_text: String,
+        #[serde(default)]
+        learning_target_text: String,
         basic_meaning: String,
         context_meaning: Option<String>,
         composition: Option<String>,
@@ -97,6 +109,8 @@ pub enum ExplanationCard {
     },
     Sentence {
         source_text: String,
+        #[serde(default)]
+        learning_target_text: String,
         translation: String,
         #[serde(default)]
         key_points: Vec<KeyPointItem>,
@@ -105,6 +119,8 @@ pub enum ExplanationCard {
     },
     Paragraph {
         source_text: String,
+        #[serde(default)]
+        learning_target_text: String,
         translation: String,
         #[serde(default)]
         key_points: Vec<KeyPointItem>,
@@ -130,6 +146,158 @@ impl ExplanationCard {
             | Self::Paragraph { source_text, .. } => source_text,
         }
     }
+
+    pub fn learning_target_text(&self) -> &str {
+        match self {
+            Self::Word {
+                learning_target_text,
+                ..
+            }
+            | Self::Phrase {
+                learning_target_text,
+                ..
+            }
+            | Self::Sentence {
+                learning_target_text,
+                ..
+            }
+            | Self::Paragraph {
+                learning_target_text,
+                ..
+            } => learning_target_text,
+        }
+    }
+
+    pub(crate) fn set_learning_target_text(&mut self, value: String) {
+        match self {
+            Self::Word {
+                learning_target_text,
+                ..
+            }
+            | Self::Phrase {
+                learning_target_text,
+                ..
+            }
+            | Self::Sentence {
+                learning_target_text,
+                ..
+            }
+            | Self::Paragraph {
+                learning_target_text,
+                ..
+            } => *learning_target_text = value,
+        }
+    }
+
+    pub(crate) fn align_primary_result_with_learning_target(&mut self) {
+        let target = self.learning_target_text().trim().to_string();
+        match self {
+            Self::Word { headword, .. } => *headword = target,
+            Self::Phrase { basic_meaning, .. } => *basic_meaning = target,
+            Self::Sentence { translation, .. } | Self::Paragraph { translation, .. } => {
+                *translation = target
+            }
+        }
+    }
+}
+
+fn is_han(character: char) -> bool {
+    matches!(
+        character,
+        '\u{3400}'..='\u{4dbf}'
+            | '\u{4e00}'..='\u{9fff}'
+            | '\u{f900}'..='\u{faff}'
+            | '\u{20000}'..='\u{2ebef}'
+            | '\u{2f800}'..='\u{2fa1f}'
+            | '\u{30000}'..='\u{3134f}'
+    )
+}
+
+pub fn determine_query_direction(query_text: &str) -> Result<QueryDirection, String> {
+    let value = query_text.trim();
+    if value
+        .chars()
+        .any(|character| character.is_ascii_alphabetic())
+    {
+        return Ok(QueryDirection::EnToZh);
+    }
+    if value.chars().any(is_han) {
+        return Ok(QueryDirection::ZhToEn);
+    }
+    Err("captureInput.queryText 必须包含英文或中文文字，不能只有数字、符号或空白。".to_string())
+}
+
+pub fn normalize_english_learning_target(query_text: &str) -> Result<String, String> {
+    if !query_text.chars().any(is_han) {
+        let normalized = query_text.split_whitespace().collect::<Vec<_>>().join(" ");
+        validate_english_learning_target(&normalized)?;
+        return Ok(normalized);
+    }
+    let mut retained = String::with_capacity(query_text.len());
+    for character in query_text.trim().chars() {
+        if is_han(character) {
+            retained.push(' ');
+        } else if character.is_ascii_alphanumeric()
+            || character.is_ascii_whitespace()
+            || matches!(
+                character,
+                '_' | '-'
+                    | '\''
+                    | '.'
+                    | '/'
+                    | '+'
+                    | '#'
+                    | ':'
+                    | '@'
+                    | '$'
+                    | '%'
+                    | '&'
+                    | '*'
+                    | '='
+                    | '<'
+                    | '>'
+                    | '['
+                    | ']'
+                    | '('
+                    | ')'
+                    | '{'
+                    | '}'
+                    | '\\'
+                    | '`'
+                    | '~'
+            )
+        {
+            retained.push(character);
+        } else {
+            retained.push(' ');
+        }
+    }
+    let normalized = retained.split_whitespace().collect::<Vec<_>>().join(" ");
+    validate_english_learning_target(&normalized)?;
+    Ok(normalized)
+}
+
+pub(crate) fn normalize_model_english_learning_target(value: &str) -> String {
+    value.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+pub fn validate_english_learning_target(value: &str) -> Result<(), String> {
+    let value = value.trim();
+    if value.is_empty()
+        || !value
+            .chars()
+            .any(|character| character.is_ascii_alphabetic())
+        || value.chars().any(is_han)
+    {
+        return Err("learningTargetText 必须包含有效拉丁英文且不得含中文。".to_string());
+    }
+    let len = value.chars().count();
+    if len > MAX_LEARNING_TARGET_TEXT_LEN {
+        return Err(format!(
+            "learningTargetText 长度不能超过 {MAX_LEARNING_TARGET_TEXT_LEN} 个字符，当前为 {len}。"
+        ));
+    }
+    Ok(())
 }
 
 pub(crate) fn is_primarily_chinese_source_sentence(value: &str) -> bool {
@@ -213,24 +381,33 @@ pub fn classify_query_type(query_text: &str) -> Result<QueryType, String> {
         ));
     }
 
-    if is_word_like(value) {
+    let direction = determine_query_direction(value)?;
+    let han_count = value.chars().filter(|character| is_han(*character)).count();
+    if direction == QueryDirection::ZhToEn && is_word_like(value) && han_count <= 4 {
+        return Ok(QueryType::Word);
+    }
+    if direction == QueryDirection::EnToZh && is_word_like(value) {
         return Ok(QueryType::Word);
     }
 
     let word_count = value.split_whitespace().count();
     let sentence_terminators = value
         .chars()
-        .filter(|character| matches!(character, '.' | '!' | '?'))
+        .filter(|character| matches!(character, '.' | '!' | '?' | '。' | '！' | '？'))
         .count();
     if value.contains(['\n', '\r'])
         || sentence_terminators >= 2
+        || (direction == QueryDirection::ZhToEn && char_count >= 120)
         || char_count >= PARAGRAPH_CHAR_THRESHOLD
         || word_count >= PARAGRAPH_WORD_THRESHOLD
     {
         return Ok(QueryType::Paragraph);
     }
 
-    if sentence_terminators == 1 || word_count >= SENTENCE_WORD_THRESHOLD {
+    if sentence_terminators == 1
+        || word_count >= SENTENCE_WORD_THRESHOLD
+        || (direction == QueryDirection::ZhToEn && han_count >= 12)
+    {
         return Ok(QueryType::Sentence);
     }
 
@@ -267,6 +444,26 @@ pub fn validate_explanation_card(
             query_type_label(expected_query_type.unwrap()),
             query_type_label(card.query_type())
         ));
+    }
+    match determine_query_direction(&input.query_text) {
+        Ok(QueryDirection::EnToZh) => match normalize_english_learning_target(&input.query_text) {
+            Ok(expected) if card.learning_target_text() != expected => errors.push(
+                "explanationCard.learningTargetText 必须等于 Rust 本地规范化的英文查询。"
+                    .to_string(),
+            ),
+            Err(error) => errors.push(error),
+            _ => {}
+        },
+        Ok(QueryDirection::ZhToEn) => {
+            if let Err(error) = validate_english_learning_target(card.learning_target_text()) {
+                errors.push(format!("explanationCard.{error}"));
+            }
+        }
+        Err(error) => {
+            if !errors.contains(&error) {
+                errors.push(error);
+            }
+        }
     }
 
     match card {
@@ -709,6 +906,7 @@ mod tests {
     fn valid_word_card(context_meaning: Option<&str>) -> ExplanationCard {
         ExplanationCard::Word {
             source_text: "market".to_string(),
+            learning_target_text: "market".to_string(),
             headword: "market".to_string(),
             part_of_speech: Some("名词 / 动词".to_string()),
             phonetic: Some("/ˈmɑːrkɪt/".to_string()),
@@ -743,9 +941,89 @@ mod tests {
     }
 
     #[test]
+    fn query_direction_and_english_target_are_deterministic() {
+        assert_eq!(
+            determine_query_direction("界面").unwrap(),
+            QueryDirection::ZhToEn
+        );
+        assert_eq!(
+            determine_query_direction("fine-tuning").unwrap(),
+            QueryDirection::EnToZh
+        );
+        assert_eq!(
+            determine_query_direction("在 Rust/generation 中").unwrap(),
+            QueryDirection::EnToZh
+        );
+        assert_eq!(
+            normalize_english_learning_target("在 Rust/generation 中").unwrap(),
+            "Rust/generation"
+        );
+        assert_eq!(
+            normalize_english_learning_target("  Memory/Review   feed  ").unwrap(),
+            "Memory/Review feed"
+        );
+        assert!(determine_query_direction("  42 + / ! ").is_err());
+    }
+
+    #[test]
+    fn mixed_query_preserves_code_identifier_boundaries() {
+        let cases = [
+            ("学习 C++。", "C++"),
+            ("使用 .NET", ".NET"),
+            ("编写 C# 程序", "C#"),
+            ("运行 node.js。", "node.js"),
+        ];
+
+        for (query, expected) in cases {
+            assert_eq!(normalize_english_learning_target(query).unwrap(), expected);
+        }
+    }
+
+    #[test]
+    fn chinese_query_types_use_local_character_boundaries() {
+        assert_eq!(classify_query_type("界面").unwrap(), QueryType::Word);
+        assert_eq!(
+            classify_query_type("规范英文目标").unwrap(),
+            QueryType::Phrase
+        );
+        assert_eq!(
+            classify_query_type("这个结果必须保留原始中文并输出自然英文。").unwrap(),
+            QueryType::Sentence
+        );
+        assert_eq!(
+            classify_query_type("第一段说明问题。\n第二段说明解决办法。").unwrap(),
+            QueryType::Paragraph
+        );
+    }
+
+    #[test]
+    fn chinese_learning_target_must_be_valid_english() {
+        let mut card = ExplanationCard::Word {
+            source_text: "界面".to_string(),
+            learning_target_text: "interface".to_string(),
+            headword: "interface".to_string(),
+            part_of_speech: Some("noun".to_string()),
+            phonetic: None,
+            basic_meanings: vec!["界面".to_string()],
+            context_meaning: None,
+            source_sentence: None,
+            source_sentence_zh: None,
+            phrases: vec![],
+            near_meanings: vec![],
+            examples: vec![],
+            review_hint: None,
+        };
+        assert!(validate_explanation_card(&input("界面", None), &card).is_ok());
+        card.set_learning_target_text("界面".to_string());
+        let errors = validate_explanation_card(&input("界面", None), &card).unwrap_err();
+        assert!(errors.iter().any(|error| error.contains("有效拉丁英文")));
+    }
+
+    #[test]
     fn phrase_result_validates() {
         let card = ExplanationCard::Phrase {
             source_text: "in progress".to_string(),
+            learning_target_text: "in progress".to_string(),
             basic_meaning: "正在进行中".to_string(),
             context_meaning: None,
             composition: Some("介词短语，常作表语。".to_string()),
@@ -763,6 +1041,7 @@ mod tests {
         let query = "This implementation keeps the original selection available while the asynchronous explanation request is running, so the result can still be placed beside the source sentence.";
         let card = ExplanationCard::Sentence {
             source_text: query.to_string(),
+            learning_target_text: query.to_string(),
             translation: "该实现会在异步解释请求运行期间保留原始选区，因此结果仍可显示在源句旁边。"
                 .to_string(),
             key_points: vec![],
@@ -779,6 +1058,7 @@ mod tests {
         let query = "The first sentence explains the current state. The second sentence describes the next action.";
         let card = ExplanationCard::Paragraph {
             source_text: query.to_string(),
+            learning_target_text: query.to_string(),
             translation: "第一句解释当前状态。第二句描述下一步操作。".to_string(),
             key_points: vec![KeyPointItem {
                 expression: "current state".to_string(),
@@ -795,6 +1075,7 @@ mod tests {
         let query = "This sentence has a complete grammatical structure.";
         let card = ExplanationCard::Sentence {
             source_text: query.to_string(),
+            learning_target_text: query.to_string(),
             translation: String::new(),
             key_points: vec![],
             explanation: None,
@@ -810,6 +1091,7 @@ mod tests {
         let query = format!("{}\n{}", "a".repeat(2_100), "b".repeat(2_100));
         let card = ExplanationCard::Paragraph {
             source_text: query.clone(),
+            learning_target_text: query.clone(),
             translation: "超长段落".to_string(),
             key_points: vec![],
             summary: None,

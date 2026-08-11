@@ -3,8 +3,10 @@ use crate::deepseek_client::{
     ChatCompletionRequestPolicy, TrackedChatCompletionError,
 };
 use crate::explanation::{
-    classify_query_type, normalize_source_sentence_translation, validate_explanation_card,
-    CaptureInput, ExplanationCard, QueryType, SourceType, MAX_CONTEXT_TEXT_LEN,
+    classify_query_type, determine_query_direction, normalize_english_learning_target,
+    normalize_model_english_learning_target, normalize_source_sentence_translation,
+    validate_explanation_card, CaptureInput, ExplanationCard, QueryDirection, QueryType,
+    SourceType, MAX_CONTEXT_TEXT_LEN,
 };
 use crate::learning_records;
 use crate::model_usage::ModelUsageCategory;
@@ -301,6 +303,7 @@ fn build_request_body(
 ) -> Result<serde_json::Value, String> {
     let minimal_context_text = normalize_minimal_context_text(minimal_context_text)?;
     let query_type = classify_query_type(&input.query_text)?;
+    let query_direction = determine_query_direction(&input.query_text)?;
     let model = configured_model();
 
     let user_prompt = build_user_prompt(input, minimal_context_text)?;
@@ -309,7 +312,7 @@ fn build_request_body(
         "messages": [
             {
                 "role": "system",
-                "content": explanation_card_system_prompt(query_type)
+                "content": explanation_card_system_prompt(query_type, query_direction)
             },
             {
                 "role": "user",
@@ -383,8 +386,21 @@ pub(crate) fn parse_explanation_card_content(
         "sourceText".to_string(),
         serde_json::Value::String(input.query_text.trim().to_string()),
     );
+    let query_direction = determine_query_direction(&input.query_text)?;
+    if query_direction == QueryDirection::EnToZh {
+        object.insert(
+            "learningTargetText".to_string(),
+            serde_json::Value::String(normalize_english_learning_target(&input.query_text)?),
+        );
+    }
     let mut card: ExplanationCard = serde_json::from_value(value)
         .map_err(|error| format!("ExplanationCard 模型输出错误：JSON 结构无效：{error}"))?;
+    if query_direction == QueryDirection::ZhToEn {
+        card.set_learning_target_text(normalize_model_english_learning_target(
+            card.learning_target_text(),
+        ));
+        card.align_primary_result_with_learning_target();
+    }
     normalize_source_sentence_translation(&mut card);
     validate_explanation_card(input, &card).map_err(|errors| {
         format!(
@@ -441,12 +457,16 @@ fn build_user_prompt(
     Ok(format!("CaptureInput JSON:\n{input_json}"))
 }
 
-fn explanation_card_system_prompt(query_type: QueryType) -> String {
+fn explanation_card_system_prompt(
+    query_type: QueryType,
+    query_direction: QueryDirection,
+) -> String {
     let schema = match query_type {
         QueryType::Word => {
             r#"{
   "queryType": "word",
   "sourceText": "market",
+  "learningTargetText": "market",
   "headword": "market",
   "partOfSpeech": "noun / verb",
   "phonetic": "/ˈmɑːrkɪt/",
@@ -474,6 +494,7 @@ Word rules:
             r#"{
   "queryType": "phrase",
   "sourceText": "in progress",
+  "learningTargetText": "in progress",
   "basicMeaning": "正在进行中",
   "contextMeaning": null,
   "composition": "介词短语，常作表语",
@@ -495,6 +516,7 @@ Phrase rules:
             r#"{
   "queryType": "sentence",
   "sourceText": "The window remains beside the selected text.",
+  "learningTargetText": "The window remains beside the selected text.",
   "translation": "窗口会保持在所选文本旁边。",
   "keyPoints": [
     { "expression": "remain beside", "meaning": "保持在……旁边" }
@@ -513,6 +535,7 @@ Sentence rules:
             r#"{
   "queryType": "paragraph",
   "sourceText": "The first sentence explains the state. The second describes the next action.",
+  "learningTargetText": "The first sentence explains the state. The second describes the next action.",
   "translation": "第一句解释当前状态。第二句描述下一步操作。",
   "keyPoints": [
     { "expression": "next action", "meaning": "下一步操作" }
@@ -529,10 +552,24 @@ Paragraph rules:
         }
     };
 
+    let direction_rules = match query_direction {
+        QueryDirection::EnToZh => {
+            r#"Direction is enToZh. Explain or translate the selected English into Chinese.
+learningTargetText is required but Rust will replace it with the deterministic normalized English query; do not use Chinese context to rewrite or translate the English target."#
+        }
+        QueryDirection::ZhToEn => {
+            r#"Direction is zhToEn. Translate the complete selected Chinese into natural, idiomatic English suitable as a learning target.
+learningTargetText is required, must contain useful Latin English, and must contain no Chinese. sourceText remains the original Chinese selection.
+For word, learningTargetText and headword are the natural English result. For phrase, learningTargetText and basicMeaning are the natural English result. For sentence or paragraph, learningTargetText and translation are the complete natural English result.
+Do not answer with a language-direction choice, commentary, field name, placeholder, or transliteration when a natural English translation is available."#
+        }
+    };
+
     format!(
         r#"Create one ReadRay ExplanationCard JSON object matching the schema below: no Markdown, code fences, commentary, or extra object.
 queryType is fixed by the local classifier; keep the exact camelCase property names shown.
-Use concise Chinese explanations and natural complete Chinese translations. Never claim dictionary authority or invent unsupported facts.
+{direction_rules}
+Use concise supporting explanations and natural complete translations in the requested direction. Never claim dictionary authority or invent unsupported facts.
 
 {schema}"#
     )
@@ -637,6 +674,75 @@ mod tests {
     }
 
     #[test]
+    fn chinese_response_keeps_source_and_validates_model_english_target() {
+        let chinese = input("界面", Some("这个界面支持本地学习记录。"));
+        let content = json!({
+            "queryType": "word",
+            "sourceText": "model must not replace authority",
+            "learningTargetText": "interface",
+            "headword": "interface",
+            "basicMeanings": ["界面"],
+            "phrases": [],
+            "nearMeanings": [],
+            "examples": []
+        })
+        .to_string();
+        let card = parse_explanation_card_content(&chinese, &content).unwrap();
+        assert_eq!(card.source_text(), "界面");
+        assert_eq!(card.learning_target_text(), "interface");
+
+        let invalid = content.replace("interface", "中文目标");
+        let error = parse_explanation_card_content(&chinese, &invalid).unwrap_err();
+        assert!(error.contains("有效拉丁英文"));
+    }
+
+    #[test]
+    fn chinese_response_normalizes_target_before_validation_and_alignment() {
+        let chinese = input("用户界面", None);
+        let content = json!({
+            "queryType": "word",
+            "sourceText": "用户界面",
+            "learningTargetText": "  user   interface  ",
+            "headword": "model value before alignment",
+            "basicMeanings": ["用户界面"],
+            "phrases": [],
+            "nearMeanings": [],
+            "examples": []
+        })
+        .to_string();
+
+        let card = parse_explanation_card_content(&chinese, &content).unwrap();
+        assert_eq!(card.learning_target_text(), "user interface");
+        assert!(matches!(
+            card,
+            ExplanationCard::Word { ref headword, .. } if headword == "user interface"
+        ));
+    }
+
+    #[test]
+    fn english_target_is_overwritten_locally_and_chinese_prompt_is_directional() {
+        let english = input("fine-tuning", Some("中文上下文不能改变英文目标。"));
+        let content = json!({
+            "queryType": "word",
+            "sourceText": "wrong",
+            "learningTargetText": "模型改写",
+            "headword": "fine-tuning",
+            "basicMeanings": ["微调"],
+            "phrases": [],
+            "nearMeanings": [],
+            "examples": []
+        })
+        .to_string();
+        let card = parse_explanation_card_content(&english, &content).unwrap();
+        assert_eq!(card.learning_target_text(), "fine-tuning");
+
+        let prompt = explanation_card_system_prompt(QueryType::Word, QueryDirection::ZhToEn);
+        assert!(prompt.contains("Direction is zhToEn"));
+        assert!(prompt.contains("natural, idiomatic English"));
+        assert!(prompt.contains("sourceText remains the original Chinese selection"));
+    }
+
+    #[test]
     fn request_body_uses_non_thinking_fast_path_and_schema_specific_budgets() {
         let cases = [
             (input("market", None), QueryType::Word, WORD_MAX_TOKENS),
@@ -699,7 +805,7 @@ mod tests {
     #[test]
     fn word_and_phrase_prompts_define_asymmetric_source_sentence_translation() {
         for query_type in [QueryType::Word, QueryType::Phrase] {
-            let prompt = explanation_card_system_prompt(query_type);
+            let prompt = explanation_card_system_prompt(query_type, QueryDirection::EnToZh);
             assert!(prompt.contains("sourceSentence may appear without sourceSentenceZh"));
             assert!(prompt.contains("only when sourceSentence (max 1200) is primarily English"));
             assert!(prompt.contains("sourceSentenceZh must be null"));

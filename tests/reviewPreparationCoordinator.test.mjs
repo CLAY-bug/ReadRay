@@ -84,6 +84,8 @@ function card(index, overrides = {}) {
     learningRecord: {
       id: learningRecordId,
       queryText: `word-${index}`,
+      learningTargetText: `word-${index}`,
+      queryDirection: "enToZh",
       normalizedText: `word-${index}`,
       queryType: "word",
       sourceType: "windows_uia",
@@ -92,6 +94,7 @@ function card(index, overrides = {}) {
       explanationCard: {
         queryType: "word",
         sourceText: `word-${index}`,
+        learningTargetText: `word-${index}`,
         headword: `word-${index}`,
         basicMeanings: ["测试词义"],
         phrases: [],
