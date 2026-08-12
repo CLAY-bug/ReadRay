@@ -35,8 +35,8 @@ ReadRay 是一个 Windows 优先、本地数据优先的英语学习 Agent。它
 
 <table>
   <tr>
-    <td width="50%" align="center"><img src="assets/readme/selection-paragraph.png" width="600" height="480" alt="段落划词解释"></td>
-    <td width="50%" align="center"><img src="assets/readme/selection-word.png" width="600" height="480" alt="单词划词查询"></td>
+    <td width="50%" align="center"><img src="assets/readme/selection-paragraph.png" width="600" height="468" alt="段落划词解释"></td>
+    <td width="50%" align="center"><img src="assets/readme/selection-word.png" width="600" height="468" alt="单词划词查询"></td>
   </tr>
   <tr>
     <td align="center">在 Obsidian 中解释真实阅读段落</td>
@@ -69,8 +69,8 @@ ReadRay 主应用把查询之后的学习过程连接起来：今天页汇总本
 
 <table>
   <tr>
-    <td width="50%" align="center"><img src="assets/readme/today.png" width="600" height="480" alt="ReadRay 今天页面"></td>
-    <td width="50%" align="center"><img src="assets/readme/writing.png" width="600" height="480" alt="ReadRay 写作页面与写作辅助侧栏"></td>
+    <td width="50%" align="center"><img src="assets/readme/today.png" width="600" height="433" alt="ReadRay 今天页面"></td>
+    <td width="50%" align="center"><img src="assets/readme/writing.png" width="600" height="433" alt="ReadRay 写作页面与写作辅助侧栏"></td>
   </tr>
   <tr>
     <td align="center"><strong>今天</strong>：查看当天学习概况并快速返回最近内容</td>
