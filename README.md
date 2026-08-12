@@ -1,68 +1,179 @@
-# ReadRay
+<h1 align="center">ReadRay</h1>
 
-ReadRay 是一个 Windows 优先的本地英语学习 Agent。它从用户正在阅读、对话和写作的真实内容出发，使用 DeepSeek 提供结构化解释与写作辅助，并将学习记录、会话、文章和非敏感设置保存在本机 SQLite 中。
+<p align="center">
+  把真实阅读变成可解释、可积累、可复习的英语学习过程。
+</p>
 
-当前已完成开发计划的阶段一至阶段八，包括核心学习链路、写作、会话管理、设置、Windows 桌面生命周期和基于真实学习记录的复习闭环。当前进入阶段九，下一步是定义并实现可追溯、可关闭和可回退的长期学习者记忆与个性化能力。
+<p align="center">
+  <img alt="Version" src="https://img.shields.io/badge/version-0.1.0-26221f">
+  <img alt="Status" src="https://img.shields.io/badge/status-alpha-cf5b2e">
+  <img alt="Platform" src="https://img.shields.io/badge/platform-Windows-0078d4">
+  <img alt="Desktop" src="https://img.shields.io/badge/desktop-Tauri%202-24c8db">
+  <img alt="Local first" src="https://img.shields.io/badge/data-local--first-2f7d68">
+</p>
 
-## 已实现能力
+<p align="center">
+  <a href="#产品预览">产品预览</a> ·
+  <a href="#核心能力">核心能力</a> ·
+  <a href="#本地开发">本地开发</a> ·
+  <a href="#项目状态">项目状态</a>
+</p>
 
-- 通过 Windows UI Automation 获取选区或上下文，生成单词、短语、句子和段落解释卡。
-- 提供 Quick AI 与完整多轮对话，并支持历史浏览、重命名、删除和原生 Markdown 导出。
-- 使用真实 SQLite 数据展示“今天”和“记忆”，保留可追溯的学习事件。
-- 自动整理来自真实学习记录的当日复习 Feed，支持后台英文制卡、提示与揭晓、“想起来了/没想起来”、撤销、来源追溯和独立的卡片质量反馈。
-- 提供文章新建、搜索、自动保存、检查、选区问答、差异对比、完成版本和继续修改。
-- 在设置页管理 DeepSeek API Key、余额、Token 使用量、数据库备份、字体字号、发送方式、全局快捷键、开机启动和关闭策略。
-- 支持系统托盘、单实例、隐藏启动、主窗口恢复和保存失败可恢复的安全退出。
+<p align="center">
+  <img src="assets/readme/selection-paragraph.png" width="920" alt="ReadRay 在 Obsidian 中解释选中的英文段落">
+</p>
 
-## 技术与数据边界
+ReadRay 是一个 Windows 优先、本地数据优先的英语学习 Agent。它从用户正在阅读、对话和写作的真实内容出发，提供划词解释、快捷查询、Quick AI、写作辅助、学习记忆与复习闭环，并把分散的查询逐步沉淀为可追溯的个人学习记录。
 
-- 桌面框架：Tauri 2 + Rust。
-- 前端：React + TypeScript + Vite。
-- 本地数据：SQLite；数据库 ID、revision 和时间是正式路径的权威事实。
-- 模型服务：DeepSeek；解释、Quick AI 和写作共用同一 HTTP 客户端。
-- 正式页面遵循 `Page -> Service -> Repository -> typed Rust command`，React 组件不直接访问 SQLite 或调用模型。
-- 浏览器预览 fixture 只在非 Tauri 分支动态加载，不进入正式桌面数据路径。
-- API Key 保存在 Windows Credential Manager，不写入 SQLite、备份文件或普通日志。
+它不是一个独立于工作流之外的单词本：用户可以在支持 Windows UI Automation 的应用中选中内容，直接获得解释；也可以回到主应用继续写作、检索历史记录和复习真正遇到过的表达。
 
-ReadRay 的学习数据默认留在本机；调用 DeepSeek 的功能仍会把完成当前请求所需的内容发送给模型服务。
+## 产品预览
+
+### 划词查询
+
+在正在使用的 Windows 应用中选中单词、短语、句子或段落，ReadRay 会根据内容类型生成相应的解释卡。段落解释保留原文、翻译和关键表达；单词查询提供词性、音标、语境释义、搭配、近义辨析与例句。
+
+<table>
+  <tr>
+    <td width="50%"><img src="assets/readme/selection-paragraph.png" alt="段落划词解释"></td>
+    <td width="50%"><img src="assets/readme/selection-word.png" alt="单词划词查询"></td>
+  </tr>
+  <tr>
+    <td align="center">在 Obsidian 中解释真实阅读段落</td>
+    <td align="center">在 Codex 中查询单词的上下文含义</td>
+  </tr>
+</table>
+
+### 快捷查询与 Quick AI
+
+通过全局快捷键唤起轻量浮窗。直接输入单词可快速查询；按 `Tab` 切换到 Quick AI 后，可以继续进行英语学习、写作、翻译或通用问答。浮窗与主应用会话相互隔离，同时共享统一的桌面生命周期与安全存储边界。
+
+<p align="center">
+  <img src="assets/readme/quick-search-input.png" width="920" alt="ReadRay 快捷查询输入框">
+</p>
+
+<table>
+  <tr>
+    <td width="50%"><img src="assets/readme/quick-search-result.png" alt="ReadRay 快捷单词查询结果"></td>
+    <td width="50%"><img src="assets/readme/quick-ai.png" alt="ReadRay Quick AI 多轮对话"></td>
+  </tr>
+  <tr>
+    <td align="center">快捷查询：释义、搭配、辨析和例句</td>
+    <td align="center">Quick AI：支持流式输出的独立多轮对话</td>
+  </tr>
+</table>
+
+### 写作、记忆与复习
+
+ReadRay 主应用把查询之后的学习过程连接起来：写作页提供与当前文章和选区相关的反馈；记忆页统一检索真实学习记录并保留来源；复习页从这些记录生成可追溯的复习卡片。
+
+#### 写作辅助
+
+<p align="center">
+  <img src="assets/readme/writing.png" width="920" alt="ReadRay 写作页面与写作辅助侧栏">
+</p>
+
+文章支持新建、搜索、自动保存、全文检查、选区问答、修改差异对比以及完成版本管理。写作辅助会结合当前段落给出表达简化、相关词组和后续写作方向。
+
+<table>
+  <tr>
+    <td width="50%"><img src="assets/readme/memory.png" alt="ReadRay 记忆页面"></td>
+    <td width="50%"><img src="assets/readme/review.png" alt="ReadRay 复习页面"></td>
+  </tr>
+  <tr>
+    <td align="center"><strong>记忆</strong>：按单词、短语、句子和段落检索学习记录</td>
+    <td align="center"><strong>复习</strong>：从真实学习记录生成带来源的复习卡片</td>
+  </tr>
+</table>
+
+## 核心能力
+
+- **上下文解释**：通过 Windows UI Automation 获取选区与必要上下文，为单词、短语、句子和段落生成不同结构的解释卡。
+- **快捷查询**：无需切换当前应用，通过全局快捷键完成主动单词查询和轻量问答。
+- **Quick AI**：支持多轮会话、流式输出、停止、重试、历史恢复和受控 Markdown 渲染。
+- **写作闭环**：围绕真实文章提供自动保存、全文检查、选区问答、差异确认和版本管理。
+- **学习记忆**：使用本地 SQLite 保存并检索可追溯的学习事件，不以演示 fixture 代替正式数据。
+- **复习闭环**：根据真实学习记录生成复习 Feed，支持提示、揭晓、记得/忘了、撤销、来源追溯和卡片质量反馈。
+- **Windows 桌面体验**：支持系统托盘、单实例、隐藏启动、主窗口恢复、全局快捷键、开机启动与安全退出。
+- **个性化外观**：支持界面字体、学习内容字体、字号与主题设置，并在多窗口之间保持一致。
+
+## 数据与隐私
+
+ReadRay 采用本地数据优先的设计：
+
+- 学习记录、文章、会话和非敏感设置保存在本机 SQLite 数据库中。
+- DeepSeek API Key 保存在 Windows Credential Manager，不写入 SQLite、数据库备份或普通日志。
+- 数据库备份不包含 API Key。
+- 浏览器预览使用的 fixture 与正式 Tauri 数据路径隔离。
+- 只有在调用解释、Quick AI 或写作辅助时，完成当前请求所需的内容才会发送给模型服务。
+
+## 技术架构
+
+| 层 | 技术与职责 |
+|---|---|
+| 桌面运行时 | Tauri 2、Rust、Windows UI Automation、系统托盘与窗口生命周期 |
+| 前端 | React、TypeScript、Vite |
+| 正式数据 | SQLite、版本化迁移、typed Rust commands |
+| 模型服务 | DeepSeek，共用 HTTP 客户端与统一用量记录 |
+| 凭据 | Windows Credential Manager |
+| 测试 | Node.js 内置 test runner、Rust unit/integration tests |
+
+正式功能遵循 `Page -> Service -> Repository -> typed Rust command`。React 页面不直接访问 SQLite，也不直接调用模型；异步结果通过数据库 ID、revision、request key 和当前挂载状态进行约束，避免迟到请求覆盖更新状态。
 
 ## 本地开发
 
-环境要求：Windows、Node.js、pnpm、Rust stable MSVC 工具链、Microsoft C++ Build Tools、Windows SDK 和 WebView2。
+### 环境要求
+
+- Windows 10/11
+- Node.js 与 pnpm
+- Rust stable MSVC 工具链
+- Microsoft C++ Build Tools 与 Windows SDK
+- Microsoft Edge WebView2 Runtime
+
+### 启动项目
 
 ```powershell
 pnpm install
-pnpm build
 pnpm tauri dev
 ```
 
-API Key 可以在应用设置页配置。开发环境也可复制 `.env.example` 为 `.env` 后填写 `DEEPSEEK_API_KEY`；真实 `.env` 不应提交。
+API Key 可以在应用设置页中配置。开发环境也可以复制 `.env.example` 为 `.env` 并填写 `DEEPSEEK_API_KEY`；真实 `.env` 已被忽略，不应提交到仓库。
 
-## 自动验证
+### 构建与验证
 
 ```powershell
+pnpm test:overlay
 pnpm test:conversation
 pnpm test:review
 pnpm test:writing
 pnpm test:settings
 pnpm build
+
 cargo fmt --manifest-path src-tauri\Cargo.toml --check
 cargo check --manifest-path src-tauri\Cargo.toml
 cargo test --manifest-path src-tauri\Cargo.toml
 ```
 
-真实托盘、快捷键、开机启动、单实例和窗口生命周期的验收不能由自动测试或浏览器预览替代；后续修改这些能力时仍需在真实 Tauri 窗口中回归。
+生成桌面安装包：
 
-## 项目文档
+```powershell
+pnpm tauri build
+```
 
-- [开发计划](docs/DEVELOPMENT_PLAN.md)：产品方向、阶段边界与验收标准。
-- [资源地图](docs/RESOURCE_MAP.yml)：按任务定位代码和文档。
-- [交接记录](docs/HANDOFF.md)：当前状态、长期决策、下一步与已知限制。
-- [Windows 环境](docs/WINDOWS_ENVIRONMENT.md)：本机工具链、验证基线和常见问题。
-- [协作说明](AGENTS.md)：Codex 在本仓库中的工作规则。
+真实托盘、快捷键、开机启动、单实例、输入法和窗口生命周期仍需要在真实 Tauri 窗口中验收，不能仅用浏览器预览或自动测试替代。
 
-## 当前边界
+## 项目状态
 
-- 阶段八复习闭环已经完成；长期学习者记忆、基于记忆的个性化排序和效果评估属于阶段九，尚未实现。
-- 当前只以 Windows 为正式目标，不支持 macOS、OCR、本地大模型或浏览器插件。
-- Quick AI 已支持流式输出、停止/重试、白名单 Markdown 渲染和组合式系统提示词；回答重新生成、记忆注入和超 8K 续写仍是后续能力。
+ReadRay 当前处于积极开发的 **Alpha** 阶段，应用版本为 `0.1.0`。
+
+- 已完成核心学习链路、写作、会话管理、设置、Windows 桌面生命周期和基于真实学习记录的复习闭环。
+- 当前进入长期学习者记忆与个性化能力的设计阶段。
+- 目前以 Windows 为唯一正式目标。
+- 当前尚未发布公开安装包，请从源码启动或自行构建。
+- OCR、本地大模型、浏览器插件和 macOS 支持不在当前范围内。
+
+## 参与项目
+
+ReadRay 目前由个人维护，欢迎通过 Issue 提交缺陷、体验反馈和功能建议，也欢迎提交范围清晰、带有验证证据的 Pull Request。
+
+在进行较大改动前，建议先通过 Issue 说明目标、使用场景和预期行为，以便确认功能边界与现有扩展点。
