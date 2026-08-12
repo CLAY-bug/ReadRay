@@ -63,17 +63,22 @@ ReadRay 是一个 Windows 优先、本地数据优先的英语学习 Agent。它
   </tr>
 </table>
 
-### 写作、记忆与复习
+### 主应用：今天、写作、记忆与复习
 
-ReadRay 主应用把查询之后的学习过程连接起来：写作页提供与当前文章和选区相关的反馈；记忆页统一检索真实学习记录并保留来源；复习页从这些记录生成可追溯的复习卡片。
+ReadRay 主应用把查询之后的学习过程连接起来：今天页汇总本机当天的学习动态并提供常用入口；写作页提供与当前文章和选区相关的反馈；记忆页统一检索真实学习记录并保留来源；复习页从这些记录生成可追溯的复习卡片。
 
-#### 写作辅助
+<table>
+  <tr>
+    <td width="50%"><img src="assets/readme/today.png" alt="ReadRay 今天页面"></td>
+    <td width="50%"><img src="assets/readme/writing.png" alt="ReadRay 写作页面与写作辅助侧栏"></td>
+  </tr>
+  <tr>
+    <td align="center"><strong>今天</strong>：查看当天学习概况并快速返回最近内容</td>
+    <td align="center"><strong>写作</strong>：围绕文章与当前选区获得写作反馈</td>
+  </tr>
+</table>
 
-<p align="center">
-  <img src="assets/readme/writing.png" width="920" alt="ReadRay 写作页面与写作辅助侧栏">
-</p>
-
-文章支持新建、搜索、自动保存、全文检查、选区问答、修改差异对比以及完成版本管理。写作辅助会结合当前段落给出表达简化、相关词组和后续写作方向。
+写作支持文章新建、搜索、自动保存、全文检查、选区问答、修改差异对比以及完成版本管理；写作辅助会结合当前段落给出表达简化、相关词组和后续写作方向。
 
 <table>
   <tr>
