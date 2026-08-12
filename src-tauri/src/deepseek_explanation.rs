@@ -6,14 +6,18 @@ use crate::explanation::{
     classify_query_type, determine_query_direction, normalize_english_learning_target,
     normalize_model_english_learning_target, normalize_source_sentence_translation,
     validate_explanation_card, CaptureInput, ExplanationCard, QueryDirection, QueryType,
-    SourceType, MAX_CONTEXT_TEXT_LEN,
+    MAX_CONTEXT_TEXT_LEN,
 };
+use crate::explanation_cache::{self, ExplanationCacheSpec};
 use crate::learning_records;
 use crate::model_usage::ModelUsageCategory;
-use futures_util::future::{AbortHandle, AbortRegistration, Abortable};
+use futures_util::future::{
+    AbortHandle, AbortRegistration, Abortable, BoxFuture, FutureExt, Shared,
+};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::collections::HashMap;
+use std::future::Future;
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
 
@@ -25,6 +29,8 @@ const SENTENCE_MAX_TOKENS: u16 = 1_536;
 const PARAGRAPH_MAX_TOKENS: u16 = 4_096;
 const EXPLANATION_CARD_TEMPERATURE: f32 = 0.2;
 const EXPLANATION_REQUEST_CANCELLED: &str = "READRAY_EXPLANATION_REQUEST_CANCELLED";
+const EXPLANATION_MODEL_REVISION: &str = "deepseek-chat-completions-thinking-disabled-v1";
+const EXPLANATION_PROMPT_VERSION: &str = "explanation-card-directional-v4";
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, Hash, PartialEq)]
 #[serde(rename_all = "snake_case")]
@@ -90,6 +96,7 @@ impl ExplanationRequestAuthority {
         ))
     }
 
+    #[cfg(test)]
     fn is_current(
         &self,
         scope: ExplanationRequestScope,
@@ -165,6 +172,7 @@ struct ExplanationRequestGuard {
 }
 
 impl ExplanationRequestGuard {
+    #[cfg(test)]
     fn is_current(&self) -> bool {
         self.authority
             .is_current(self.scope, &self.request_key, self.generation)
@@ -186,10 +194,258 @@ impl Drop for ExplanationRequestGuard {
     }
 }
 
+fn cache_authority_for_request(request: Arc<ExplanationRequestGuard>) -> WaiterCacheAuthority {
+    Arc::new(move |operation| {
+        request
+            .commit_if_current(|| {
+                operation();
+                Ok(())
+            })
+            .is_ok()
+    })
+}
+
 static EXPLANATION_REQUEST_AUTHORITY: OnceLock<Arc<ExplanationRequestAuthority>> = OnceLock::new();
 
 fn explanation_request_authority() -> Arc<ExplanationRequestAuthority> {
     Arc::clone(EXPLANATION_REQUEST_AUTHORITY.get_or_init(|| Arc::new(Default::default())))
+}
+
+type SharedProviderResult = Result<Arc<ExplanationCard>, Arc<str>>;
+type SharedProviderFuture = Shared<BoxFuture<'static, SharedProviderResult>>;
+type WaiterCacheAuthority = Arc<dyn Fn(&mut dyn FnMut()) -> bool + Send + Sync>;
+
+struct InFlightEntry {
+    flight_id: u64,
+    waiters: HashMap<u64, WaiterCacheAuthority>,
+    abort_handle: AbortHandle,
+    future: SharedProviderFuture,
+}
+
+#[derive(Default)]
+struct ExplanationSingleFlightState {
+    next_flight_id: u64,
+    next_waiter_id: u64,
+    entries: HashMap<String, InFlightEntry>,
+}
+
+#[derive(Default)]
+struct ExplanationSingleFlight {
+    state: Mutex<ExplanationSingleFlightState>,
+}
+
+impl ExplanationSingleFlight {
+    #[cfg(test)]
+    fn acquire<Factory, ProviderFuture>(
+        self: &Arc<Self>,
+        cache_key: String,
+        provider: Factory,
+    ) -> Result<ExplanationFlightWaiter, String>
+    where
+        Factory: FnOnce(Arc<Self>, String, u64) -> ProviderFuture + Send + 'static,
+        ProviderFuture: Future<Output = Result<ExplanationCard, String>> + Send + 'static,
+    {
+        self.acquire_with_authority(
+            cache_key,
+            Arc::new(|operation| {
+                operation();
+                true
+            }),
+            provider,
+        )
+    }
+
+    fn acquire_with_authority<Factory, ProviderFuture>(
+        self: &Arc<Self>,
+        cache_key: String,
+        waiter_authority: WaiterCacheAuthority,
+        provider: Factory,
+    ) -> Result<ExplanationFlightWaiter, String>
+    where
+        Factory: FnOnce(Arc<Self>, String, u64) -> ProviderFuture + Send + 'static,
+        ProviderFuture: Future<Output = Result<ExplanationCard, String>> + Send + 'static,
+    {
+        let mut state = self
+            .state
+            .lock()
+            .map_err(|_| "ExplanationCard single-flight 状态不可用。".to_string())?;
+        let waiter_id = state.next_waiter_id.checked_add(1).ok_or_else(|| {
+            "ExplanationCard single-flight waiter generation 已耗尽。".to_string()
+        })?;
+        state.next_waiter_id = waiter_id;
+        if let Some(entry) = state.entries.get_mut(&cache_key) {
+            entry.waiters.insert(waiter_id, waiter_authority);
+            return Ok(ExplanationFlightWaiter {
+                manager: Arc::clone(self),
+                cache_key,
+                flight_id: entry.flight_id,
+                waiter_id,
+                future: entry.future.clone(),
+                released: false,
+            });
+        }
+
+        let flight_id = state
+            .next_flight_id
+            .checked_add(1)
+            .ok_or_else(|| "ExplanationCard single-flight generation 已耗尽。".to_string())?;
+        state.next_flight_id = flight_id;
+        let (abort_handle, abort_registration) = AbortHandle::new_pair();
+        let manager_for_provider = Arc::clone(self);
+        let key_for_provider = cache_key.clone();
+        let future = async move {
+            match Abortable::new(
+                provider(manager_for_provider, key_for_provider, flight_id),
+                abort_registration,
+            )
+            .await
+            {
+                Ok(Ok(card)) => Ok(Arc::new(card)),
+                Ok(Err(error)) => Err(Arc::<str>::from(error)),
+                Err(_) => Err(Arc::<str>::from(cancelled_request_error())),
+            }
+        }
+        .boxed()
+        .shared();
+        state.entries.insert(
+            cache_key.clone(),
+            InFlightEntry {
+                flight_id,
+                waiters: HashMap::from([(waiter_id, waiter_authority)]),
+                abort_handle,
+                future: future.clone(),
+            },
+        );
+        drop(state);
+
+        let manager_for_cleanup = Arc::clone(self);
+        let key_for_cleanup = cache_key.clone();
+        let cleanup_future = future.clone();
+        tauri::async_runtime::spawn(async move {
+            let _ = cleanup_future.await;
+            manager_for_cleanup.finish(&key_for_cleanup, flight_id);
+        });
+
+        Ok(ExplanationFlightWaiter {
+            manager: Arc::clone(self),
+            cache_key,
+            flight_id,
+            waiter_id,
+            future,
+            released: false,
+        })
+    }
+
+    fn has_waiters(&self, cache_key: &str, flight_id: u64) -> bool {
+        self.state
+            .lock()
+            .ok()
+            .and_then(|state| {
+                state
+                    .entries
+                    .get(cache_key)
+                    .map(|entry| entry.flight_id == flight_id && !entry.waiters.is_empty())
+            })
+            .unwrap_or(false)
+    }
+
+    fn commit_if_current_waiter(
+        &self,
+        cache_key: &str,
+        flight_id: u64,
+        mut operation: impl FnMut(),
+    ) -> bool {
+        let state = match self.state.lock() {
+            Ok(state) => state,
+            Err(_) => return false,
+        };
+        let Some(entry) = state
+            .entries
+            .get(cache_key)
+            .filter(|entry| entry.flight_id == flight_id)
+        else {
+            return false;
+        };
+        for authority in entry.waiters.values() {
+            if authority(&mut operation) {
+                return true;
+            }
+        }
+        false
+    }
+
+    fn release(&self, cache_key: &str, flight_id: u64, waiter_id: u64) {
+        let abort_handle = self.state.lock().ok().and_then(|mut state| {
+            let entry = state.entries.get_mut(cache_key)?;
+            if entry.flight_id != flight_id {
+                return None;
+            }
+            entry.waiters.remove(&waiter_id);
+            entry
+                .waiters
+                .is_empty()
+                .then(|| state.entries.remove(cache_key))
+                .flatten()
+                .map(|entry| entry.abort_handle)
+        });
+        if let Some(abort_handle) = abort_handle {
+            abort_handle.abort();
+        }
+    }
+
+    fn finish(&self, cache_key: &str, flight_id: u64) {
+        if let Ok(mut state) = self.state.lock() {
+            let matches = state
+                .entries
+                .get(cache_key)
+                .is_some_and(|entry| entry.flight_id == flight_id);
+            if matches {
+                state.entries.remove(cache_key);
+            }
+        }
+    }
+}
+
+struct ExplanationFlightWaiter {
+    manager: Arc<ExplanationSingleFlight>,
+    cache_key: String,
+    flight_id: u64,
+    waiter_id: u64,
+    future: SharedProviderFuture,
+    released: bool,
+}
+
+impl ExplanationFlightWaiter {
+    async fn wait(mut self) -> Result<ExplanationCard, String> {
+        let result = self
+            .future
+            .clone()
+            .await
+            .map(|card| (*card).clone())
+            .map_err(|error| error.to_string());
+        self.release();
+        result
+    }
+
+    fn release(&mut self) {
+        if !self.released {
+            self.manager
+                .release(&self.cache_key, self.flight_id, self.waiter_id);
+            self.released = true;
+        }
+    }
+}
+
+impl Drop for ExplanationFlightWaiter {
+    fn drop(&mut self) {
+        self.release();
+    }
+}
+
+static EXPLANATION_SINGLE_FLIGHT: OnceLock<Arc<ExplanationSingleFlight>> = OnceLock::new();
+
+fn explanation_single_flight() -> Arc<ExplanationSingleFlight> {
+    Arc::clone(EXPLANATION_SINGLE_FLIGHT.get_or_init(|| Arc::new(Default::default())))
 }
 
 fn validate_request_key(request_key: &str) -> Result<(), String> {
@@ -245,10 +501,13 @@ pub async fn create_explanation_card(
 ) -> Result<ExplanationCard, String> {
     let authority = explanation_request_authority();
     let (request, abort_registration) = authority.register(request_scope, request_key)?;
-    let provider_request =
-        create_explanation_card_for_input(&app, &input, minimal_context_text.as_deref(), || {
-            request.is_current()
-        });
+    let request = Arc::new(request);
+    let provider_request = resolve_explanation_card(
+        app.clone(),
+        input.clone(),
+        minimal_context_text,
+        cache_authority_for_request(Arc::clone(&request)),
+    );
     let card = Abortable::new(provider_request, abort_registration)
         .await
         .map_err(|_| cancelled_request_error())??;
@@ -259,6 +518,66 @@ pub async fn create_explanation_card(
     })?;
 
     Ok(card)
+}
+
+async fn resolve_explanation_card(
+    app: tauri::AppHandle,
+    input: CaptureInput,
+    minimal_context_text: Option<String>,
+    waiter_authority: WaiterCacheAuthority,
+) -> Result<ExplanationCard, String> {
+    let spec = ExplanationCacheSpec::new(
+        &input,
+        minimal_context_text.as_deref(),
+        configured_model(),
+        EXPLANATION_MODEL_REVISION,
+        EXPLANATION_PROMPT_VERSION,
+    )?;
+    let single_flight = explanation_single_flight();
+    let cache_key = spec.cache_key.clone();
+    let provider_app = app.clone();
+    let provider_spec = spec.clone();
+    let provider_input = CaptureInput {
+        query_text: input.query_text.clone(),
+        context_text: spec.minimal_context_text.clone(),
+        source_type: input.source_type.clone(),
+        source_app: None,
+    };
+    let waiter = single_flight.acquire_with_authority(
+        cache_key,
+        waiter_authority,
+        move |manager, flight_cache_key, flight_id| async move {
+            if let Some(card) =
+                explanation_cache::lookup_for_app(&provider_app, &provider_spec, &provider_input)
+                    .await
+            {
+                return Ok(card);
+            }
+            let card = create_explanation_card_for_input(
+                &provider_app,
+                &provider_input,
+                provider_spec.minimal_context_text.as_deref(),
+                || manager.has_waiters(&flight_cache_key, flight_id),
+            )
+            .await?;
+            let cache_written =
+                manager.commit_if_current_waiter(&flight_cache_key, flight_id, || {
+                    explanation_cache::upsert_for_app_fail_open(
+                        &provider_app,
+                        &provider_spec,
+                        &provider_input,
+                        &card,
+                    );
+                });
+            if !cache_written {
+                return Err(cancelled_request_error());
+            }
+            explanation_cache::schedule_maintenance_for_app(&provider_app);
+            Ok(card)
+        },
+    )?;
+    let shared_card = waiter.wait().await?;
+    explanation_cache::rebind_and_validate_card(&input, &spec, shared_card)
 }
 
 #[tauri::command]
@@ -437,8 +756,6 @@ fn extract_content(response: DeepSeekChatResponse) -> Result<String, String> {
 struct ModelCaptureInput<'a> {
     query_text: &'a str,
     context_text: Option<&'a str>,
-    source_type: &'a SourceType,
-    source_app: Option<&'a str>,
 }
 
 fn build_user_prompt(
@@ -448,8 +765,6 @@ fn build_user_prompt(
     let model_input = ModelCaptureInput {
         query_text: &input.query_text,
         context_text: minimal_context_text,
-        source_type: &input.source_type,
-        source_app: input.source_app.as_deref(),
     };
     let input_json = serde_json::to_string_pretty(&model_input)
         .map_err(|error| format!("CaptureInput 无法序列化为 JSON：{error}"))?;
@@ -585,6 +900,35 @@ mod tests {
     use crate::deepseek_client::post_chat_completion_for_test;
     use crate::explanation::SourceType;
     use std::path::PathBuf;
+    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+    use std::task::{Poll, Waker};
+
+    #[derive(Default)]
+    struct AsyncGate {
+        open: AtomicBool,
+        waker: Mutex<Option<Waker>>,
+    }
+
+    impl AsyncGate {
+        async fn wait(&self) {
+            futures_util::future::poll_fn(|context| {
+                if self.open.load(Ordering::Acquire) {
+                    Poll::Ready(())
+                } else {
+                    *self.waker.lock().unwrap() = Some(context.waker().clone());
+                    Poll::Pending
+                }
+            })
+            .await;
+        }
+
+        fn open(&self) {
+            self.open.store(true, Ordering::Release);
+            if let Some(waker) = self.waker.lock().unwrap().take() {
+                waker.wake();
+            }
+        }
+    }
 
     fn input(query_text: &str, context_text: Option<&str>) -> CaptureInput {
         CaptureInput {
@@ -593,6 +937,29 @@ mod tests {
             source_type: SourceType::Manual,
             source_app: None,
         }
+    }
+
+    fn shared_test_card() -> ExplanationCard {
+        parse_explanation_card_content(
+            &input("market", None),
+            r#"{
+              "queryType": "word",
+              "sourceText": "market",
+              "learningTargetText": "market",
+              "headword": "market",
+              "partOfSpeech": null,
+              "phonetic": null,
+              "basicMeanings": ["市场"],
+              "contextMeaning": null,
+              "sourceSentence": null,
+              "sourceSentenceZh": null,
+              "phrases": [],
+              "nearMeanings": [],
+              "examples": [],
+              "reviewHint": null
+            }"#,
+        )
+        .unwrap()
     }
 
     fn load_project_env_for_live_test() {
@@ -795,11 +1162,9 @@ mod tests {
         assert!(!prompt.contains("Original full paragraph"));
         let query_position = prompt.find("\"queryText\"").unwrap();
         let context_position = prompt.find("\"contextText\"").unwrap();
-        let source_type_position = prompt.find("\"sourceType\"").unwrap();
-        let source_app_position = prompt.find("\"sourceApp\"").unwrap();
         assert!(query_position < context_position);
-        assert!(context_position < source_type_position);
-        assert!(source_type_position < source_app_position);
+        assert!(!prompt.contains("\"sourceType\""));
+        assert!(!prompt.contains("\"sourceApp\""));
     }
 
     #[test]
@@ -1008,6 +1373,274 @@ mod tests {
 
         assert_eq!(error, "ExplanationCard 请求 generation 已耗尽。");
         assert!(active_request.is_current());
+    }
+
+    #[test]
+    fn single_flight_calls_provider_once_and_leader_cancel_keeps_waiter_alive() {
+        tauri::async_runtime::block_on(async {
+            let manager = Arc::new(ExplanationSingleFlight::default());
+            let gate = Arc::new(AsyncGate::default());
+            let provider_calls = Arc::new(AtomicUsize::new(0));
+            let usage_writes = Arc::new(AtomicUsize::new(0));
+
+            let leader_gate = Arc::clone(&gate);
+            let leader_calls = Arc::clone(&provider_calls);
+            let leader_usage = Arc::clone(&usage_writes);
+            let leader = manager
+                .acquire("same-key".to_string(), move |_, _, _| async move {
+                    leader_calls.fetch_add(1, Ordering::SeqCst);
+                    leader_gate.wait().await;
+                    leader_usage.fetch_add(1, Ordering::SeqCst);
+                    Ok(shared_test_card())
+                })
+                .unwrap();
+            let waiter = manager
+                .acquire("same-key".to_string(), |_, _, _| async move {
+                    panic!("same key must not start a second provider")
+                })
+                .unwrap();
+
+            drop(leader);
+            assert!(manager.has_waiters("same-key", waiter.flight_id));
+            gate.open();
+            let card = waiter.wait().await.unwrap();
+            assert_eq!(card.source_text(), "market");
+            assert_eq!(provider_calls.load(Ordering::SeqCst), 1);
+            assert_eq!(usage_writes.load(Ordering::SeqCst), 1);
+        });
+    }
+
+    #[test]
+    fn same_scope_fast_replacement_joins_before_cancelled_waiter_drops() {
+        tauri::async_runtime::block_on(async {
+            let manager = Arc::new(ExplanationSingleFlight::default());
+            let authority = Arc::new(ExplanationRequestAuthority::default());
+            let lookup_gate = Arc::new(AsyncGate::default());
+            let provider_calls = Arc::new(AtomicUsize::new(0));
+            let cache_writes = Arc::new(AtomicUsize::new(0));
+            let (request_a, abort_a) = authority
+                .register(
+                    ExplanationRequestScope::Anchored,
+                    "anchored:same:1".to_string(),
+                )
+                .unwrap();
+            let request_a = Arc::new(request_a);
+            let shared_lookup_gate = Arc::clone(&lookup_gate);
+            let shared_calls = Arc::clone(&provider_calls);
+            let shared_writes = Arc::clone(&cache_writes);
+            let waiter_a = manager
+                .acquire_with_authority(
+                    "same-cache-key".to_string(),
+                    cache_authority_for_request(Arc::clone(&request_a)),
+                    move |manager, key, flight_id| async move {
+                        shared_lookup_gate.wait().await;
+                        shared_calls.fetch_add(1, Ordering::SeqCst);
+                        let committed = manager.commit_if_current_waiter(&key, flight_id, || {
+                            shared_writes.fetch_add(1, Ordering::SeqCst);
+                        });
+                        if !committed {
+                            return Err(cancelled_request_error());
+                        }
+                        Ok(shared_test_card())
+                    },
+                )
+                .unwrap();
+
+            let (request_b, _) = authority
+                .register(
+                    ExplanationRequestScope::Anchored,
+                    "anchored:same:2".to_string(),
+                )
+                .unwrap();
+            let request_b = Arc::new(request_b);
+            // resolve 的关键不变量：B 在第一次 await 之前同步 acquire，
+            // 因而 A 的 abort wake 尚未处理时 flight 已有两个 waiter。
+            let waiter_b = manager
+                .acquire_with_authority(
+                    "same-cache-key".to_string(),
+                    cache_authority_for_request(Arc::clone(&request_b)),
+                    |_, _, _| async move {
+                        panic!("same-scope replacement must join the existing flight")
+                    },
+                )
+                .unwrap();
+            assert!(manager.has_waiters("same-cache-key", waiter_b.flight_id));
+
+            let aborted_a = Abortable::new(waiter_a.wait(), abort_a).await;
+            assert!(aborted_a.is_err());
+            assert!(manager.has_waiters("same-cache-key", waiter_b.flight_id));
+            lookup_gate.open();
+            let card = waiter_b.wait().await.unwrap();
+            let saves = std::cell::Cell::new(0_u8);
+            request_b
+                .commit_if_current(|| {
+                    let _ = card;
+                    saves.set(saves.get() + 1);
+                    Ok(())
+                })
+                .unwrap();
+            assert_eq!(provider_calls.load(Ordering::SeqCst), 1);
+            assert_eq!(cache_writes.load(Ordering::SeqCst), 1);
+            assert_eq!(saves.get(), 1);
+        });
+    }
+
+    #[test]
+    fn authority_cancel_before_waiter_drop_prevents_cache_commit() {
+        tauri::async_runtime::block_on(async {
+            let manager = Arc::new(ExplanationSingleFlight::default());
+            let authority = Arc::new(ExplanationRequestAuthority::default());
+            let provider_gate = Arc::new(AsyncGate::default());
+            let cache_writes = Arc::new(AtomicUsize::new(0));
+            let (request, _) = authority
+                .register(
+                    ExplanationRequestScope::Anchored,
+                    "anchored:linearized-cancel".to_string(),
+                )
+                .unwrap();
+            let request = Arc::new(request);
+            let gate_for_provider = Arc::clone(&provider_gate);
+            let writes_for_provider = Arc::clone(&cache_writes);
+            let waiter = manager
+                .acquire_with_authority(
+                    "linearized-cache-key".to_string(),
+                    cache_authority_for_request(Arc::clone(&request)),
+                    move |manager, key, flight_id| async move {
+                        gate_for_provider.wait().await;
+                        let committed = manager.commit_if_current_waiter(&key, flight_id, || {
+                            writes_for_provider.fetch_add(1, Ordering::SeqCst);
+                        });
+                        if !committed {
+                            return Err(cancelled_request_error());
+                        }
+                        Ok(shared_test_card())
+                    },
+                )
+                .unwrap();
+
+            authority.cancel(
+                ExplanationRequestScope::Anchored,
+                Some("anchored:linearized-cancel"),
+            );
+            assert!(!request.is_current());
+            // 故意保留 waiter，不依赖外层 Abortable 先调度到 Drop。
+            assert!(manager.has_waiters("linearized-cache-key", waiter.flight_id));
+            provider_gate.open();
+            assert_eq!(
+                waiter.wait().await.unwrap_err(),
+                EXPLANATION_REQUEST_CANCELLED
+            );
+            assert_eq!(cache_writes.load(Ordering::SeqCst), 0);
+        });
+    }
+
+    #[test]
+    fn cancelled_waiter_cannot_save_while_valid_waiter_saves_shared_result() {
+        tauri::async_runtime::block_on(async {
+            let manager = Arc::new(ExplanationSingleFlight::default());
+            let authority = Arc::new(ExplanationRequestAuthority::default());
+            let gate = Arc::new(AsyncGate::default());
+            let provider_calls = Arc::new(AtomicUsize::new(0));
+            let (cancelled_request, _) = authority
+                .register(
+                    ExplanationRequestScope::Anchored,
+                    "anchored:cancelled".to_string(),
+                )
+                .unwrap();
+            let (valid_request, _) = authority
+                .register(ExplanationRequestScope::Manual, "manual:valid".to_string())
+                .unwrap();
+
+            let provider_gate = Arc::clone(&gate);
+            let calls = Arc::clone(&provider_calls);
+            let cancelled_waiter = manager
+                .acquire("shared-key".to_string(), move |_, _, _| async move {
+                    calls.fetch_add(1, Ordering::SeqCst);
+                    provider_gate.wait().await;
+                    Ok(shared_test_card())
+                })
+                .unwrap();
+            let valid_waiter = manager
+                .acquire("shared-key".to_string(), |_, _, _| async move {
+                    panic!("shared waiter must not start another provider")
+                })
+                .unwrap();
+
+            authority.cancel(
+                ExplanationRequestScope::Anchored,
+                Some("anchored:cancelled"),
+            );
+            drop(cancelled_waiter);
+            gate.open();
+            let shared_card = valid_waiter.wait().await.unwrap();
+            let save_count = std::cell::Cell::new(0_u8);
+            assert_eq!(
+                cancelled_request
+                    .commit_if_current(|| {
+                        save_count.set(save_count.get() + 1);
+                        Ok(())
+                    })
+                    .unwrap_err(),
+                EXPLANATION_REQUEST_CANCELLED
+            );
+            valid_request
+                .commit_if_current(|| {
+                    let _ = shared_card;
+                    save_count.set(save_count.get() + 1);
+                    Ok(())
+                })
+                .unwrap();
+            assert_eq!(save_count.get(), 1);
+            assert_eq!(provider_calls.load(Ordering::SeqCst), 1);
+        });
+    }
+
+    #[test]
+    fn failed_or_fully_cancelled_flight_does_not_leave_a_permanent_entry() {
+        tauri::async_runtime::block_on(async {
+            let manager = Arc::new(ExplanationSingleFlight::default());
+            let failed = manager
+                .acquire("retry-key".to_string(), |_, _, _| async move {
+                    Err("provider failed".to_string())
+                })
+                .unwrap();
+            assert_eq!(failed.wait().await.unwrap_err(), "provider failed");
+
+            let retry = manager
+                .acquire("retry-key".to_string(), |_, _, _| async move {
+                    Ok(shared_test_card())
+                })
+                .unwrap();
+            assert_eq!(retry.wait().await.unwrap().source_text(), "market");
+
+            let provider_started = Arc::new(AsyncGate::default());
+            let provider_finish = Arc::new(AsyncGate::default());
+            let cache_writes = Arc::new(AtomicUsize::new(0));
+            let started_for_provider = Arc::clone(&provider_started);
+            let finish_for_provider = Arc::clone(&provider_finish);
+            let writes_for_provider = Arc::clone(&cache_writes);
+            let cancelled = manager
+                .acquire("cancel-key".to_string(), move |_, _, _| async move {
+                    started_for_provider.open();
+                    finish_for_provider.wait().await;
+                    writes_for_provider.fetch_add(1, Ordering::SeqCst);
+                    Ok(shared_test_card())
+                })
+                .unwrap();
+            let flight_id = cancelled.flight_id;
+            provider_started.wait().await;
+            drop(cancelled);
+            provider_finish.open();
+            assert!(!manager.has_waiters("cancel-key", flight_id));
+            assert_eq!(cache_writes.load(Ordering::SeqCst), 0);
+            let replacement = manager
+                .acquire("cancel-key".to_string(), |_, _, _| async move {
+                    Ok(shared_test_card())
+                })
+                .unwrap();
+            assert_ne!(replacement.flight_id, flight_id);
+            assert_eq!(replacement.wait().await.unwrap().source_text(), "market");
+        });
     }
 
     #[test]

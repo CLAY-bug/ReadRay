@@ -147,6 +147,15 @@ impl ExplanationCard {
         }
     }
 
+    pub(crate) fn set_source_text(&mut self, value: String) {
+        match self {
+            Self::Word { source_text, .. }
+            | Self::Phrase { source_text, .. }
+            | Self::Sentence { source_text, .. }
+            | Self::Paragraph { source_text, .. } => *source_text = value,
+        }
+    }
+
     pub fn learning_target_text(&self) -> &str {
         match self {
             Self::Word {

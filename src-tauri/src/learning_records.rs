@@ -12,7 +12,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use tauri::{AppHandle, Manager};
 
 const DATABASE_FILE_NAME: &str = "readray.sqlite3";
-const DATABASE_SCHEMA_VERSION: i64 = 17;
+const DATABASE_SCHEMA_VERSION: i64 = 18;
 const REVIEW_DAY_UNIX_MS: i64 = 24 * 60 * 60 * 1_000;
 pub const EXPLANATION_CARD_SCHEMA_VERSION: i64 = 2;
 const DEFAULT_PAGE: u32 = 1;
@@ -608,6 +608,26 @@ CREATE INDEX idx_learning_record_targets_normalized
   ON learning_record_targets(normalized_target_text, learning_record_id);
 "#;
 
+const MIGRATION_18: &str = r#"
+CREATE TABLE explanation_card_cache (
+  cache_key TEXT PRIMARY KEY,
+  normalized_source_text TEXT NOT NULL,
+  query_direction TEXT NOT NULL CHECK (query_direction IN ('en_to_zh', 'zh_to_en')),
+  query_type TEXT NOT NULL CHECK (query_type IN ('word', 'phrase', 'sentence', 'paragraph')),
+  minimal_context_fingerprint TEXT NOT NULL,
+  model_id TEXT NOT NULL,
+  model_revision TEXT NOT NULL,
+  prompt_version TEXT NOT NULL,
+  schema_version INTEGER NOT NULL,
+  explanation_card_json TEXT NOT NULL,
+  created_at_unix_ms INTEGER NOT NULL,
+  last_accessed_at_unix_ms INTEGER NOT NULL
+);
+
+CREATE INDEX idx_explanation_card_cache_maintenance
+  ON explanation_card_cache(last_accessed_at_unix_ms, created_at_unix_ms, cache_key);
+"#;
+
 const MIGRATIONS: &[(i64, &str)] = &[
     (1, MIGRATION_1),
     (2, MIGRATION_2),
@@ -625,7 +645,8 @@ const MIGRATIONS: &[(i64, &str)] = &[
     (14, MIGRATION_14),
     (15, MIGRATION_15),
     (16, MIGRATION_16),
-    (DATABASE_SCHEMA_VERSION, MIGRATION_17),
+    (17, MIGRATION_17),
+    (DATABASE_SCHEMA_VERSION, MIGRATION_18),
 ];
 
 #[derive(Clone, Debug, Serialize)]
@@ -3120,6 +3141,79 @@ mod tests {
         assert_eq!(page.records[0].learning_target_text, "legacy target");
         assert_eq!(page.records[0].query_direction, QueryDirection::EnToZh);
         assert!(upgraded.get(42).unwrap().is_none());
+        drop(upgraded);
+        fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn version_seventeen_database_upgrades_to_explanation_cache_v18() {
+        let (directory, path) = test_database_path();
+        fs::create_dir_all(&directory).unwrap();
+        let connection = Connection::open(&path).unwrap();
+        connection
+            .execute_batch(
+                "CREATE TABLE schema_migrations (
+                   version INTEGER PRIMARY KEY,
+                   applied_at_unix_ms INTEGER NOT NULL
+                 );",
+            )
+            .unwrap();
+        for &(version, sql) in MIGRATIONS.iter().take(17) {
+            connection.execute_batch(sql).unwrap();
+            connection
+                .execute(
+                    "INSERT INTO schema_migrations (version, applied_at_unix_ms)
+                     VALUES (?1, ?2)",
+                    params![version, version * 100],
+                )
+                .unwrap();
+        }
+        drop(connection);
+
+        let upgraded = open_database(&path).unwrap();
+        let version: i64 = upgraded
+            .query_row("SELECT MAX(version) FROM schema_migrations", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        let cache_table_exists: bool = upgraded
+            .query_row(
+                "SELECT EXISTS(
+                   SELECT 1 FROM sqlite_master
+                   WHERE type = 'table' AND name = 'explanation_card_cache'
+                 )",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        let cache_columns: Vec<String> = {
+            let mut statement = upgraded
+                .prepare("PRAGMA table_info(explanation_card_cache)")
+                .unwrap();
+            statement
+                .query_map([], |row| row.get(1))
+                .unwrap()
+                .map(Result::unwrap)
+                .collect()
+        };
+        assert_eq!(version, DATABASE_SCHEMA_VERSION);
+        assert!(cache_table_exists);
+        for required in [
+            "cache_key",
+            "normalized_source_text",
+            "query_direction",
+            "query_type",
+            "minimal_context_fingerprint",
+            "model_id",
+            "model_revision",
+            "prompt_version",
+            "schema_version",
+            "explanation_card_json",
+            "created_at_unix_ms",
+            "last_accessed_at_unix_ms",
+        ] {
+            assert!(cache_columns.iter().any(|column| column == required));
+        }
         drop(upgraded);
         fs::remove_dir_all(directory).unwrap();
     }

@@ -13,6 +13,7 @@ pub mod deepseek_client;
 pub mod deepseek_explanation;
 pub mod desktop_lifecycle;
 pub mod explanation;
+mod explanation_cache;
 pub mod learning_records;
 pub mod model_usage;
 pub mod quick_ai;

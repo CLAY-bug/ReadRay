@@ -4,8 +4,8 @@ project:
   repo_root: "."
 
 meta:
-  version: "1.60"
-  last_updated: "2026-08-11"
+  version: "1.61"
+  last_updated: "2026-08-12"
   updated_by: "Codex"
   source_of_truth: "docs/RESOURCE_MAP.yml"
   language: "zh-CN"
@@ -97,7 +97,7 @@ core_docs:
       - "实现或验收划词解释速度优化。"
       - "排查 DeepSeek reasoning 报错、划词长等待或迟到结果落库。"
       - "修复中文查询进入记忆、今天或复习页面。"
-    notes: "严格按任务 1～5 单步执行；任务 1～3 已通过用户真实使用验收；任务 3 中文反查、规范英文学习目标与 SQLite v17 投影已正式完成并合回主项目；任务 4～5 未开始。已确认 ExplanationCard 关闭 thinking、纯中文直接译英文、不做质量/Provider 对照测评、不增加深入理解、不维护滚动会话。"
+    notes: "严格按任务 1～5 单步执行；任务 1～3 已通过用户真实使用验收；任务 4 SQLite v18 精确缓存与 single-flight 已通过父任务技术验收并合回主项目，等待用户真实验收；任务 5 未开始。已确认 ExplanationCard 关闭 thinking、纯中文直接译英文、不做质量/Provider 对照测评、不增加深入理解、不维护滚动会话。"
     risk: "不得照搬整页翻译批处理或 Google 非公开接口，不得把 queryText 覆盖成译文；原始学习事件保持追加式，规范英文目标通过正式持久化投影提供给页面。"
 
   - path: "docs/THEME_PROTOCOL.md"
@@ -952,7 +952,7 @@ source_areas:
       - "调整 create_explanation_card command。"
       - "排查 DeepSeek 结构化 JSON 输出、serde 解析或 validator 失败。"
       - "将 ExplanationCard 接入 compact UI 前的 Rust 层查询链路。"
-    notes: "command 保留原始 CaptureInput，并单独接收 minimalContext、requestScope 与 requestKey；本地判断 queryType/queryDirection 后使用四类方向化 schema Prompt。enToZh 的 learningTargetText 由 Rust 覆盖模型改写；zhToEn 的模型目标严格验证并对齐四类主结果，sourceText 始终由原始 query 覆盖。请求继续使用 response_format=json_object、thinking disabled、10 秒总超时、一次瞬态重试与既有取消/generation 权威。"
+    notes: "command 保留原始 CaptureInput，并单独接收 minimalContext、requestScope 与 requestKey；本地判断 queryType/queryDirection 后使用四类方向化 schema Prompt。enToZh 的 learningTargetText 由 Rust 覆盖模型改写；zhToEn 的模型目标严格验证并对齐四类主结果，sourceText 始终由原始 query 覆盖。请求继续使用 response_format=json_object、thinking disabled、10 秒总超时、一次瞬态重试与既有取消/generation 权威；同 cache key 在首次 await 前加入 single-flight，共享 SQLite lookup/provider/usage/cache upsert，但每个 waiter 独立核对 authority 和保存学习事件。"
     risk: "不要在日志、文档或提交文件中写入真实 DEEPSEEK_API_KEY；保存失败必须返回清晰错误，不能伪装为查询成功。"
 
   - path: "src-tauri/src/deepseek_client.rs"
@@ -963,6 +963,15 @@ source_areas:
       - "调整共享请求、HTTP 状态或响应结构错误分类。"
     notes: "ExplanationCard、Quick AI、写作分析/问答、复习英文制卡和设置页官方余额 GET 共用该传输与 HTTP 错误边界；默认模型仍为 deepseek-v4-flash。ExplanationCard 的 policy 扩展点可在 Provider 响应后、usage 前后执行 requestKey 权威检查，取消不作为模型/schema/网络错误；其他调用保持原行为。四类正式 chat/completions 成功响应先严格校验 prompt/completion/total usage，再尽力写入 SQLite，随后才反序列化业务结构；统计写入失败不改变模型结果。候选 Key 验证使用无统计的显式 Key 边界，余额 GET 也不进入统计。运行时优先使用 Windows 凭据管理器中的 Key；不记录或返回 API key。"
     risk: "这里只放共享传输和 usage 响应边界，不放 ExplanationCard、Quick AI 或写作业务 prompt；不得因统计写入失败改写模型调用结果。"
+
+  - path: "src-tauri/src/explanation_cache.rs"
+    purpose: "ExplanationCard SQLite v18 精确缓存 identity、命中重绑校验、TTL/容量后台维护和 fail-open 边界。"
+    status: "active"
+    read_when:
+      - "调整划词解释缓存键、TTL、容量或命中行为。"
+      - "排查相同查询重启后未命中、上下文串义、损坏缓存或后台淘汰竞态。"
+    notes: "cache key 使用字段顺序固定的 canonical JSON，覆盖保留换行语义的 normalizedSourceText、原始 query 决定的方向/类型、完整 minimalContext fingerprint、模型 ID/revision、Prompt/schema version；sourceApp/sourceType 不进入。命中按当前请求重绑 sourceText/learningTargetText 并重新验证。TTL 7 天、容量 256 条；关键路径只做必要 upsert，淘汰、touch 和条件删除在独立 blocking 维护中 best-effort 执行。"
+    risk: "不得缓存未通过当前 validator 的卡片、错误、超时或取消结果；后台旧任务必须使用行 token/单调更新，不能删除或倒退新 upsert。"
 
   - path: "src-tauri/src/model_usage.rs"
     purpose: "ReadRay 四类模型使用量的 SQLite 写入、范围聚合和 Tauri command。"
@@ -1040,7 +1049,7 @@ source_areas:
       - "调整学习记录 schema、迁移或存储字段。"
       - "实现学习记录窗口、搜索、筛选、单条读取或删除。"
       - "排查自动保存或应用数据目录中的 SQLite 问题。"
-    notes: "使用 rusqlite bundled；v1～v16 保持既有学习记录、Quick AI、写作、usage、偏好、主题、来源与复习 schema。v17 追加 learning_record_targets 伴生投影，保存新事件时在同一事务写入 queryDirection/learningTargetText；升级只为可靠旧英文 query 确定性回填，旧中文不调用模型、不猜译文且原始事件继续保留。list/search/get/Today 在 SQL 层联结投影，分页与计数一致；搜索匹配英文目标及原始 query/context。"
+    notes: "使用 rusqlite bundled；v1～v16 保持既有学习记录、Quick AI、写作、usage、偏好、主题、来源与复习 schema。v17 追加 learning_record_targets 伴生投影，保存新事件时在同一事务写入 queryDirection/learningTargetText；v18 追加 explanation_card_cache，缓存 repository 由 explanation_cache.rs 负责。升级只为可靠旧英文 query 确定性回填，旧中文不调用模型、不猜译文且原始事件继续保留。list/search/get/Today 在 SQL 层联结投影，分页与计数一致；搜索匹配英文目标及原始 query/context。"
     risk: "learning_records 继续只做不可修改的原始事件，不做去重或覆盖；复习状态必须留在独立表，新增 schema 继续追加 migration，不能改写已发布迁移。"
 
   - path: "src-tauri/src/review.rs"
