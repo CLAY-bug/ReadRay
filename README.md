@@ -35,8 +35,8 @@ ReadRay 是一个 Windows 优先、本地数据优先的英语学习 Agent。它
 
 <table>
   <tr>
-    <td width="50%"><img src="assets/readme/selection-paragraph.png" alt="段落划词解释"></td>
-    <td width="50%"><img src="assets/readme/selection-word.png" alt="单词划词查询"></td>
+    <td width="50%" align="center"><img src="assets/readme/selection-paragraph.png" width="600" height="480" alt="段落划词解释"></td>
+    <td width="50%" align="center"><img src="assets/readme/selection-word.png" width="600" height="480" alt="单词划词查询"></td>
   </tr>
   <tr>
     <td align="center">在 Obsidian 中解释真实阅读段落</td>
@@ -54,8 +54,8 @@ ReadRay 是一个 Windows 优先、本地数据优先的英语学习 Agent。它
 
 <table>
   <tr>
-    <td width="50%"><img src="assets/readme/quick-search-result.png" alt="ReadRay 快捷单词查询结果"></td>
-    <td width="50%"><img src="assets/readme/quick-ai.png" alt="ReadRay Quick AI 多轮对话"></td>
+    <td width="50%" align="center"><img src="assets/readme/quick-search-result.png" width="600" height="400" alt="ReadRay 快捷单词查询结果"></td>
+    <td width="50%" align="center"><img src="assets/readme/quick-ai.png" width="600" height="400" alt="ReadRay Quick AI 多轮对话"></td>
   </tr>
   <tr>
     <td align="center">快捷查询：释义、搭配、辨析和例句</td>
@@ -69,8 +69,8 @@ ReadRay 主应用把查询之后的学习过程连接起来：今天页汇总本
 
 <table>
   <tr>
-    <td width="50%"><img src="assets/readme/today.png" alt="ReadRay 今天页面"></td>
-    <td width="50%"><img src="assets/readme/writing.png" alt="ReadRay 写作页面与写作辅助侧栏"></td>
+    <td width="50%" align="center"><img src="assets/readme/today.png" width="600" height="480" alt="ReadRay 今天页面"></td>
+    <td width="50%" align="center"><img src="assets/readme/writing.png" width="600" height="480" alt="ReadRay 写作页面与写作辅助侧栏"></td>
   </tr>
   <tr>
     <td align="center"><strong>今天</strong>：查看当天学习概况并快速返回最近内容</td>
@@ -82,8 +82,8 @@ ReadRay 主应用把查询之后的学习过程连接起来：今天页汇总本
 
 <table>
   <tr>
-    <td width="50%"><img src="assets/readme/memory.png" alt="ReadRay 记忆页面"></td>
-    <td width="50%"><img src="assets/readme/review.png" alt="ReadRay 复习页面"></td>
+    <td width="50%" align="center"><img src="assets/readme/memory.png" width="600" height="480" alt="ReadRay 记忆页面"></td>
+    <td width="50%" align="center"><img src="assets/readme/review.png" width="600" height="480" alt="ReadRay 复习页面"></td>
   </tr>
   <tr>
     <td align="center"><strong>记忆</strong>：按单词、短语、句子和段落检索学习记录</td>
