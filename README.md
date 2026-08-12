@@ -10,6 +10,7 @@
   <img alt="Platform" src="https://img.shields.io/badge/platform-Windows-0078d4">
   <img alt="Desktop" src="https://img.shields.io/badge/desktop-Tauri%202-24c8db">
   <img alt="Local first" src="https://img.shields.io/badge/data-local--first-2f7d68">
+  <img alt="License" src="https://img.shields.io/badge/license-MIT-2f7d68">
 </p>
 
 <p align="center">
@@ -182,3 +183,7 @@ ReadRay 当前处于积极开发的 **Alpha** 阶段，应用版本为 `0.1.0`�
 ReadRay 目前由个人维护，欢迎通过 Issue 提交缺陷、体验反馈和功能建议，也欢迎提交范围清晰、带有验证证据的 Pull Request。
 
 在进行较大改动前，建议先通过 Issue 说明目标、使用场景和预期行为，以便确认功能边界与现有扩展点。
+
+## 许可证
+
+ReadRay 基于 [MIT License](LICENSE) 开源。
