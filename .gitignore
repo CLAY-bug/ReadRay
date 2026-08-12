@@ -30,3 +30,7 @@ src-tauri/target
 
 #design
 design-open-design
+
+# 本地比赛资料（不进入公开仓库）
+/resource/
+/scripts/restore_competition_resources.py

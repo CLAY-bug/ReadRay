@@ -1,7 +1,7 @@
 # ReadRay 划词翻译速度优化任务书
 
 最后更新：2026-08-12
-状态：实施中；任务 1～3 已通过真实使用验收；任务 4 已通过父任务技术验收并合回主项目，等待用户真实验收；任务 5 未开始
+状态：实施中；任务 1～4 已通过真实使用验收；任务 5 未开始
 
 ## 目标
 
@@ -219,9 +219,9 @@ Ctrl+Alt+U
 
 ## 任务 4：SQLite 精确缓存与 single-flight
 
-状态：已通过父任务技术验收并合回主项目，等待用户真实验收
+状态：已完成父任务技术验收、合回主项目和用户真实使用验收（2026-08-12）
 
-验证边界：ExplanationCard cache/migration 聚焦测试 10 项通过；ExplanationCard parser、Prompt、请求权威和 single-flight 聚焦测试 25 项通过，1 项真实 DeepSeek 联网测试按既有规则 ignored；learning_records migration/事务/查询 26 项、DeepSeek client/usage 17 项通过；`cargo fmt --check`、`cargo check`、RESOURCE_MAP YAML 解析与 `git diff --check` 通过。父任务另独立复跑取消线性化、迟到维护竞态和 v17→v18 三项关键回归，均通过。未运行全量测试、前端测试/build、ignored 联网测试或真实 Tauri/SQLite/DeepSeek；前端未改动。
+验证边界：ExplanationCard cache/migration 聚焦测试 10 项通过；ExplanationCard parser、Prompt、请求权威和 single-flight 聚焦测试 25 项通过，1 项真实 DeepSeek 联网测试按既有规则 ignored；learning_records migration/事务/查询 26 项、DeepSeek client/usage 17 项通过；`cargo fmt --check`、`cargo check`、RESOURCE_MAP YAML 解析与 `git diff --check` 通过。父任务另独立复跑取消线性化、迟到维护竞态和 v17→v18 三项关键回归，均通过。未运行全量测试、前端测试/build 或 ignored 联网测试；前端未改动。用户已完成真实使用验收并确认任务 4 收口。
 
 实现结果：SQLite v18 新增 `explanation_card_cache`，精确 identity 使用字段顺序固定的 canonical JSON，覆盖保留换行语义的 `normalizedSourceText`、原始 query 的 `queryDirection/queryType`、完整最小上下文 canonical fingerprint、模型 ID/revision、Prompt version 与 schema version；`sourceApp/sourceType` 不进入 key，也不再进入模型输入。命中项按当前请求重绑定 `sourceText` 和 `learningTargetText` 后重新验证，过期、损坏或身份不符项按 miss 处理。TTL 固定 7 天，容量 256 条；关键路径只完成必要 upsert，TTL/容量淘汰、hit touch 与损坏项删除均在独立 blocking 维护中 best-effort 执行，条件 token 和单调 touch 防止旧维护任务破坏新值。
 

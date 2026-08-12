@@ -4,7 +4,7 @@ project:
   repo_root: "."
 
 meta:
-  version: "1.61"
+  version: "1.62"
   last_updated: "2026-08-12"
   updated_by: "Codex"
   source_of_truth: "docs/RESOURCE_MAP.yml"
@@ -97,7 +97,7 @@ core_docs:
       - "实现或验收划词解释速度优化。"
       - "排查 DeepSeek reasoning 报错、划词长等待或迟到结果落库。"
       - "修复中文查询进入记忆、今天或复习页面。"
-    notes: "严格按任务 1～5 单步执行；任务 1～3 已通过用户真实使用验收；任务 4 SQLite v18 精确缓存与 single-flight 已通过父任务技术验收并合回主项目，等待用户真实验收；任务 5 未开始。已确认 ExplanationCard 关闭 thinking、纯中文直接译英文、不做质量/Provider 对照测评、不增加深入理解、不维护滚动会话。"
+    notes: "严格按任务 1～5 单步执行；任务 1～4 已通过用户真实使用验收；任务 4 SQLite v18 精确缓存与 single-flight 已完成父任务技术验收、合回主项目和用户真实使用验收；任务 5 未开始，需另行授权后方可进入。已确认 ExplanationCard 关闭 thinking、纯中文直接译英文、不做质量/Provider 对照测评、不增加深入理解、不维护滚动会话。"
     risk: "不得照搬整页翻译批处理或 Google 非公开接口，不得把 queryText 覆盖成译文；原始学习事件保持追加式，规范英文目标通过正式持久化投影提供给页面。"
 
   - path: "docs/THEME_PROTOCOL.md"
