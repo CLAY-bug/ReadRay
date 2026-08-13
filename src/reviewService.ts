@@ -713,6 +713,7 @@ function validateFeedItemState(value: unknown): ReviewFeedItemState {
 function mapFeedItem(item: ReviewFeedItem): ReviewCardModel {
   const record = item.learningRecord;
   const sourceApp = formatSourceApp(record);
+  const sourceTypeLabel = sourceTypeLabels[record.sourceType];
   const content = cardContent(item);
   return {
     feedItemId: item.id,
@@ -722,9 +723,9 @@ function mapFeedItem(item: ReviewFeedItem): ReviewCardModel {
     reasonCode: item.reasonCode,
     reason: reasonLabels[item.reasonCode],
     typeLabel: queryTypeLabels[record.queryType],
-    sourceLabel: `${sourceTypeLabels[record.sourceType]} · ${sourceApp}`,
+    sourceLabel: sourceTypeLabel === sourceApp ? sourceApp : `${sourceTypeLabel} · ${sourceApp}`,
     sourceApp,
-    sourceTypeLabel: sourceTypeLabels[record.sourceType],
+    sourceTypeLabel,
     sourceTime: formatSourceTime(record.createdAtUnixMs),
     query: cleanText(record.learningTargetText),
     ...content,

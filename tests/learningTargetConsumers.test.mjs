@@ -47,6 +47,50 @@ test("Memory 主标题使用规范英文并保留原始中文来源", () => {
   assert.notEqual(item.query, "界面");
 });
 
+function paragraphRecord(summary) {
+  const source = "ReadRay turns real reading into a continuous learning loop.";
+  const translation = "ReadRay 将真实阅读转化为持续的学习循环。";
+  return {
+    id: 91,
+    queryText: source,
+    learningTargetText: source,
+    queryDirection: "enToZh",
+    normalizedText: source.toLowerCase(),
+    queryType: "paragraph",
+    sourceType: "windows_uia",
+    sourceApp: "ChatGPT.exe",
+    contextText: source,
+    explanationCard: {
+      queryType: "paragraph",
+      sourceText: source,
+      learningTargetText: source,
+      translation,
+      summary,
+    },
+    schemaVersion: 2,
+    createdAtUnixMs: DAY_START + 2_000,
+    difficulty: null,
+  };
+}
+
+test("段落详情将原文、翻译和摘要映射为不重复的展示字段", () => {
+  const item = mapLearningRecordToMemoryItem(
+    paragraphRecord("它将真实阅读纳入持续学习流程。"),
+    NOW,
+  );
+  assert.equal(item.sentence, paragraphRecord(null).queryText);
+  assert.equal(item.definition, "ReadRay 将真实阅读转化为持续的学习循环。");
+  assert.equal(item.translation, item.definition);
+  assert.equal(item.meaning, "它将真实阅读纳入持续学习流程。");
+});
+
+test("段落摘要与翻译相同时隐藏重复的核心理解", () => {
+  const translation = "ReadRay 将真实阅读转化为持续的学习循环。";
+  const item = mapLearningRecordToMemoryItem(paragraphRecord(`  ${translation}  `), NOW);
+  assert.equal(item.meaning, "");
+  assert.equal(item.summary, translation);
+});
+
 test("Today 摘要与最近入口只展示规范英文目标", async () => {
   const service = new RepositoryTodayService({
     async getLearningSummary() {

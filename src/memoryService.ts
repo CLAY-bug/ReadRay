@@ -86,6 +86,14 @@ function cleanDisplayedSource(value?: string | null) {
     .trim();
 }
 
+function comparableDisplayText(value?: string | null) {
+  return cleanText(value).replace(/\s+/g, " ").toLocaleLowerCase();
+}
+
+function distinctDisplayText(value: string, comparedWith: string) {
+  return comparableDisplayText(value) === comparableDisplayText(comparedWith) ? "" : value;
+}
+
 function sourceApp(record: LearningRecord) {
   const app = cleanText(record.sourceApp).replace(/\.exe$/i, "");
   return app || sourceTypeLabels[record.sourceType];
@@ -168,27 +176,34 @@ export function mapLearningRecordToMemoryItem(
       };
     }
     case "sentence":
+      {
+        const translation = cleanText(card.translation);
+        const meaning = distinctDisplayText(cleanText(card.explanation), translation);
+        return {
+          ...shared,
+          summary: translation,
+          phonetic: "",
+          part: "完整句",
+          definition: translation,
+          meaning,
+          sentence: queriedSource(record, card.sourceText),
+          translation,
+        };
+      }
+    case "paragraph": {
+      const translation = cleanText(card.translation);
+      const meaning = distinctDisplayText(cleanText(card.summary), translation);
       return {
         ...shared,
-        summary: card.translation,
-        phonetic: "",
-        part: "完整句",
-        definition: card.translation,
-        meaning: cleanText(card.explanation),
-        sentence: queriedSource(record, card.sourceText),
-        translation: card.translation,
-      };
-    case "paragraph":
-      return {
-        ...shared,
-        summary: cleanText(card.summary) || card.translation,
+        summary: meaning || translation,
         phonetic: "",
         part: "段落",
-        definition: cleanText(card.summary) || card.translation,
-        meaning: cleanText(card.summary),
+        definition: translation,
+        meaning,
         sentence: queriedSource(record, card.sourceText),
-        translation: card.translation,
+        translation,
       };
+    }
   }
 }
 

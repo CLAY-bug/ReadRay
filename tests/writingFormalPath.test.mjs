@@ -44,12 +44,25 @@ test("写作辅导持续展开问答并让提问框按内容增高", async () =>
   const styles = await readFile("src/styles/writing-page.css", "utf8");
 
   assert.match(coach, /rr-writing-agent-transcript/);
+  assert.match(coach, /rr-writing-user-message/);
+  assert.match(coach, /rr-writing-user-prompt/);
+  assert.match(coach, /rr-writing-user-context/);
+  assert.doesNotMatch(coach, /rr-writing-agent-role|<h3>\{answer\.title\}<\/h3>/);
+  assert.doesNotMatch(coach, /writingScopeLabel|rr-writing-user-meta|<blockquote>/);
+  assert.doesNotMatch(coach, />Writing agent</);
   assert.match(coach, /mergeWritingConversationAnswers/);
   assert.doesNotMatch(coach, /之前的问题|rr-writing-agent-history|<details/);
   assert.match(coach, /input\.style\.height = "auto"/);
   assert.match(coach, /input\.scrollHeight/);
   assert.match(styles, /\.rr-writing-agent-input textarea[\s\S]*overflow-y: hidden/);
   assert.match(styles, /textarea::-webkit-scrollbar[\s\S]*width: 0/);
+  assert.match(styles, /\.rr-writing-user-message\s*\{[\s\S]*align-items: flex-end/);
+  assert.match(styles, /\.rr-writing-user-prompt\s*\{[\s\S]*max-width:/);
+  assert.doesNotMatch(styles, /\.rr-writing-user-prompt\s*\{[^}]*border:/);
+  assert.doesNotMatch(styles, /\.rr-writing-agent-answer[^}]*border-left:/);
+  assert.doesNotMatch(styles, /\.rr-writing-agent-turn\s*\{[^}]*border-top:/);
+  assert.match(styles, /\.rr-writing-agent-copy\s*\{[^}]*font-family: var\(--rr-ui-font-family\)/);
+  assert.doesNotMatch(styles, /\.rr-writing-map section\s*\{[^}]*border-top:/);
 });
 
 test("写作页在窄容器进入覆盖层断点时自动收起辅导区", async () => {

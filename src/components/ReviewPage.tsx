@@ -143,6 +143,17 @@ function FeedPrompt({ card }: { card: ReviewCardModel }) {
   );
 }
 
+const compactReviewTypeLabels: Record<string, string> = {
+  单词语境: "单词",
+  短语语境: "短语",
+  句子理解: "句子",
+  段落理解: "段落",
+};
+
+function compactReviewTypeLabel(label: string) {
+  return compactReviewTypeLabels[label] ?? label;
+}
+
 function ReviewPage({
   service,
   preparationCoordinator,
@@ -789,9 +800,6 @@ function ReviewPage({
     if (event.target === event.currentTarget) closeCard();
   }
 
-  const loadedSources = feed?.sourceCounts
-    .map((source) => `${source.label} ${source.count} 条`)
-    .join(" · ");
   const feedbackCard = feed?.cards.find((card) => card.feedItemId === feedbackFeedItemId);
   const feedbackCardContextKey = feedbackCard
     ? reviewQualityCardContextKey(feedbackCard)
@@ -825,12 +833,9 @@ function ReviewPage({
   return (
     <main ref={pageRef} className="rr-review-page" aria-label="复习">
       <header className="rr-review-page-header">
-        <div>
-          <p className="rr-review-eyebrow">REVIEW FEED</p>
-          <h1>复习</h1>
-        </div>
+        <h1>复习</h1>
         <p className="rr-review-day-status">
-          {feed ? `${feed.dayLabel} · 本次已完成 ${feed.completedCount}` : "正在读取真实记录"}
+          {feed ? `已复习 ${feed.completedCount}` : "正在准备"}
         </p>
       </header>
 
@@ -857,14 +862,6 @@ function ReviewPage({
         </section>
       ) : (
         <>
-          <section className="rr-review-intro">
-            <div>
-              <h2>像浏览信息流一样，轻松遇见学过的表达。</h2>
-              <p>学习时保存的完整英文语境会直接使用；缺少可用英文语境时，会在浏览前后台生成并保存新的英文练习语境。</p>
-            </div>
-            <p className="rr-review-source-summary">{loadedSources || "暂无来源"}</p>
-          </section>
-
           <section ref={feedElementRef} className="rr-review-feed" aria-label="复习卡片流">
             {readyCards.map((card) => (
               <article
@@ -878,16 +875,20 @@ function ReviewPage({
               >
                 <button type="button" className="rr-review-feed-card-open" onClick={() => openCard(card)}>
                   <span className="rr-review-card-meta">
-                    <span>{card.typeLabel}</span>
+                    <span className="rr-review-card-meta-leading">
+                      <span className="rr-review-card-type">{compactReviewTypeLabel(card.typeLabel)}</span>
+                      {card.contextOrigin === "generated" ? (
+                        <span className="rr-review-card-origin">AI 语境</span>
+                      ) : null}
+                    </span>
                     <span>{card.sourceTime}</span>
                   </span>
-                  <span className="rr-review-card-origin">{card.contextOriginLabel}</span>
                   <span className="rr-review-card-copy"><FeedPrompt card={card} /></span>
                 </button>
                 <footer>
-                  <span>{card.sourceLabel}</span>
+                  <span>{card.sourceApp}</span>
                   <span className={card.attempt ? "is-done" : ""}>
-                    {card.attempt ? <><Icon name="check" /> 已复习</> : "拿起这张卡 ↗"}
+                    {card.attempt ? <><Icon name="check" /> 已复习</> : "复习 →"}
                   </span>
                 </footer>
                 {card.attempt ? (

@@ -182,6 +182,25 @@ test("正式 ReviewService 用本机日期边界和 cursor 加载持久化 Feed"
   assert.equal(model.sourceCounts[0].label, "Code");
 });
 
+test("复习来源类型与应用同名时只展示一次", () => {
+  const model = mapReviewFeedPage(
+    page({
+      items: [
+        feedItem({
+          learningRecord: learningRecord(11, {
+            sourceType: "manual",
+            sourceApp: "主动查询",
+          }),
+        }),
+      ],
+    }),
+    NOW,
+  );
+
+  assert.equal(model.cards[0].sourceLabel, "主动查询");
+  assert.equal(model.cards[0].sourceApp, "主动查询");
+});
+
 test("学习记录中的完整英文语境直接使用", () => {
   const model = mapReviewFeedPage(page(), NOW);
   const card = model.cards[0];

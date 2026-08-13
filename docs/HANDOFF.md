@@ -1,17 +1,19 @@
 # ReadRay 交接记录
 
-最后更新：2026-08-12
+最后更新：2026-08-13
 
 ## TL;DR
 
 - 当前状态：阶段一至阶段八已经完成；阶段八基于真实学习记录的复习闭环已通过独立审核、自动验证和真实 Tauri/SQLite/DeepSeek 与视觉交互人工验收。
 - 主题状态：ReadRayThemeV1、安全解析、SQLite v8、设置页导入/选择/删除、主窗口恢复以及随包 Flexoki（Light/Dark）与 30 个内置主题已通过独立审核和真实 Tauri 人工验收；主题工作不改变 DEVELOPMENT_PLAN 阶段状态。
 - 当前路线：Windows 原生，Tauri + React + TypeScript + Rust + SQLite。
-- 划词优化：任务 1～4 均已通过用户真实使用验收；任务 4“SQLite 精确缓存与 single-flight”已完成父任务技术验收、合回主项目和用户真实使用验收。SQLite v18 增加 7 天、256 条的 ExplanationCard 精确缓存；同 key 的 SQLite lookup/provider/usage/upsert 由 single-flight 共享，每个请求继续独立核对 requestKey/generation 并保存自己的真实学习事件，取消或迟到请求不能落库或写缓存。任务 5 未开始，需另行授权后方可进入。
+- 划词优化：本轮方案已于 2026-08-12 正式收口。任务 1～4 均已完成实现、必要验证和用户真实使用验收；任务 4“SQLite 精确缓存与 single-flight”已合回主项目。SQLite v18 增加 7 天、256 条的 ExplanationCard 精确缓存；同 key 的 SQLite lookup/provider/usage/upsert 由 single-flight 共享，每个请求继续独立核对 requestKey/generation 并保存自己的真实学习事件，取消或迟到请求不能落库或写缓存。原任务 5 不含新功能，基于投入产出不再单独执行；其跨模块完整回归清单仅保留为未来正式发布、参赛演示打包或相关模块大改时的检查参考，不得记作本轮已运行。
 - 下一步：进入阶段九，先明确长期学习者记忆的数据来源、后台提炼、用户控制、回退和个性化使用边界，再拆分实现任务。Quick AI 浮层任务 7 的真实桌面验收仍是独立待办。
 - 阶段八：基于真实 `learning_records` 的最小复习闭环、后台英文制卡、学习结果/撤销、来源追溯、卡片质量反馈、缓存与重启恢复均已收口；写作、Quick AI、长期学习者记忆、主动表达和 Markdown 未并入本阶段，基于长期记忆的个性化排序属于阶段九。
 - 整体性能探查（2026-08-07）：按四层（启动/前端渲染/SQLite/内存体积）实测，当前真实数据规模下**无用户可感知瓶颈**。SQLite 查询全部走索引且冷热均 <4ms；每 command 重开连接 + 8 次迁移检查经真实 rusqlite 基准测得约 1.45ms（迁移去重实测无效，1.450 vs 1.452ms，已回退）；前端流式渲染每 delta 约 0.68ms（520ms 节流下无感知）；首屏 204 DOM 节点；全部对话页实际只渲染 26 个有标题会话。明确**不要**为性能引入 SQLite 连接复用（rusqlite Connection 虽 Send，但 guard 跨 await 编译失败、流式 record_for_app 持锁会冻结 UI、Mutex 非重入、backup VACUUM 长持锁，四重风险而收益 <10ms/操作）。后续若数据规模显著增长（如数万学习记录），再重测 `list_all_quick_ai_conversations` 全量列表与流式重建成本。
 - 主题启动三段式加载修复（2026-08-07）：主窗口启动曾出现"透明空白 → ReadRay Default 硬编码色 → 已选主题"的闪烁。根因：`.rr-main-app` 的 CSS 硬编码了默认主题变量（`main-app.css`），真实主题要等 `useAppTheme` 挂载后的异步 IPC `get_theme_snapshot`（SQLite 读 ~6ms）才用 inline style 覆盖，且窗口在 setup 时即 `show()`，与前端挂载并行赛跑。修复：新增 `src/themePrefetch.ts`，`main.tsx` 在 React 挂载前（仅 `view=main`）用 Tauri IPC 预取已选主题（带 2s 超时兜底、失败静默回退），`useAppTheme` 挂载 effect 改为 `useLayoutEffect`，首帧绘制前即应用预取快照（`.rr-main-app` 首帧即为已选主题），随后仍 `reload()` 权威重读。overlay / 非 Tauri 预览路径零改动（跳过预取）。验证：前端 26/30/43 测试全绿（settings 含 5 个新增预取用例）、`pnpm build` 通过、Rust 未改动（140/4 同基线）；独立审计确认无启动失败/竞态/语义破坏风险。
+- 主窗口静态品牌启动层与图标光学放大（2026-08-13）：`index.html` 在 React 模块前为 `view=main` 提供静态品牌层，背景调整为与图标深色底座一致的 `#141412`，底座融入整屏；启动图标由原 80～112px 提升为响应式 132～176px。`MainAppWindow` 首帧后通过 `src/startupBrand.ts` 添加就绪类并在 160ms 内淡出；不设最短展示时间、不创建第二个 Tauri 窗口，overlay 不显示，开机启动仍保持隐藏。正式图标母版在不重绘内部图形的前提下收紧透明安全边距，小尺寸视觉约放大 4%，并重新生成全部 Tauri 图标及 256px 启动图标。此前终端中 38.98～55.66s 的等待发生在图标资源变更触发的 Rust debug 重编译/链接阶段、早于 `readray.exe` 启动，不等同于安装版应用的运行期启动耗时；静态品牌层只能覆盖 EXE 启动后的前端挂载阶段。验证：`test:startup` 3/3、`test:settings` 43/43、`test:overlay` 20/20、`pnpm build` 与 `git diff --check` 通过；融合后的启动层视觉效果待用户真实 Tauri 人工验收。
+- WebView 默认右键菜单屏蔽（2026-08-13）：`src/main.tsx` 仅在 Tauri 桌面运行时安装 `src/desktopContextMenu.ts`，全局阻止 WebView2 的返回、刷新、另存为、打印、检查等默认菜单；守卫不停止事件传播，因此会话列表既有“重命名、导出、删除”自定义右键菜单保持可用，普通浏览器预览不受影响。验证：右键守卫 2/2、设置聚合测试 45/45、会话回归 27/27、`pnpm build` 与 `git diff --check` 通过；真实 Tauri 点击行为待用户人工确认。
 - DeepSeek 请求超时兜底（2026-08-07）：对话流式生成曾出现"一直生成中不中断"。根因：所有 reqwest 调用用 `Client::new()`（默认无超时），DeepSeek 流不关闭或网络半开时 `stream.next().await` 永久挂起，前端 invoke 永不 settle，UI 停在"正在生成"。修复：`deepseek_client.rs` 新增 `shared_http_client()`（`Client::builder().timeout(180s).read_timeout(60s)`，零新增依赖），替换全部 3 处 `Client::new()`（流式/非流式 chat + 余额 GET）及 `lib.rs` smoke test；`read_timeout` 每次读到 chunk 后重置，即"60s 无数据则中断"的流空闲检测，长回答不受影响。超时触发后链路：Rust Err → invoke reject → 前端恢复逻辑读库 → assistant 不存在 → 返回 pending → UI 显示"生成中断可重试"（既有闭环，无需改前端）。验证：Rust 141 pass / 4 ignored（含新增客户端创建用例）、前端 26/30/43 全绿、build/fmt/check 通过。
 - 当前约束：不使用通用 Agent 框架，不内置商业词典，不做 OCR、本地大模型或跨平台支持。
 - 交接原则：`HANDOFF.md` 只记录会影响下一次恢复上下文的信息，小型文档措辞和格式调整不记录。
@@ -83,7 +85,7 @@
 
 ### Overlay、解释卡与 UIA
 
-- 划词速度优化任务 4 已于 2026-08-12 完成父任务技术验收、合回主项目和用户真实使用验收：SQLite v18 新增 `explanation_card_cache`；canonical identity 精确覆盖规范原文、原始查询确定的方向/类型、完整最小上下文 fingerprint、模型 ID/revision、Prompt/schema version，来源应用和来源类型不参与模型输入或缓存键。命中后按当前请求重绑原文/英文目标并复用 validator；损坏、过期和身份异常项按 miss，后台条件删除与单调 touch 不会覆盖新 upsert。TTL 7 天、容量 256 条，淘汰在独立 blocking 维护中确定性收敛。single-flight 在首次 await 前加入，同 key 的 lookup/provider/usage/upsert 只执行一次；waiter 分别持有 request authority，authority 锁内 cache commit 保证取消先发生时不缓存，有效 follower 不受 leader 取消影响，每个有效完成请求仍各自保存学习事件。聚焦缓存/migration 10 项、ExplanationCard/并发 25 项（另 1 ignored 联网）、learning_records 26 项、DeepSeek client 17 项通过；`cargo fmt --check`、`cargo check`、RESOURCE_MAP YAML 和 `git diff --check` 通过。未运行全量测试、前端测试/build 或 ignored 联网测试；用户已确认任务 4 收口。任务 5 未开始，需另行授权后方可进入。
+- 划词速度优化任务 4 已于 2026-08-12 完成父任务技术验收、合回主项目和用户真实使用验收：SQLite v18 新增 `explanation_card_cache`；canonical identity 精确覆盖规范原文、原始查询确定的方向/类型、完整最小上下文 fingerprint、模型 ID/revision、Prompt/schema version，来源应用和来源类型不参与模型输入或缓存键。命中后按当前请求重绑原文/英文目标并复用 validator；损坏、过期和身份异常项按 miss，后台条件删除与单调 touch 不会覆盖新 upsert。TTL 7 天、容量 256 条，淘汰在独立 blocking 维护中确定性收敛。single-flight 在首次 await 前加入，同 key 的 lookup/provider/usage/upsert 只执行一次；waiter 分别持有 request authority，authority 锁内 cache commit 保证取消先发生时不缓存，有效 follower 不受 leader 取消影响，每个有效完成请求仍各自保存学习事件。聚焦缓存/migration 10 项、ExplanationCard/并发 25 项（另 1 ignored 联网）、learning_records 26 项、DeepSeek client 17 项通过；`cargo fmt --check`、`cargo check`、RESOURCE_MAP YAML 和 `git diff --check` 通过。未运行全量测试、前端测试/build 或 ignored 联网测试；用户已确认任务 4 收口。原任务 5 不再单独执行，也不得表述为测试已通过；完整回归移至未来正式发布前统一进行。
 
 - 划词速度优化任务 3 已于 2026-08-11 通过代码审查、聚焦验证、合回主项目和用户真实使用验收：纯中文查询由 Rust 本地判为 `zhToEn` 并使用四类方向化 Prompt，模型返回的 `learningTargetText` 先合并首尾和连续空白、写回卡片并同步主结果，再验证必须有有效 ASCII 拉丁字母且不得含汉字；存在英文目标的查询保持 `enToZh`，目标由 Rust 确定性规范化并覆盖模型改写，中文 `contextText` 不改变英文方向。混合中文查询保守保留 `C++`、`.NET`、`C#`、`node.js` 等代码或专有名词边界。SQLite v17 通过 `learning_record_targets` 保存 `queryDirection` 和规范英文目标，新事件与投影同事务提交；历史英文 query 确定性回填，历史中文不批量调用模型、不猜译文、不物理删除。Memory、Today、Review、搜索与复习制卡均经正式 page → service → repository → typed Rust command 消费英文目标，原始中文仍可在详情来源中追溯。聚焦 Rust 85 项通过，另有 1 项联网测试 ignored；前端 72 项与 build 通过。未运行全量测试或 ignored 联网测试；用户确认真实使用效果良好，任务 3 正式收口。
 

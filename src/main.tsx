@@ -1,9 +1,14 @@
 import React from "react";
 import ReactDOM from "react-dom/client";
 import App from "./App";
+import { installDesktopContextMenuGuard } from "./desktopContextMenu";
 import { prefetchThemeSnapshot } from "./themePrefetch";
 
 const rootElement = document.getElementById("root") as HTMLElement;
+
+if ("__TAURI_INTERNALS__" in window) {
+  installDesktopContextMenuGuard();
+}
 
 async function bootstrap() {
   // 主应用视图在 React 挂载前预取已选主题，使首帧绘制即为已选主题，

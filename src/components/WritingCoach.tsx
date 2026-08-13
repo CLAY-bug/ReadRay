@@ -87,6 +87,28 @@ function resizeQuestionInput(input: HTMLTextAreaElement) {
   input.style.overflowY = contentHeight > height + 1 ? "auto" : "hidden";
 }
 
+function WritingUserPrompt({
+  question,
+  selectionText,
+}: {
+  question: string;
+  selectionText?: string;
+}) {
+  return (
+    <div className="rr-writing-user-message" aria-label="你的提问">
+      <div className="rr-writing-user-prompt">
+        {selectionText ? (
+          <div className="rr-writing-user-context">
+            <span>针对选中内容</span>
+            <p>“{selectionText}”</p>
+          </div>
+        ) : null}
+        <p className="rr-writing-user-question">{question}</p>
+      </div>
+    </div>
+  );
+}
+
 function WritingAnswerTurn({
   answer,
   latest,
@@ -102,14 +124,11 @@ function WritingAnswerTurn({
 }) {
   return (
     <li className="rr-writing-agent-turn">
-      <p className="rr-writing-agent-question">
-        {answer.scopeLabel} · {answer.question}
-      </p>
-      <section className="rr-writing-agent-answer">
-        {answer.selectionText ? (
-          <blockquote>“{answer.selectionText}”</blockquote>
-        ) : null}
-        <h3>{answer.title}</h3>
+      <WritingUserPrompt
+        question={answer.question}
+        selectionText={answer.selectionText}
+      />
+      <section className="rr-writing-agent-answer" aria-label="ReadRay 的回答">
         <p className="rr-writing-agent-copy">{answer.copy}</p>
         {answer.map ? (
           <div className="rr-writing-map">
@@ -342,10 +361,7 @@ function WritingAgentPanel({
       data-testid="writing-agent-panel"
     >
       <header className="rr-writing-assist-head">
-        <div>
-          <p>Writing agent</p>
-          <h2 id="rr-writing-agent-title">ReadRay 写作辅助</h2>
-        </div>
+        <h2 id="rr-writing-agent-title">写作辅助</h2>
         <button type="button" onClick={onClose}>
           {mode === "review" ? "返回检查结果" : "收起"}
         </button>
@@ -416,8 +432,13 @@ function WritingAgentPanel({
 
           {pendingRequest ? (
             <article className="rr-writing-agent-pending" aria-live="polite">
-              <p>{pendingRequest.question}</p>
-              <span>正在结合已保存的正文思考…</span>
+              <WritingUserPrompt
+                question={pendingRequest.question}
+                selectionText={pendingRequest.selectionText}
+              />
+              <div className="rr-writing-agent-thinking">
+                <p>正在结合已保存的正文思考…</p>
+              </div>
             </article>
           ) : null}
           {error ? (

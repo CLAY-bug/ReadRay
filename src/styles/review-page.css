@@ -12,15 +12,13 @@
 
 .rr-review-page-header {
   display: flex;
-  align-items: flex-end;
+  align-items: center;
   justify-content: space-between;
   gap: 24px;
-  border-bottom: 1px solid var(--rr-main-border);
-  padding-bottom: 20px;
+  margin-bottom: 20px;
 }
 
 .rr-review-page-header h1,
-.rr-review-intro h2,
 .rr-review-state-card h2,
 .rr-review-empty h2,
 .rr-review-warmup h2,
@@ -32,7 +30,7 @@
 }
 
 .rr-review-page-header h1 {
-  font-size: calc(34px * var(--rr-ui-font-scale));
+  font-size: calc(32px * var(--rr-ui-font-scale));
   line-height: 1.15;
 }
 
@@ -40,7 +38,6 @@
 .rr-review-card-meta,
 .rr-review-card-origin,
 .rr-review-day-status,
-.rr-review-source-summary,
 .rr-review-focus-kicker,
 .rr-review-focus-header span,
 .rr-review-source-drawer header span,
@@ -52,40 +49,8 @@
   line-height: 1.5;
 }
 
-.rr-review-eyebrow {
-  margin: 0 0 7px;
-}
-
 .rr-review-day-status {
-  margin: 0 0 3px;
-  text-align: right;
-}
-
-.rr-review-intro {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(220px, 360px);
-  align-items: end;
-  gap: 32px;
-  padding: 28px 0 24px;
-}
-
-.rr-review-intro h2 {
-  max-width: 690px;
-  font-family: var(--rr-main-font-body);
-  font-size: calc(23px * var(--rr-learning-font-scale));
-  line-height: 1.45;
-}
-
-.rr-review-intro p {
-  max-width: 720px;
-  margin: 8px 0 0;
-  color: var(--rr-main-muted);
-  font-size: calc(13px * var(--rr-ui-font-scale));
-  line-height: 1.65;
-}
-
-.rr-review-source-summary {
-  margin: 0 !important;
+  margin: 0;
   text-align: right;
 }
 
@@ -95,7 +60,7 @@
 }
 
 .rr-review-feed-card {
-  --rr-review-paper: color-mix(in oklab, var(--rr-main-bg), var(--rr-main-surface-contrast) 19%);
+  --rr-review-paper: color-mix(in oklab, var(--rr-main-bg), var(--rr-main-surface-contrast) 11%);
   position: relative;
   display: inline-flex;
   vertical-align: top;
@@ -104,15 +69,14 @@
   flex-direction: column;
   margin: 0 0 14px;
   overflow: hidden;
-  border: 1px solid color-mix(in oklab, var(--rr-main-border), transparent 14%);
-  border-radius: 14px;
+  border: 1px solid color-mix(in oklab, var(--rr-main-border), transparent 8%);
+  border-radius: 13px;
   background:
-    radial-gradient(circle at 14% 0%, color-mix(in oklab, var(--rr-main-fg), transparent 97%), transparent 38%),
-    linear-gradient(135deg, color-mix(in oklab, var(--rr-main-fg), transparent 98%), transparent 42%),
+    radial-gradient(circle at 14% 0%, color-mix(in oklab, var(--rr-main-fg), transparent 98.5%), transparent 42%),
     var(--rr-review-paper);
   box-shadow:
-    0 1px 2px color-mix(in oklab, var(--rr-main-shadow), transparent 75%),
-    0 7px 18px color-mix(in oklab, var(--rr-main-shadow), transparent 88%);
+    0 1px 2px color-mix(in oklab, var(--rr-main-shadow), transparent 82%),
+    0 4px 12px color-mix(in oklab, var(--rr-main-shadow), transparent 92%);
   animation: rr-review-card-arrive 420ms cubic-bezier(0.2, 0.72, 0.2, 1) both;
   animation-delay: var(--rr-review-card-delay, 0ms);
   transition: border-color 180ms ease, box-shadow 180ms ease, transform 180ms ease;
@@ -128,7 +92,7 @@
     linear-gradient(103deg, transparent 0 46%, color-mix(in oklab, var(--rr-main-fg), transparent 98%) 49% 51%, transparent 54% 100%);
   background-size: 4px 4px, 100% 100%;
   content: "";
-  opacity: 0.22;
+  opacity: 0.1;
   pointer-events: none;
 }
 
@@ -152,9 +116,9 @@
 .rr-review-feed-card:focus-within {
   border-color: color-mix(in oklab, var(--rr-main-fg), transparent 78%);
   box-shadow:
-    0 1px 3px color-mix(in oklab, var(--rr-main-shadow), transparent 72%),
-    0 11px 26px color-mix(in oklab, var(--rr-main-shadow), transparent 82%);
-  transform: translateY(-2px);
+    0 1px 3px color-mix(in oklab, var(--rr-main-shadow), transparent 78%),
+    0 8px 20px color-mix(in oklab, var(--rr-main-shadow), transparent 87%);
+  transform: translateY(-1px);
 }
 
 .rr-review-feed-card.is-completed {
@@ -181,30 +145,47 @@
 
 .rr-review-card-meta {
   display: flex;
+  align-items: center;
   justify-content: space-between;
   gap: 12px;
 }
 
-.rr-review-card-meta span:last-child {
+.rr-review-card-meta-leading {
+  display: inline-flex;
+  min-width: 0;
+  align-items: center;
+  gap: 6px;
+}
+
+.rr-review-card-type,
+.rr-review-card-origin {
+  display: inline-flex;
+  width: fit-content;
+  align-items: center;
+  border: 1px solid color-mix(in oklab, var(--rr-main-border-soft), transparent 22%);
+  border-radius: 999px;
+  padding: 2px 7px;
+  background: color-mix(in oklab, var(--rr-main-surface-subtle), transparent 32%);
+  color: var(--rr-main-muted);
+  letter-spacing: 0;
+  white-space: nowrap;
+}
+
+.rr-review-card-meta > span:last-child {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
 .rr-review-card-origin {
-  width: fit-content;
-  margin-top: 13px;
-  border-radius: 999px;
-  padding: 3px 7px;
-  color: var(--rr-main-muted);
-  border: 1px solid color-mix(in oklab, var(--rr-main-border-soft), transparent 26%);
-  background: color-mix(in oklab, var(--rr-main-surface-subtle), transparent 24%);
-  letter-spacing: 0;
+  border-color: transparent;
+  background: transparent;
+  padding-inline: 2px;
 }
 
 .rr-review-card-copy {
   display: block;
-  margin: 14px 0 10px;
+  margin: 18px 0 10px;
   color: var(--rr-main-fg-secondary);
   font-family: var(--rr-main-font-body);
   font-size: calc(17px * var(--rr-learning-font-scale));
@@ -939,14 +920,6 @@
     column-count: 2;
   }
 
-  .rr-review-intro {
-    grid-template-columns: 1fr;
-    gap: 12px;
-  }
-
-  .rr-review-source-summary {
-    text-align: left;
-  }
 }
 
 @container (max-width: 700px) {

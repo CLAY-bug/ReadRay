@@ -285,6 +285,8 @@ function MemoryPage({
         : isFiltering
           ? `${totalCount} 条结果`
           : `${totalCount} 条记录`;
+  const selectedRecordIsPassage =
+    selectedRecord?.type === "sentence" || selectedRecord?.type === "paragraph";
 
   return (
     <main className="rr-main-panel rr-memory-page" data-testid="memory-page">
@@ -508,7 +510,9 @@ function MemoryPage({
                   data-testid="memory-detail"
                   data-record-id={selectedRecord.id}
                 >
-                  <header className="rr-memory-detail-head">
+                  <header
+                    className={`rr-memory-detail-head${selectedRecordIsPassage ? " is-passage" : ""}`}
+                  >
                     <button
                       className="rr-memory-detail-back"
                       type="button"
@@ -527,57 +531,100 @@ function MemoryPage({
                       <MainAppIcon name="back" />
                     </button>
                     <div>
-                      <h2
-                        className="rr-memory-detail-title"
-                        ref={detailTitleRef}
-                        tabIndex={-1}
-                      >
-                        {selectedRecord.query}
-                      </h2>
-                      <div className="rr-memory-lexical-line">
-                        {selectedRecord.phonetic ? (
-                          <span className="rr-memory-phonetic">
-                            {selectedRecord.phonetic}
+                      {selectedRecordIsPassage ? (
+                        <h2
+                          className="rr-memory-detail-passage-title"
+                          ref={detailTitleRef}
+                          tabIndex={-1}
+                        >
+                          {selectedRecord.typeLabel}
+                        </h2>
+                      ) : (
+                        <h2
+                          className="rr-memory-detail-title"
+                          ref={detailTitleRef}
+                          tabIndex={-1}
+                        >
+                          {selectedRecord.query}
+                        </h2>
+                      )}
+                      {!selectedRecordIsPassage ? (
+                        <div className="rr-memory-lexical-line">
+                          {selectedRecord.phonetic ? (
+                            <span className="rr-memory-phonetic">
+                              {selectedRecord.phonetic}
+                            </span>
+                          ) : null}
+                          <span className="rr-memory-part-of-speech">
+                            {selectedRecord.part}
                           </span>
-                        ) : null}
-                        <span className="rr-memory-part-of-speech">
-                          {selectedRecord.part}
-                        </span>
-                      </div>
+                        </div>
+                      ) : null}
                     </div>
-                    <span className="rr-memory-detail-type">
-                      {selectedRecord.typeLabel}
-                    </span>
+                    {!selectedRecordIsPassage ? (
+                      <span className="rr-memory-detail-type">
+                        {selectedRecord.typeLabel}
+                      </span>
+                    ) : null}
                   </header>
 
-                  <section className="rr-memory-detail-meaning">
-                    <h3>核心理解</h3>
-                    <p className="rr-memory-definition">
-                      {selectedRecord.definition}
-                    </p>
-                    {selectedRecord.meaning ? (
-                      <div className="rr-memory-context-meaning-block">
-                        <span className="rr-memory-context-meaning-label">
-                          本次语境
-                        </span>
-                        <p className="rr-memory-context-meaning">
-                          {selectedRecord.meaning}
+                  {selectedRecordIsPassage ? (
+                    <div className="rr-memory-passage-detail">
+                      <section className="rr-memory-passage-section">
+                        <h3>原文</h3>
+                        <blockquote className="rr-memory-source-sentence" lang="en">
+                          {selectedRecord.sentence}
+                        </blockquote>
+                      </section>
+                      {selectedRecord.translation ? (
+                        <section className="rr-memory-passage-section">
+                          <h3>中文翻译</h3>
+                          <p className="rr-memory-passage-translation">
+                            {selectedRecord.translation}
+                          </p>
+                        </section>
+                      ) : null}
+                      {selectedRecord.meaning ? (
+                        <section className="rr-memory-passage-section">
+                          <h3>{selectedRecord.type === "sentence" ? "理解提示" : "核心理解"}</h3>
+                          <p className="rr-memory-context-meaning">
+                            {selectedRecord.meaning}
+                          </p>
+                        </section>
+                      ) : null}
+                    </div>
+                  ) : (
+                    <>
+                      <section className="rr-memory-detail-meaning">
+                        <h3>核心理解</h3>
+                        <p className="rr-memory-definition">
+                          {selectedRecord.definition}
                         </p>
-                      </div>
-                    ) : null}
-                  </section>
+                        {selectedRecord.meaning ? (
+                          <div className="rr-memory-context-meaning-block">
+                            <span className="rr-memory-context-meaning-label">
+                              本次语境
+                            </span>
+                            <p className="rr-memory-context-meaning">
+                              {selectedRecord.meaning}
+                            </p>
+                          </div>
+                        ) : null}
+                      </section>
 
-                  <section className="rr-memory-detail-source">
-                    <h3>原文语境</h3>
-                    <blockquote className="rr-memory-source-sentence" lang="en">
-                      {selectedRecord.sentence}
-                    </blockquote>
-                    {selectedRecord.translation ? (
-                      <p className="rr-memory-translation">
-                        {selectedRecord.translation}
-                      </p>
-                    ) : null}
-                  </section>
+                      <section className="rr-memory-detail-source">
+                        <h3>原文语境</h3>
+                        <blockquote className="rr-memory-source-sentence" lang="en">
+                          {selectedRecord.sentence}
+                        </blockquote>
+                        {selectedRecord.translation ? (
+                          <p className="rr-memory-translation">
+                            {selectedRecord.translation}
+                          </p>
+                        ) : null}
+                      </section>
+                    </>
+                  )}
 
                   <div className="rr-memory-source-row">
                     <span className="rr-memory-source-app">

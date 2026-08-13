@@ -79,6 +79,7 @@ import {
   runForcedExit,
   runSafeExit,
 } from "./desktopLifecycle";
+import { markMainStartupReady } from "./startupBrand";
 import "./App.css";
 import "./styles/main-app.css";
 import "./styles/conversation-page.css";
@@ -1293,6 +1294,13 @@ function MainAppWindow() {
   const isResponsivePreview =
     !isTauriRuntime &&
     new URLSearchParams(window.location.search).get("preview") === "responsive";
+
+  useEffect(() => {
+    const frame = window.requestAnimationFrame(() => {
+      markMainStartupReady();
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, []);
   const [memoryService, setMemoryService] = useState<MemoryService | null>(() =>
     isTauriRuntime
       ? new RepositoryMemoryService(new TauriMemoryRepository())

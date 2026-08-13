@@ -4,8 +4,8 @@ project:
   repo_root: "."
 
 meta:
-  version: "1.62"
-  last_updated: "2026-08-12"
+  version: "1.66"
+  last_updated: "2026-08-13"
   updated_by: "Codex"
   source_of_truth: "docs/RESOURCE_MAP.yml"
   language: "zh-CN"
@@ -97,7 +97,7 @@ core_docs:
       - "实现或验收划词解释速度优化。"
       - "排查 DeepSeek reasoning 报错、划词长等待或迟到结果落库。"
       - "修复中文查询进入记忆、今天或复习页面。"
-    notes: "严格按任务 1～5 单步执行；任务 1～4 已通过用户真实使用验收；任务 4 SQLite v18 精确缓存与 single-flight 已完成父任务技术验收、合回主项目和用户真实使用验收；任务 5 未开始，需另行授权后方可进入。已确认 ExplanationCard 关闭 thinking、纯中文直接译英文、不做质量/Provider 对照测评、不增加深入理解、不维护滚动会话。"
+    notes: "本轮划词优化已于 2026-08-12 正式收口：任务 1～4 已完成实现、必要验证和用户真实使用验收；任务 4 SQLite v18 精确缓存与 single-flight 已合回主项目。原任务 5 不包含新功能，基于投入产出不再单独执行，其跨模块完整回归清单仅保留为未来正式发布、参赛演示打包或相关模块大改时的检查参考，不得记作已运行。已确认 ExplanationCard 关闭 thinking、纯中文直接译英文、不做质量/Provider 对照测评、不增加深入理解、不维护滚动会话。"
     risk: "不得照搬整页翻译批处理或 Google 非公开接口，不得把 queryText 覆盖成译文；原始学习事件保持追加式，规范英文目标通过正式持久化投影提供给页面。"
 
   - path: "docs/THEME_PROTOCOL.md"
@@ -174,6 +174,38 @@ competition_resources:
       risk: "这是综合分析，不替代官方附件。"
 
 source_areas:
+  - path: "index.html"
+    purpose: "主窗口 React 挂载前的静态品牌启动层与关键样式入口。"
+    status: "active"
+    read_when:
+      - "调整主窗口启动空白、品牌图标、首帧过渡或透明窗口背景。"
+    notes: "仅 URL 参数 view=main 时显示静态品牌层；背景使用与正式图标深色底座一致的 #141412，使图标底座融入整屏，图标按 132～176px 响应式显示。标记脚本、关键样式和图片节点都位于 React 模块之前，因此无需等待主题 IPC 或组件挂载。React 首帧就绪后由 startupBrand.ts 添加 rr-main-ready，并以 160ms 透明度过渡移除；无强制最短展示时间。"
+    risk: "不要把启动层扩展到 overlay，也不要让图片、动画或后台数据加载阻塞 React；开机启动仍由 Rust 保持主窗口隐藏。"
+
+  - path: "src/startupBrand.ts"
+    purpose: "主窗口首帧完成后的静态品牌启动层就绪标记。"
+    status: "active"
+    read_when:
+      - "修改主窗口启动层的移除时机或首帧行为。"
+    notes: "MainAppWindow 在 requestAnimationFrame 中调用 markMainStartupReady；模块只负责添加 rr-main-ready 类，不负责计时、数据加载或窗口显示。"
+    risk: "不要等待业务请求后再移除启动层；异常路径不应通过第二个 Tauri 窗口制造焦点或任务栏切换。"
+
+  - path: "public/branding/readray-startup-icon.png"
+    purpose: "随前端打包的 256×256 RGBA 主窗口启动品牌图标。"
+    status: "active"
+    read_when:
+      - "替换启动品牌图标或检查打包后的静态资源。"
+    notes: "由 assets/branding/readray-icon-master.png 通过 Tauri 图标生成链路派生，与任务栏、托盘和安装包图标保持同一母版。"
+    risk: "替换后必须确认 dist/branding 中仍有该文件，并在真实 Tauri 主窗口检查深色背景下的视觉尺寸。"
+
+  - path: "assets/branding/"
+    purpose: "ReadRay 图标概念原稿、光学收边后的正式母版和资产说明。"
+    status: "active"
+    read_when:
+      - "调整应用图标视觉尺寸、重新生成 Tauri 图标或追溯品牌原稿。"
+    notes: "readray-icon-master.png 是当前生成源；2026-08-13 在不重绘内部图形的前提下收紧透明安全边距，使小尺寸任务栏和托盘图标约放大 4%。"
+    risk: "不要直接逐个手改 src-tauri/icons 下的派生尺寸；应从正式母版一次性重生成并检查 16/24/32/48/64/256px。"
+
   - path: "src/"
     purpose: "React 前端源码。"
     status: "active"
@@ -529,6 +561,14 @@ source_areas:
       - "排查迟到退出结果、设置保存或写作 flush 未被等待。"
     notes: "DesktopSaveCoordinator 持续跟踪设置 mutation 的 promise/失败和写作草稿 flush；即使 SettingsPage 已卸载，安全退出仍等待进行中操作并报告未解决失败。退出 request ID 激活 mutation gate 后，设置 mutation 与写作编辑入口拒绝新修改，flush 以 mutation generation 确认静默后才调用 typed Rust 退出 command；失败或取消会解除 gate。快捷键录制拒绝裸按键并生成稳定组合字符串。"
     risk: "不得把模型请求加入退出等待，也不得在此直接操作托盘、窗口、注册表或 SQLite。"
+
+  - path: "src/desktopContextMenu.ts"
+    purpose: "Tauri WebView2 默认浏览器右键菜单的全局屏蔽入口。"
+    status: "active"
+    read_when:
+      - "调整桌面右键行为、排查默认浏览器菜单或自定义会话菜单冲突。"
+    notes: "main.tsx 仅在 Tauri 运行时安装 capture 阶段的 contextmenu preventDefault；不调用 stopPropagation，因此侧栏和全部对话页的 ReadRay 自定义重命名/导出/删除菜单仍可收到事件。普通浏览器预览不安装。"
+    risk: "不得通过 stopPropagation 或覆盖组件 onContextMenu 来禁用默认菜单，否则会破坏现有会话管理右键入口。"
 
   - path: "tests/desktopLifecycle.test.mjs"
     purpose: "桌面生命周期前端纯逻辑与正式路径静态边界测试。"

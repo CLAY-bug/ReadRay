@@ -2,12 +2,69 @@
 <html lang="zh-CN">
   <head>
     <meta charset="UTF-8" />
-    <link rel="icon" type="image/svg+xml" href="/vite.svg" />
+    <link rel="icon" type="image/png" href="/branding/readray-startup-icon.png" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>ReadRay</title>
+    <script>
+      (() => {
+        const view = new URLSearchParams(window.location.search).get("view");
+        if (view === "main") {
+          document.documentElement.classList.add("rr-main-view");
+        }
+      })();
+    </script>
+    <style>
+      #rr-startup-brand {
+        position: fixed;
+        inset: 0;
+        z-index: 2147483647;
+        display: none;
+        overflow: hidden;
+        place-items: center;
+        border-radius: 8px;
+        background: #141412;
+        opacity: 1;
+        visibility: visible;
+        transition:
+          opacity 160ms ease-out,
+          visibility 0s linear 160ms;
+      }
+
+      .rr-main-view #rr-startup-brand {
+        display: grid;
+      }
+
+      .rr-main-ready #rr-startup-brand {
+        pointer-events: none;
+        opacity: 0;
+        visibility: hidden;
+      }
+
+      #rr-startup-brand img {
+        display: block;
+        width: clamp(132px, 11vw, 176px);
+        height: auto;
+      }
+
+      @media (prefers-reduced-motion: reduce) {
+        #rr-startup-brand {
+          transition: none;
+        }
+      }
+    </style>
   </head>
 
   <body>
+    <div id="rr-startup-brand" aria-hidden="true">
+      <img
+        src="/branding/readray-startup-icon.png"
+        alt=""
+        width="256"
+        height="256"
+        decoding="sync"
+        fetchpriority="high"
+      />
+    </div>
     <div id="root"></div>
     <script type="module" src="/src/main.tsx"></script>
   </body>
