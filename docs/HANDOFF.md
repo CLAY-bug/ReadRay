@@ -8,19 +8,21 @@
 - 主题状态：ReadRayThemeV1、安全解析、SQLite v8、设置页导入/选择/删除、主窗口恢复以及随包 Flexoki（Light/Dark）与 30 个内置主题已通过独立审核和真实 Tauri 人工验收；主题工作不改变 DEVELOPMENT_PLAN 阶段状态。
 - 当前路线：Windows 原生，Tauri + React + TypeScript + Rust + SQLite。
 - 划词优化：本轮方案已于 2026-08-12 正式收口。任务 1～4 均已完成实现、必要验证和用户真实使用验收；任务 4“SQLite 精确缓存与 single-flight”已合回主项目。SQLite v18 增加 7 天、256 条的 ExplanationCard 精确缓存；同 key 的 SQLite lookup/provider/usage/upsert 由 single-flight 共享，每个请求继续独立核对 requestKey/generation 并保存自己的真实学习事件，取消或迟到请求不能落库或写缓存。原任务 5 不含新功能，基于投入产出不再单独执行；其跨模块完整回归清单仅保留为未来正式发布、参赛演示打包或相关模块大改时的检查参考，不得记作本轮已运行。
-- 下一步：进入阶段九，先明确长期学习者记忆的数据来源、后台提炼、用户控制、回退和个性化使用边界，再拆分实现任务。Quick AI 浮层任务 7 的真实桌面验收仍是独立待办。
+- 学习目标聚合（2026-08-14 已验收）：SQLite v19、稳定 target/occurrence、目标级复习状态、历史 Feed/card/attempt/feedback 追溯、`legacy_compat` 隔离、Memory 聚合次数与全部真实出现、Review 同轮去重/跨轮 occurrence 轮换和精确目标相邻避让均已完成。Memory 搜索保留历史语境与解释命中，但优先精确目标、目标前缀/包含和原始查询，同级再按最近 occurrence 排序。实现经过自动验证、父任务代码审查、真实 v18→v19 启动修复及用户真实 Tauri/SQLite 人工验收；未进入画像、记忆注入、个性化排序、效果评估或语义聚类。
+- 下一步：学习目标聚合任务已经收口；阶段九继续暂停，等待用户明确后续方向，不因本任务完成而自动进入长期学习者记忆或个性化实现。
 - 阶段八：基于真实 `learning_records` 的最小复习闭环、后台英文制卡、学习结果/撤销、来源追溯、卡片质量反馈、缓存与重启恢复均已收口；写作、Quick AI、长期学习者记忆、主动表达和 Markdown 未并入本阶段，基于长期记忆的个性化排序属于阶段九。
 - 整体性能探查（2026-08-07）：按四层（启动/前端渲染/SQLite/内存体积）实测，当前真实数据规模下**无用户可感知瓶颈**。SQLite 查询全部走索引且冷热均 <4ms；每 command 重开连接 + 8 次迁移检查经真实 rusqlite 基准测得约 1.45ms（迁移去重实测无效，1.450 vs 1.452ms，已回退）；前端流式渲染每 delta 约 0.68ms（520ms 节流下无感知）；首屏 204 DOM 节点；全部对话页实际只渲染 26 个有标题会话。明确**不要**为性能引入 SQLite 连接复用（rusqlite Connection 虽 Send，但 guard 跨 await 编译失败、流式 record_for_app 持锁会冻结 UI、Mutex 非重入、backup VACUUM 长持锁，四重风险而收益 <10ms/操作）。后续若数据规模显著增长（如数万学习记录），再重测 `list_all_quick_ai_conversations` 全量列表与流式重建成本。
 - 主题启动三段式加载修复（2026-08-07）：主窗口启动曾出现"透明空白 → ReadRay Default 硬编码色 → 已选主题"的闪烁。根因：`.rr-main-app` 的 CSS 硬编码了默认主题变量（`main-app.css`），真实主题要等 `useAppTheme` 挂载后的异步 IPC `get_theme_snapshot`（SQLite 读 ~6ms）才用 inline style 覆盖，且窗口在 setup 时即 `show()`，与前端挂载并行赛跑。修复：新增 `src/themePrefetch.ts`，`main.tsx` 在 React 挂载前（仅 `view=main`）用 Tauri IPC 预取已选主题（带 2s 超时兜底、失败静默回退），`useAppTheme` 挂载 effect 改为 `useLayoutEffect`，首帧绘制前即应用预取快照（`.rr-main-app` 首帧即为已选主题），随后仍 `reload()` 权威重读。overlay / 非 Tauri 预览路径零改动（跳过预取）。验证：前端 26/30/43 测试全绿（settings 含 5 个新增预取用例）、`pnpm build` 通过、Rust 未改动（140/4 同基线）；独立审计确认无启动失败/竞态/语义破坏风险。
-- 主窗口静态品牌启动层与图标光学放大（2026-08-13）：`index.html` 在 React 模块前为 `view=main` 提供静态品牌层，背景调整为与图标深色底座一致的 `#141412`，底座融入整屏；启动图标由原 80～112px 提升为响应式 132～176px。`MainAppWindow` 首帧后通过 `src/startupBrand.ts` 添加就绪类并在 160ms 内淡出；不设最短展示时间、不创建第二个 Tauri 窗口，overlay 不显示，开机启动仍保持隐藏。正式图标母版在不重绘内部图形的前提下收紧透明安全边距，小尺寸视觉约放大 4%，并重新生成全部 Tauri 图标及 256px 启动图标。此前终端中 38.98～55.66s 的等待发生在图标资源变更触发的 Rust debug 重编译/链接阶段、早于 `readray.exe` 启动，不等同于安装版应用的运行期启动耗时；静态品牌层只能覆盖 EXE 启动后的前端挂载阶段。验证：`test:startup` 3/3、`test:settings` 43/43、`test:overlay` 20/20、`pnpm build` 与 `git diff --check` 通过；融合后的启动层视觉效果待用户真实 Tauri 人工验收。
-- WebView 默认右键菜单屏蔽（2026-08-13）：`src/main.tsx` 仅在 Tauri 桌面运行时安装 `src/desktopContextMenu.ts`，全局阻止 WebView2 的返回、刷新、另存为、打印、检查等默认菜单；守卫不停止事件传播，因此会话列表既有“重命名、导出、删除”自定义右键菜单保持可用，普通浏览器预览不受影响。验证：右键守卫 2/2、设置聚合测试 45/45、会话回归 27/27、`pnpm build` 与 `git diff --check` 通过；真实 Tauri 点击行为待用户人工确认。
+- 主窗口静态品牌启动层与图标光学放大（2026-08-13）：`index.html` 在 React 模块前为 `view=main` 提供静态品牌层，背景调整为与图标深色底座一致的 `#141412`，底座融入整屏；启动图标由原 80～112px 提升为响应式 132～176px。`MainAppWindow` 首帧后通过 `src/startupBrand.ts` 添加就绪类并在 160ms 内淡出；不设最短展示时间、不创建第二个 Tauri 窗口，overlay 不显示，开机启动仍保持隐藏。正式图标母版在不重绘内部图形的前提下收紧透明安全边距，小尺寸视觉约放大 4%，并重新生成全部 Tauri 图标及 256px 启动图标。此前终端中 38.98～55.66s 的等待发生在图标资源变更触发的 Rust debug 重编译/链接阶段、早于 `readray.exe` 启动，不等同于安装版应用的运行期启动耗时；静态品牌层只能覆盖 EXE 启动后的前端挂载阶段。验证：`test:startup` 3/3、`test:settings` 43/43、`test:overlay` 20/20、`pnpm build` 与 `git diff --check` 通过；用户已于 2026-08-13 确认真实 Tauri 视觉验收通过。
+- WebView 默认右键菜单屏蔽（2026-08-13）：`src/main.tsx` 仅在 Tauri 桌面运行时安装 `src/desktopContextMenu.ts`，全局阻止 WebView2 的返回、刷新、另存为、打印、检查等默认菜单；守卫不停止事件传播，因此会话列表既有“重命名、导出、删除”自定义右键菜单保持可用，普通浏览器预览不受影响。验证：右键守卫 2/2、设置聚合测试 45/45、会话回归 27/27、`pnpm build` 与 `git diff --check` 通过；用户已于 2026-08-13 确认真实 Tauri 点击验收通过。
+- 写作辅助编辑型对话 UI（2026-08-13）：用户问题、选区上下文与 Agent 回答已收敛为克制的编辑型对话；去除重复角色/摘要标题、左右竖线与轮次横线，回答正文提高可读性，选区并入用户提示块，内容表达使用普通列表且仅操作保留胶囊按钮。写作测试 30 项、生产构建与 `git diff --check` 通过；用户已确认真实桌面视觉验收通过。本轮未修改写作数据库、Rust command 或问答协议。
 - DeepSeek 请求超时兜底（2026-08-07）：对话流式生成曾出现"一直生成中不中断"。根因：所有 reqwest 调用用 `Client::new()`（默认无超时），DeepSeek 流不关闭或网络半开时 `stream.next().await` 永久挂起，前端 invoke 永不 settle，UI 停在"正在生成"。修复：`deepseek_client.rs` 新增 `shared_http_client()`（`Client::builder().timeout(180s).read_timeout(60s)`，零新增依赖），替换全部 3 处 `Client::new()`（流式/非流式 chat + 余额 GET）及 `lib.rs` smoke test；`read_timeout` 每次读到 chunk 后重置，即"60s 无数据则中断"的流空闲检测，长回答不受影响。超时触发后链路：Rust Err → invoke reject → 前端恢复逻辑读库 → assistant 不存在 → 返回 pending → UI 显示"生成中断可重试"（既有闭环，无需改前端）。验证：Rust 141 pass / 4 ignored（含新增客户端创建用例）、前端 26/30/43 全绿、build/fmt/check 通过。
 - 当前约束：不使用通用 Agent 框架，不内置商业词典，不做 OCR、本地大模型或跨平台支持。
 - 交接原则：`HANDOFF.md` 只记录会影响下一次恢复上下文的信息，小型文档措辞和格式调整不记录。
 
 ## 当前阶段入口
 
-完整文件职责和按任务检索入口以 `docs/RESOURCE_MAP.yml` 为准；这里保留已验收的阶段八复习闭环恢复入口，并以阶段九长期学习者记忆与个性化讨论作为当前入口，避免维护第二份资源地图。
+完整文件职责和按任务检索入口以 `docs/RESOURCE_MAP.yml` 为准；这里保留已验收的阶段八复习闭环和学习目标聚合恢复入口，阶段九仍暂停，避免维护第二份资源地图。
 
 - `AGENTS.md`：协作规则；开始任务时先读。
 - `docs/DEVELOPMENT_PLAN.md`：项目方向、阶段边界和验收标准的权威来源。
@@ -29,7 +31,7 @@
 - `docs/THEME_PROTOCOL.md` / `src-tauri/src/themes.rs` / `src/themeProtocol.ts`：ReadRayThemeV1、安全解析、规范化持久化和主窗口应用边界。
 - `src/App.tsx` / `src/components/MainAppShell.tsx` / `src/components/MainSidebar.tsx`：设置入口、主窗口装配和页面导航边界。
 - `src/components/ReviewPage.tsx` / `src/reviewBackgroundPreparation.ts` / `src/reviewPreparationCoordinator.ts` / `src/reviewAuthorityRefresh.ts` / `src/reviewQualitySaveQueue.ts` / `src/reviewService.ts` / `src/reviewRepository.ts`：复习内容区、进入页面前的首屏预热、后台制卡协调、外部刷新延后、应用级卡片质量反馈协调（跨 ReviewPage 卸载存活）、业务映射和正式 Tauri 读取/写回链路；页面不得直接调用 command。
-- `src-tauri/src/review.rs` / `src-tauri/src/learning_records.rs` / `src-tauri/src/explanation_cache.rs`：复习 Feed、学习记录与 SQLite v13–v18 schema；v17 新建规范英文学习目标伴生投影，v18 新建 ExplanationCard 精确缓存。缓存 identity、TTL/容量、条件后台维护与命中重验由独立 cache 模块负责；`learning_records` 仍是不可修改的原始事件，Review 候选与制卡只消费投影目标。
+- `src-tauri/src/review.rs` / `src-tauri/src/learning_records.rs` / `src-tauri/src/explanation_cache.rs`：复习 Feed、追加式学习事件与 SQLite v19 schema。正常 `learning_targets` 唯一身份为 canonicalizationVersion + queryType + normalizedTargetText；无可靠英文投影的旧记录使用每记录独占、不可聚合且不可调度的 `legacy_compat` 身份。`learning_target_occurrences` 保留真实记录绑定和未来重绑 revision，`learning_target_review_states` 由全部未撤销 attempt 顺序重放；Feed、attempt、generated card 同时冻结 target/record 身份。Memory target commands 与 Review target 调度只消费正常目标，缓存仍由 explanation_cache.rs 独立负责。
 - `src-tauri/src/lib.rs` / `src-tauri/tauri.conf.json`：主窗口与 overlay 的命令、快捷键、关闭/隐藏和生命周期入口。
 - `.env.example` / `src-tauri/src/deepseek_client.rs` / `src-tauri/src/secret_store.rs`：DeepSeek 开发环境回退、共享请求和 Windows 安全存储边界；不得把真实密钥写入仓库、SQLite、前端持久化或普通日志。
 - `package.json` / `src-tauri/Cargo.toml` / `src-tauri/capabilities/default.json`：前端、Rust 插件和最小权限装配；新增设置能力前先确认是否能复用现有依赖。
@@ -109,7 +111,7 @@
 - `learning_records` 使用 `rusqlite` bundled 和 `schema_migrations`；v1 把每次成功解释保存为不可覆盖的独立事件，保留原文、标准化文本、类型、来源、可选上下文、完整 ExplanationCard JSON、schemaVersion 和时间。未定义的 difficulty 保存为 `NULL`。
 - `create_explanation_card` 先完成 DeepSeek 解析和 validator，再写学习记录；请求、解析、校验或存储任一失败都不留下记录。manual 与 windows_uia 共用同一正式链路。
 - 学习记录 commands 已覆盖分页、搜索、单条、删除和只读今日摘要；“记忆”“今天”分别经 repository/service 读取真实数据，页面不接触 SQL。正式 Tauri 路径不读取 fixture，overlay 保存成功会通知已打开页面刷新。
-- “今天”只陈述当天真实查询数量、最近记录、类型、来源和时间，不生成当前 schema 无法证明的复习数量、高频词或趋势；“过去的出现”同样保持隐藏。
+- “今天”只陈述当天真实查询数量、最近记录、类型、来源和时间，不生成当前 schema 无法证明的复习数量、高频词或趋势；“记忆”以聚合学习目标展示详情，并在“过去的出现”中列出该目标的全部真实 occurrence、原始来源、上下文和时间。
 - Quick AI 使用独立普通 chat/completions 请求，不复用 ExplanationCard JSON；两者只共享 `.env`、模型/API key 和 HTTP 错误边界。`Ctrl+Alt+R` overlay 支持解释与 Quick AI 切换、新对话、多轮发送和隐藏，真实 DeepSeek 两轮上下文已验证。
 - SQLite v2 的 `quick_ai_conversations` / `quick_ai_messages` 与 `learning_records` 分表，消息保存 role、content、sequence 和时间，为完整对话和后续管理提供权威数据。
 - `main` 与 `overlay` 是独立窗口；overlay 的呼出意图先由 Rust 原子保存，再由前端在事件、获焦或挂载时领取，避免隐藏 WebView 漏事件或沿用错误模式。只有 overlay 失焦自动隐藏。
@@ -192,7 +194,7 @@
 - SQLite v16 兼容“schema_migrations 已登记 1～15，但 review_quality_feedback 仍是旧中间版”的真实数据库：按实际列与唯一索引检测结构；缺少 `card_context_key` 时在同一迁移事务中重建并保留全部反馈字段，`generated_card_id IS NULL` 回填 `recorded`，否则回填 `generated:<id>`，唯一约束改为 `(feed_item_id, card_context_key)`。已经是最终结构的数据库只登记 v16，不重建反馈表或幂等日志；禁止手工改写真实数据库。
 - 当日本地日历使用游标分页持续生成 Feed，不设每日条数上限。每轮每条真实记录只出现一次；先取已经到期或将在今天结束前到期的目标，再排新记录与继续练习。当前轮所有条目都有生效 attempt 前，仓库不创建下一轮；完成整轮后同一目标才可再次出现。当前排序只陈述这些真实状态，不声称薄弱项或个性化策略；阶段九才用长期学习者记忆做可解释推荐排序。
 - cycle 0 只直接使用 `learning_record.context_text` 中保存的完整英文语境；ExplanationCard 的 AI 例句和 sourceSentence 不标成学习时原始语境。Tauri 主应用启动及 `learning-record-created` 更新后，在 ReviewPage 未挂载时先通过正式 ReviewService 读取首批 Feed，并用同一个应用级协调器填充首屏缓冲；页面挂载后立即接管，迟到预热读取不得覆盖页面 Feed。缺失可用英文语境或进入后续轮次时，协调器在条目发布前通过正式 service/repository/typed command 按需请求 DeepSeek。尚未浏览的 Ready、queued 与 working 低于 6 才补到目标 12，并发上限 2；每张可见卡按 feedItemId 独立登记浏览，后序 Ready 不会越过并删除前序 pending/失败。制卡失败在 SQLite 按稳定 key 记录次数和指数退避；启动预热直接跳过仍在退避期的条目，显式重试携带 `explicitRetry` 但继续复用原 key。day/feed item/learning record/cycle 组成队列身份与稳定 request key，跨日迟到结果不能进入当前页。
-- `review_generated_cards` 有效期为 30 天，每个 learning record 的 3 张与全局 256 张均是 LRU 软上限：仍被任意可恢复 Feed 引用的有效卡受保护，只让未引用复用缓存占用剩余容量，真正过期后仍可淘汰。前三张优先提供不同语境，第四轮及以后轮换复用；257 个不同目标各有一张绑定卡时不会解绑第一张、重新制卡并逐张振荡。受保护卡可暂时超过软上限，长期数据由有效期、每目标复用与未引用缓存 LRU 共同收缩。
+- `review_generated_cards` 有效期为 30 天，每个 learning record 的 3 张与全局 256 张均是 LRU 软上限：仍被任意可恢复 Feed 引用的有效卡受保护，只让未引用复用缓存占用剩余容量，真正过期后仍可淘汰。每个真实 occurrence 的前三张优先提供不同语境，第四轮及以后只轮换复用同一 learning record 的卡；257 个不同 learning record 各有一张绑定卡时不会解绑第一张、重新制卡并逐张振荡。受保护卡可暂时超过软上限，长期数据由有效期、每记录复用与未引用缓存 LRU 共同收缩。
 - 只有“想起来了 / 没想起来”事务写回成功才完成一项；打开、提示、揭晓、来源、关闭和质量反馈均不计完成。attempt 记录是否使用提示；提示后想起与无提示想起使用不同下次时间。写回失败保留当前卡片并用同一 request key 原地重试；expected revision、稳定 request key、页面与队列条目身份共同拒绝双击、重复 attempt、模糊成功和迟到结果。
 - 每次学习结果（包括较早轮次和最后一项）都可撤销；撤销在事务内按仍生效的 attempt 重算目标并推进 revision。外部 learning-record 刷新在 outcome、undo 或质量反馈写回期间延后，写回结束后通过 `get_review_feed_item_state` 读取 SQLite 权威条目和全局完成统计，避免吞掉已提交或模糊成功的结果。
 - 卡片质量赞踩点击即写入，原因和详情完全可选，关闭详情不会取消在途或已保存反馈。质量反馈由主应用装配的应用级 `ReviewQualityCoordinator` 承担，跨 ReviewPage 卸载继续运行。协调器已收口为明确异步状态机：尚未发出的同卡 save/undo 意图可合并为最后选择；一旦发送，requestKey、expectedRevision 与 payload 整体冻结。直接成功和“SQLite 已提交但 IPC 失败”的权威确认成功共用恰好一次 finished 收口；对账仍未知的失败保留冻结请求，显式重试先预读目标状态，未达成时复用完全相同输入。确定失败发出 failed 终态、按卡片身份独立展示且不阻塞其他卡片；ReviewPage 在所有终态读取 SQLite 权威条目，并在全队列结束后释放外部刷新门禁。App 已把协调器接入 `DesktopSaveCoordinator`：退出开始后拒绝新反馈，flush 等待 queued/预读/写回/对账全部完成，未解决失败携带卡片身份阻止安全退出。Rust command 继续核对 cardContextKey，旧生成语境的迟到请求不能误写到新卡。反馈仍使用独立表和幂等日志，不改变学习结果或调度，本阶段不声称已用于个性化。
@@ -247,18 +249,20 @@
 - 解释卡与写作分析提示词保持独立未并入（一致性重构留作后续可选）。
 - 验收：用户真实 Tauri 确认效果提升；Rust 137 通过 / 4 ignored、前端 25/30/38 全绿、build/fmt/check/diff 通过；4 项真实 DeepSeek live 测试（白名单、诚实边界、两轮上下文、解释卡回归）通过。
 
-### Quick AI 浮层体验升级（任务 7 自动回归通过，等待人工验收）
+### Quick AI 浮层体验升级（任务 7 已完成）
 
 - 浮层对话窗口已调整为约 `780 × 500px`，面板铺满原生窗口；输入栏密度、发送按钮和多行向上扩展已收紧，同时保留中文输入法和现有发送快捷键语义。
 - 浮层现已分离显示状态、页面状态和活动会话：失焦只隐藏，重新呼出恢复页面、会话、草稿与合理滚动位置；对话页 Esc/返回按钮回到搜索入口，搜索入口 Esc 隐藏。隐藏不会取消流式生成，迟到结果继续按会话和请求身份隔离。
 - 历史按钮提供新对话、Overlay 最近会话和完整历史；Overlay 历史只读取 `overlay` 来源，主窗口侧栏只读取 `main` 来源，主窗口全部历史仍统一归档两类会话。SQLite v10 已删除无法追溯且仅用于测试的 `legacy` 会话，后续创建入口只允许 `main` / `overlay`。
-- 任务 7 自动回归已覆盖窗口/抽屉外壳、单多行输入、失焦隐藏恢复、两层 Esc、返回、历史切换、`Ctrl+N`、流式停止恢复及 loading/error/stopped 状态。Overlay 8 项、会话 27 项、写作 30 项、设置/主题/生命周期 43 项通过；Rust 143 项通过、4 项真实联网测试按既有规则忽略；生产构建、Cargo fmt/check、RESOURCE_MAP YAML、SQLite v10 完整性和 `git diff --check` 均正常。未启动或操作 Tauri 窗口，当前只等待用户真实桌面验收。
+- 任务 7 自动回归已覆盖窗口/抽屉外壳、单多行输入、失焦隐藏恢复、两层 Esc、返回、历史切换、`Ctrl+N`、流式停止恢复及 loading/error/stopped 状态。Overlay 8 项、会话 27 项、写作 30 项、设置/主题/生命周期 43 项通过；Rust 143 项通过、4 项真实联网测试按既有规则忽略；生产构建、Cargo fmt/check、RESOURCE_MAP YAML、SQLite v10 完整性和 `git diff --check` 均正常。用户已于 2026-08-13 确认真实 Tauri 视觉与交互验收通过，任务 7 正式完成。
 
 ## 下一步
 
-阶段八已经完成独立审核、自动验证和用户真实 Tauri/SQLite/DeepSeek 与视觉交互人工验收。下一步进入阶段九，先讨论长期学习者记忆的数据来源、后台提炼、用户控制、回退、可追溯性及其如何安全影响解释和复习优先级；在产品语义确认前不固化 schema、画像算法或记忆注入 UI。
+阶段八与阶段九前的“学习目标聚合”均已完成独立审核、自动验证和用户真实 Tauri/SQLite 人工验收。真实数据库已成功登记 v19，迁移保护性审计、历史兼容身份、Memory 去重/查询次数/历史出现、Review 同目标去重与搜索相关度均已通过实际使用确认；本任务正式收口。阶段九继续暂停，不得在用户明确前扩展到画像、记忆注入、个性化排序、效果评估或语义聚类。
 
-Quick AI 浮层升级任务 7 的自动回归已完成，但真实桌面验收仍是独立待办；不要因为本次阶段八实现而把它误记为已验收。
+当前验证：初始实现的 Rust lib 234/234、前端 Review 50/50、Memory 3/3、生产构建、Cargo fmt/check、YAML 与 diff 检查均通过；返修阶段按不重复整套测试的约束，补跑 active 槽、卡池隔离、v19 attempt/追溯、跨日兼容迁移/重启幂等、rollback、Memory/Review 隔离和搜索相关度等聚焦测试，均通过。用户已于 2026-08-14 完成真实 Tauri/SQLite 人工验收。
+
+Quick AI 浮层升级任务 7、主窗口静态品牌启动层、WebView 默认右键菜单屏蔽及写作辅助编辑型对话 UI 均已于 2026-08-13 通过用户真实桌面验收。
 
 - 已确认决策（详见 `docs/AGENT_UPGRADE.md`）：本轮不实现记忆注入，对话继续维持"不声称能访问本地学习记录/联网/长期记忆"的诚实边界；"重新生成"沿用覆盖式语义（与 ChatGPT 主流一致），本轮不实现。
 - 新环境仍可复制 `.env.example` 为 `.env` 填写开发期 `DEEPSEEK_API_KEY`；用户在设置页保存或清除后，以 Windows 安全存储中的持久化决定为准。真实 `.env` 不提交。
@@ -273,7 +277,7 @@ Quick AI 浮层升级任务 7 的自动回归已完成，但真实桌面验收�
 - **跨应用扩展边界**：不要求一次支持所有 Windows 应用。先逐个验证 VS Code、Obsidian、Notion Desktop、WPS/Word、PDF 阅读器等高价值场景；继续以 UIA 为主，高价值应用再做专门适配，剪贴板仅作 fallback，OCR 仍不在当前路线内。
 - **解释体验限制**：查询类型依赖本地启发式规则，缩写、很短的多句文本或缺少句末标点的长句可能落入相邻类型；优先用真实样本调整，不为分类再增加一次 LLM 请求。
 - **解释体验限制**：CaptureInput 和 ExplanationCard 当前上限为 4096 字符，长段落还受模型 JSON 稳定性与浮窗最大高度约束，不代表整页翻译能力。
-- **阶段八边界**：最小复习闭环只使用真实 `learning_records`，一条记录一个目标，不按 normalized text 聚合；同一目标可在完成一轮后以新的英文语境再次出现，但这不等于伪造“历史再次遇到”事实。记忆页“过去的出现”入口继续隐藏。长期学习者记忆与个性化 Feed 排序属于阶段九，不得由当前复习状态或质量反馈冒充。
+- **阶段八与 v19 聚合边界**：原始 `learning_records` 继续作为追加式真实查询事件完整保留；正式聚合只合并 queryType 相同且英文学习目标在大小写、首尾空白和连续空白规范化后精确一致的记录，不做语义、相近词、同义词或词形聚类。聚合目标详情可追溯全部真实 occurrence、原始来源、上下文和时间；Review 可在后续轮次轮换该目标的不同真实英文语境，但不伪造历史出现。长期学习者记忆、记忆注入与个性化 Feed 排序仍属于阶段九，不得由当前复习状态或质量反馈冒充。
 - **Agent 后续边界**：Quick AI 已支持流式输出、停止/重试、白名单 Markdown 渲染和组合式系统提示词；记忆注入、回答重新生成和超 8K 续写仍是未决能力，不因浮层 UI 升级自动并入。
 - **主题后续边界**：Flexoki 与 Codex 主题已作为随包内置主题接入；当前不包含外部主题 adapter、社区商店、在线下载或自动更新。新增 adapter 仍必须转换到 ReadRayThemeV1 并通过同一安全校验，不能放宽任意 CSS、字体、图片或网络资源边界。
 - **对话后续边界**：阶段六的查看全部、重命名、删除和原生导出已经完成；回答重生成和记忆引用聚合属于更后续能力，当前 UI 继续诚实禁用。

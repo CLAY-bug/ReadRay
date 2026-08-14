@@ -74,6 +74,7 @@ function learningRecord(
 ): LearningRecord {
   return {
     id,
+    learningTargetId: id,
     queryText,
     learningTargetText: queryText,
     queryDirection: "enToZh",
@@ -138,7 +139,7 @@ class BrowserPreviewReviewService implements ReviewService {
   constructor() {
     for (const seed of seeds) {
       this.targets.set(seed.record.id, {
-        learningRecordId: seed.record.id,
+        learningTargetId: seed.record.learningTargetId,
         revision: 0,
         nextReviewAtUnixMs: seed.record.createdAtUnixMs,
         attemptCount: 0,
@@ -188,6 +189,7 @@ class BrowserPreviewReviewService implements ReviewService {
   async prepareFeedCard(input: {
     feedItemId: number;
     learningRecordId: number;
+    learningTargetId: number;
     requestKey: string;
   }) {
     const ordinal = input.feedItemId - 1;
@@ -203,6 +205,7 @@ class BrowserPreviewReviewService implements ReviewService {
     const card: GeneratedReviewCard = {
       id: this.nextGeneratedId++,
       learningRecordId: input.learningRecordId,
+      learningTargetId: input.learningTargetId,
       variantIndex: cycleIndex,
       englishContext: context,
       englishContextZh: `这是包含 ${seed.record.queryText} 的浏览器预览 AI 语境。`,
@@ -240,6 +243,7 @@ class BrowserPreviewReviewService implements ReviewService {
       id: this.nextAttemptId++,
       feedItemId: input.feedItemId,
       learningRecordId: input.learningRecordId,
+      learningTargetId: input.learningTargetId,
       requestKey: input.requestKey,
       expectedRevision: input.expectedRevision,
       targetRevision,
@@ -294,7 +298,7 @@ class BrowserPreviewReviewService implements ReviewService {
       .sort((a, b) => a.createdAtUnixMs - b.createdAtUnixMs || a.id - b.id);
     const last = active[active.length - 1];
     const nextTarget: ReviewTarget = {
-      learningRecordId: input.learningRecordId,
+      learningTargetId: input.learningTargetId,
       revision: target.revision + 1,
       nextReviewAtUnixMs: last?.nextReviewAtUnixMs ?? dayStart,
       attemptCount: active.length,
@@ -389,6 +393,7 @@ class BrowserPreviewReviewService implements ReviewService {
       ordinal,
       cycleIndex,
       learningRecordId: seed.record.id,
+      learningTargetId: seed.record.learningTargetId,
       reasonCode: cycleIndex === 0 ? "newRecord" : "continuedPractice",
       reason:
         cycleIndex === 0

@@ -6,6 +6,7 @@ import type {
 
 export type LearningRecord = {
   id: number;
+  learningTargetId: number;
   queryText: string;
   learningTargetText: string;
   queryDirection: "enToZh" | "zhToEn";
@@ -18,6 +19,31 @@ export type LearningRecord = {
   schemaVersion: number;
   createdAtUnixMs: number;
   difficulty?: string | null;
+};
+
+export type LearningTargetSummary = {
+  id: number;
+  stableKey: string;
+  canonicalizationVersion: number;
+  queryType: QueryType;
+  learningTargetText: string;
+  normalizedTargetText: string;
+  queryCount: number;
+  firstSeenAtUnixMs: number;
+  lastSeenAtUnixMs: number;
+  representativeRecord: LearningRecord;
+};
+
+export type LearningTargetPage = {
+  targets: LearningTargetSummary[];
+  page: number;
+  pageSize: number;
+  total: number;
+};
+
+export type LearningTargetDetail = {
+  target: LearningTargetSummary;
+  occurrences: LearningRecord[];
 };
 
 export type LearningRecordPage = {

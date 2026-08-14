@@ -50,6 +50,7 @@ function savedQualityFeedback(input, overrides = {}) {
 
 function card(index, overrides = {}) {
   const learningRecordId = 100 + index;
+  const learningTargetId = 500 + index;
   const feedItemId = 1_000 + index;
   const cycleIndex = overrides.cycleIndex ?? 0;
   return {
@@ -57,6 +58,7 @@ function card(index, overrides = {}) {
     ordinal: index,
     cycleIndex,
     learningRecordId,
+    learningTargetId,
     reasonCode: "newRecord",
     reason: "测试记录",
     typeLabel: "单词语境",
@@ -83,6 +85,7 @@ function card(index, overrides = {}) {
     paperTone: "paper",
     learningRecord: {
       id: learningRecordId,
+      learningTargetId,
       queryText: `word-${index}`,
       learningTargetText: `word-${index}`,
       queryDirection: "enToZh",
@@ -105,7 +108,7 @@ function card(index, overrides = {}) {
       createdAtUnixMs: DAY_START - index - 1,
     },
     target: {
-      learningRecordId,
+      learningTargetId,
       revision: 0,
       nextReviewAtUnixMs: DAY_START,
       attemptCount: 0,
@@ -138,6 +141,7 @@ function identityFor(sourceCard, dayStartUnixMs = DAY_START) {
     dayStartUnixMs,
     feedItemId: sourceCard.feedItemId,
     learningRecordId: sourceCard.learningRecordId,
+    learningTargetId: sourceCard.learningTargetId,
     cycleIndex: sourceCard.cycleIndex,
   };
 }
@@ -146,6 +150,7 @@ function generatedFor(sourceCard) {
   return {
     id: 2_000 + sourceCard.feedItemId,
     learningRecordId: sourceCard.learningRecordId,
+    learningTargetId: sourceCard.learningTargetId,
     variantIndex: sourceCard.cycleIndex,
     englishContext: `The team used ${sourceCard.query} in a complete English context.`,
     englishContextZh: `团队在完整英文语境中使用了 ${sourceCard.query}。`,
@@ -160,11 +165,12 @@ test("后台制卡 request key 由日期与条目身份稳定派生", () => {
     dayStartUnixMs: DAY_START,
     feedItemId: 1_002,
     learningRecordId: 102,
+    learningTargetId: 502,
     cycleIndex: 0,
   };
   const first = createReviewPreparationRequestKey(identity);
   const cloned = createReviewPreparationRequestKey(structuredClone(identity));
-  assert.equal(first, `review-card:${DAY_START}:1002:102:0`);
+  assert.equal(first, `review-card:${DAY_START}:1002:502:102:0`);
   assert.equal(cloned, first);
   assert.notEqual(
     createReviewPreparationRequestKey({ ...identity, cycleIndex: 1 }),

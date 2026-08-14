@@ -1,8 +1,8 @@
 import { invoke } from "@tauri-apps/api/core";
 import type { QueryType } from "./types/explanation";
 import type {
-  LearningRecord,
-  LearningRecordPage,
+  LearningTargetDetail,
+  LearningTargetPage,
 } from "./types/learningRecord";
 
 export type LearningRecordQuery = {
@@ -13,8 +13,8 @@ export type LearningRecordQuery = {
 };
 
 export interface MemoryRepository {
-  list(query: LearningRecordQuery): Promise<LearningRecordPage>;
-  get(id: number): Promise<LearningRecord | null>;
+  list(query: LearningRecordQuery): Promise<LearningTargetPage>;
+  get(id: number): Promise<LearningTargetDetail | null>;
 }
 
 export class TauriMemoryRepository implements MemoryRepository {
@@ -27,16 +27,16 @@ export class TauriMemoryRepository implements MemoryRepository {
     };
 
     if (keyword) {
-      return invoke<LearningRecordPage>("search_learning_records", {
+      return invoke<LearningTargetPage>("search_learning_targets", {
         ...payload,
         keyword,
       });
     }
 
-    return invoke<LearningRecordPage>("list_learning_records", payload);
+    return invoke<LearningTargetPage>("list_learning_targets", payload);
   }
 
   get(id: number) {
-    return invoke<LearningRecord | null>("get_learning_record", { id });
+    return invoke<LearningTargetDetail | null>("get_learning_target", { id });
   }
 }

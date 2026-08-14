@@ -10,13 +10,17 @@ export type MemoryFilterItem = {
 };
 
 export type MemoryHistoryOccurrence = {
+  learningRecordId?: string;
   time: string;
   app: string;
+  query?: string;
   context: string;
 };
 
 export type MemoryRecordItem = {
   id: string;
+  representativeLearningRecordId?: string;
+  queryCount?: number;
   group: MemoryRecordGroup;
   query: string;
   summary: string;

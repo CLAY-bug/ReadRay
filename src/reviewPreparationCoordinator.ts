@@ -13,6 +13,7 @@ export type ReviewPreparationIdentity = {
   dayStartUnixMs: number;
   feedItemId: number;
   learningRecordId: number;
+  learningTargetId: number;
   cycleIndex: number;
 };
 
@@ -22,6 +23,7 @@ export function createReviewPreparationRequestKey(
   const values = [
     input.dayStartUnixMs,
     input.feedItemId,
+    input.learningTargetId,
     input.learningRecordId,
     input.cycleIndex,
   ];
@@ -78,6 +80,7 @@ function taskFromCard(dayStartUnixMs: number, card: ReviewCardModel) {
     dayStartUnixMs,
     feedItemId: card.feedItemId,
     learningRecordId: card.learningRecordId,
+    learningTargetId: card.learningTargetId,
     cycleIndex: card.cycleIndex,
   };
   return {
@@ -93,6 +96,7 @@ function identityForCard(dayStartUnixMs: number, card: ReviewCardModel) {
     dayStartUnixMs,
     feedItemId: card.feedItemId,
     learningRecordId: card.learningRecordId,
+    learningTargetId: card.learningTargetId,
     cycleIndex: card.cycleIndex,
   });
 }
@@ -413,6 +417,7 @@ export class ReviewPreparationCoordinator {
         request = this.service.prepareFeedCard({
           feedItemId: task.feedItemId,
           learningRecordId: task.learningRecordId,
+          learningTargetId: task.learningTargetId,
           requestKey: task.requestKey,
           explicitRetry: task.explicitRetry,
         });
@@ -433,7 +438,8 @@ export class ReviewPreparationCoordinator {
   ) {
     this.working.delete(task.requestKey);
     if (
-      generatedCard.learningRecordId !== task.learningRecordId
+      generatedCard.learningRecordId !== task.learningRecordId ||
+      generatedCard.learningTargetId !== task.learningTargetId
     ) {
       this.finishFailed(task, "后台生成卡片与当前 Feed 条目身份不一致。");
       return;

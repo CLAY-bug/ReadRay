@@ -25,6 +25,7 @@ const DAY_END = new Date(2026, 7, 10).getTime();
 function learningRecord(id = 11, overrides = {}) {
   return {
     id,
+    learningTargetId: id,
     queryText: "robust",
     learningTargetText: "robust",
     queryDirection: "enToZh",
@@ -58,9 +59,9 @@ function learningRecord(id = 11, overrides = {}) {
   };
 }
 
-function target(learningRecordId = 11, overrides = {}) {
+function target(learningTargetId = 11, overrides = {}) {
   return {
-    learningRecordId,
+    learningTargetId,
     revision: 0,
     nextReviewAtUnixMs: DAY_START,
     attemptCount: 0,
@@ -110,6 +111,7 @@ function attempt(overrides = {}) {
     id: 51,
     feedItemId: 31,
     learningRecordId: 11,
+    learningTargetId: 11,
     requestKey: "review-outcome:stable",
     expectedRevision: 0,
     targetRevision: 1,
@@ -128,6 +130,7 @@ function generatedCard(overrides = {}) {
   return {
     id: 81,
     learningRecordId: 11,
+    learningTargetId: 11,
     variantIndex: 1,
     englishContext: "A robust plan can survive an unexpected change.",
     englishContextZh: "稳健的计划可以应对意外变化。",
@@ -635,6 +638,7 @@ test("service 原样提交 expectedRevision、提示使用和稳定 request key"
   const input = {
     feedItemId: 31,
     learningRecordId: 11,
+    learningTargetId: 11,
     expectedRevision: 0,
     outcome: "remembered",
     usedHint: true,

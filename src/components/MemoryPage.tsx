@@ -100,16 +100,15 @@ function MemoryPage({
         setRecords(result.records);
         setTotalCount(result.total);
         setListStatus("ready");
-        const requestedRecord =
+        const pendingRequestedId =
           requestedRecordId &&
           handledRequestedRecordIdRef.current !== requestedRecordId
-            ? result.records.find((record) => record.id === requestedRecordId)
+            ? requestedRecordId
             : undefined;
-        if (requestedRecordId) {
+        if (pendingRequestedId) {
           handledRequestedRecordIdRef.current = requestedRecordId;
         }
-        const nextRecord = requestedRecord ?? result.records[0] ?? null;
-        setSelectedId(nextRecord?.id ?? "");
+        setSelectedId(pendingRequestedId ?? result.records[0]?.id ?? "");
         setSelectedRecord(null);
       })
       .catch((error) => {
@@ -152,7 +151,7 @@ function MemoryPage({
         }
         if (!record) {
           setSelectedRecord(null);
-          setDetailError("这条学习记录已不存在。");
+          setDetailError("这个学习目标已不存在。");
           setDetailStatus("error");
           return;
         }
@@ -283,8 +282,8 @@ function MemoryPage({
       : listStatus === "error"
         ? "读取失败"
         : isFiltering
-          ? `${totalCount} 条结果`
-          : `${totalCount} 条记录`;
+          ? `${totalCount} 个结果`
+          : `${totalCount} 个学习目标`;
   const selectedRecordIsPassage =
     selectedRecord?.type === "sentence" || selectedRecord?.type === "paragraph";
 
@@ -410,6 +409,8 @@ function MemoryPage({
                                 <span>{record.time}</span>
                                 <span aria-hidden="true">·</span>
                                 <span>{record.typeLabel}</span>
+                                <span aria-hidden="true">·</span>
+                                <span>查询 {record.queryCount ?? 1} 次</span>
                               </span>
                             </button>
                           );
@@ -508,7 +509,7 @@ function MemoryPage({
                   className="rr-memory-detail-content"
                   id="rr-memory-detail-content"
                   data-testid="memory-detail"
-                  data-record-id={selectedRecord.id}
+                  data-target-id={selectedRecord.id}
                 >
                   <header
                     className={`rr-memory-detail-head${selectedRecordIsPassage ? " is-passage" : ""}`}
@@ -567,6 +568,10 @@ function MemoryPage({
                       </span>
                     ) : null}
                   </header>
+
+                  <p className="rr-memory-query-count">
+                    共查询 {selectedRecord.queryCount ?? 1} 次
+                  </p>
 
                   {selectedRecordIsPassage ? (
                     <div className="rr-memory-passage-detail">
@@ -658,7 +663,11 @@ function MemoryPage({
                         {selectedRecord.history.map((occurrence) => (
                           <article
                             className="rr-memory-history-event"
-                            key={`${occurrence.time}-${occurrence.app}`}
+                            key={
+                              occurrence.learningRecordId ??
+                              `${occurrence.time}-${occurrence.app}`
+                            }
+                            data-learning-record-id={occurrence.learningRecordId}
                           >
                             <time className="rr-memory-history-time">
                               {occurrence.time}
@@ -668,6 +677,9 @@ function MemoryPage({
                             </p>
                             <div className="rr-memory-history-source">
                               {occurrence.app}
+                              {occurrence.query
+                                ? ` · 原始查询：${occurrence.query}`
+                                : ""}
                             </div>
                           </article>
                         ))}

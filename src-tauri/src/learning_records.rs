@@ -6,13 +6,15 @@ use rusqlite::{
     params, params_from_iter, types::Value, Connection, OptionalExtension, Transaction,
 };
 use serde::Serialize;
+use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 use tauri::{AppHandle, Manager};
 
 const DATABASE_FILE_NAME: &str = "readray.sqlite3";
-const DATABASE_SCHEMA_VERSION: i64 = 18;
+const DATABASE_SCHEMA_VERSION: i64 = 19;
+const LEARNING_TARGET_CANONICALIZATION_VERSION: i64 = 1;
 const REVIEW_DAY_UNIX_MS: i64 = 24 * 60 * 60 * 1_000;
 pub const EXPLANATION_CARD_SCHEMA_VERSION: i64 = 2;
 const DEFAULT_PAGE: u32 = 1;
@@ -628,6 +630,67 @@ CREATE INDEX idx_explanation_card_cache_maintenance
   ON explanation_card_cache(last_accessed_at_unix_ms, created_at_unix_ms, cache_key);
 "#;
 
+const MIGRATION_19: &str = r#"
+CREATE TABLE learning_targets (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  stable_key TEXT NOT NULL UNIQUE,
+  target_kind TEXT NOT NULL DEFAULT 'learnable' CHECK (
+    target_kind IN ('learnable', 'legacy_compat')
+  ),
+  canonicalization_version INTEGER NOT NULL CHECK (canonicalization_version >= 0),
+  query_type TEXT NOT NULL CHECK (query_type IN ('word', 'phrase', 'sentence', 'paragraph')),
+  display_target_text TEXT NOT NULL,
+  normalized_target_text TEXT,
+  representative_learning_record_id INTEGER REFERENCES learning_records(id) ON DELETE SET NULL,
+  created_at_unix_ms INTEGER NOT NULL,
+  updated_at_unix_ms INTEGER NOT NULL,
+  CHECK (
+    (target_kind = 'learnable' AND canonicalization_version > 0
+      AND normalized_target_text IS NOT NULL AND length(normalized_target_text) > 0)
+    OR
+    (target_kind = 'legacy_compat' AND canonicalization_version = 0
+      AND normalized_target_text IS NULL)
+  ),
+  UNIQUE(canonicalization_version, query_type, normalized_target_text)
+);
+
+CREATE INDEX idx_learning_targets_recent
+  ON learning_targets(updated_at_unix_ms DESC, id DESC);
+CREATE INDEX idx_learning_targets_query_type_recent
+  ON learning_targets(query_type, updated_at_unix_ms DESC, id DESC);
+
+CREATE TABLE learning_target_occurrences (
+  learning_record_id INTEGER PRIMARY KEY REFERENCES learning_records(id) ON DELETE CASCADE,
+  learning_target_id INTEGER NOT NULL REFERENCES learning_targets(id) ON DELETE RESTRICT,
+  canonicalization_version INTEGER NOT NULL CHECK (canonicalization_version >= 0),
+  binding_revision INTEGER NOT NULL DEFAULT 0 CHECK (binding_revision >= 0),
+  bound_at_unix_ms INTEGER NOT NULL,
+  updated_at_unix_ms INTEGER NOT NULL
+);
+
+CREATE INDEX idx_learning_target_occurrences_target
+  ON learning_target_occurrences(learning_target_id, learning_record_id);
+
+CREATE TABLE learning_target_review_states (
+  learning_target_id INTEGER PRIMARY KEY REFERENCES learning_targets(id) ON DELETE CASCADE,
+  revision INTEGER NOT NULL DEFAULT 0 CHECK (revision >= 0),
+  next_review_at_unix_ms INTEGER NOT NULL,
+  attempt_count INTEGER NOT NULL DEFAULT 0 CHECK (attempt_count >= 0),
+  remembered_count INTEGER NOT NULL DEFAULT 0 CHECK (remembered_count >= 0),
+  forgotten_count INTEGER NOT NULL DEFAULT 0 CHECK (forgotten_count >= 0),
+  success_streak INTEGER NOT NULL DEFAULT 0 CHECK (success_streak >= 0),
+  last_reviewed_at_unix_ms INTEGER,
+  last_outcome TEXT CHECK (last_outcome IN ('remembered', 'forgotten')),
+  last_used_hint INTEGER CHECK (last_used_hint IN (0, 1)),
+  last_attempt_id INTEGER,
+  created_at_unix_ms INTEGER NOT NULL,
+  updated_at_unix_ms INTEGER NOT NULL
+);
+
+CREATE INDEX idx_learning_target_review_states_due
+  ON learning_target_review_states(next_review_at_unix_ms, learning_target_id);
+"#;
+
 const MIGRATIONS: &[(i64, &str)] = &[
     (1, MIGRATION_1),
     (2, MIGRATION_2),
@@ -646,13 +709,15 @@ const MIGRATIONS: &[(i64, &str)] = &[
     (15, MIGRATION_15),
     (16, MIGRATION_16),
     (17, MIGRATION_17),
-    (DATABASE_SCHEMA_VERSION, MIGRATION_18),
+    (18, MIGRATION_18),
+    (DATABASE_SCHEMA_VERSION, MIGRATION_19),
 ];
 
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct LearningRecord {
     pub id: i64,
+    pub learning_target_id: i64,
     pub query_text: String,
     pub learning_target_text: String,
     pub query_direction: QueryDirection,
@@ -683,8 +748,40 @@ pub struct TodayLearningSummary {
     pub latest_record: Option<LearningRecord>,
 }
 
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LearningTargetSummary {
+    pub id: i64,
+    pub stable_key: String,
+    pub canonicalization_version: i64,
+    pub query_type: QueryType,
+    pub learning_target_text: String,
+    pub normalized_target_text: String,
+    pub query_count: u64,
+    pub first_seen_at_unix_ms: i64,
+    pub last_seen_at_unix_ms: i64,
+    pub representative_record: LearningRecord,
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LearningTargetPage {
+    pub targets: Vec<LearningTargetSummary>,
+    pub page: u32,
+    pub page_size: u32,
+    pub total: u64,
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LearningTargetDetail {
+    pub target: LearningTargetSummary,
+    pub occurrences: Vec<LearningRecord>,
+}
+
 struct StoredLearningRecord {
     id: i64,
+    learning_target_id: i64,
     query_text: String,
     normalized_text: String,
     query_type: String,
@@ -765,6 +862,14 @@ impl LearningRecordStore {
                 ],
             )
             .map_err(|error| format!("规范英文学习目标写入失败：{error}"))?;
+        bind_learning_record_to_stable_target(
+            &transaction,
+            learning_record_id,
+            card.query_type(),
+            learning_target_text,
+            created_at_unix_ms,
+        )
+        .map_err(|error| format!("稳定学习目标写入失败：{error}"))?;
         transaction
             .commit()
             .map_err(|error| format!("学习记录写入事务无法提交：{error}"))?;
@@ -777,12 +882,78 @@ impl LearningRecordStore {
         get_learning_record_from_connection(&self.connection, id)
     }
 
-    fn delete(&self, id: i64) -> Result<bool, String> {
-        let affected = self
+    fn delete(&mut self, id: i64) -> Result<bool, String> {
+        let transaction = self
             .connection
+            .transaction()
+            .map_err(|error| format!("学习记录删除事务无法开始：{error}"))?;
+        let learning_target_id: Option<i64> = transaction
+            .query_row(
+                "SELECT learning_target_id FROM learning_target_occurrences
+                 WHERE learning_record_id = ?1",
+                [id],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(|error| format!("学习记录所属目标读取失败：{error}"))?;
+        let affected = transaction
             .execute("DELETE FROM learning_records WHERE id = ?1", [id])
             .map_err(|error| format!("学习记录删除失败：{error}"))?;
 
+        if affected > 0 {
+            if let Some(learning_target_id) = learning_target_id {
+                let representative: Option<(i64, String, i64)> = transaction
+                    .query_row(
+                        "SELECT record.id, projection.learning_target_text,
+                                record.created_at_unix_ms
+                         FROM learning_target_occurrences occurrence
+                         JOIN learning_records record ON record.id = occurrence.learning_record_id
+                         JOIN learning_record_targets projection
+                           ON projection.learning_record_id = record.id
+                         WHERE occurrence.learning_target_id = ?1
+                         ORDER BY record.created_at_unix_ms DESC, record.id DESC
+                         LIMIT 1",
+                        [learning_target_id],
+                        |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+                    )
+                    .optional()
+                    .map_err(|error| format!("学习目标代表 occurrence 重选失败：{error}"))?;
+                if let Some((representative_id, display_text, updated_at)) = representative {
+                    transaction
+                        .execute(
+                            "UPDATE learning_targets
+                             SET representative_learning_record_id = ?1,
+                                 display_target_text = ?2,
+                                 updated_at_unix_ms = ?3
+                             WHERE id = ?4",
+                            params![
+                                representative_id,
+                                display_text,
+                                updated_at,
+                                learning_target_id
+                            ],
+                        )
+                        .map_err(|error| format!("学习目标代表 occurrence 更新失败：{error}"))?;
+                } else {
+                    transaction
+                        .execute(
+                            "DELETE FROM learning_targets
+                             WHERE id = ?1
+                               AND NOT EXISTS (
+                                 SELECT 1 FROM review_feed_items WHERE learning_target_id = ?1
+                               )
+                               AND NOT EXISTS (
+                                 SELECT 1 FROM review_generated_cards WHERE learning_target_id = ?1
+                               )",
+                            [learning_target_id],
+                        )
+                        .map_err(|error| format!("空学习目标清理失败：{error}"))?;
+                }
+            }
+        }
+        transaction
+            .commit()
+            .map_err(|error| format!("学习记录删除事务提交失败：{error}"))?;
         Ok(affected > 0)
     }
 
@@ -875,6 +1046,120 @@ impl LearningRecordStore {
                 .map_err(|_| "今日学习记录数量无效，数据库返回了负数。".to_string())?,
             latest_record: latest_stored.map(decode_learning_record).transpose()?,
         })
+    }
+
+    fn list_targets(
+        &self,
+        page: Option<u32>,
+        page_size: Option<u32>,
+        keyword: Option<&str>,
+        query_type: Option<QueryType>,
+    ) -> Result<LearningTargetPage, String> {
+        let (page, page_size) = validate_pagination(page, page_size)?;
+        let (where_clause, mut values) = build_target_filter(keyword, query_type)?;
+        let count_sql = format!(
+            "SELECT COUNT(*) FROM learning_targets lt
+             WHERE lt.target_kind = 'learnable'
+               AND EXISTS (
+               SELECT 1 FROM learning_target_occurrences lto
+               WHERE lto.learning_target_id = lt.id
+             ) {where_clause}"
+        );
+        let total: i64 = self
+            .connection
+            .query_row(&count_sql, params_from_iter(values.iter()), |row| {
+                row.get(0)
+            })
+            .map_err(|error| format!("学习目标总数读取失败：{error}"))?;
+
+        let offset = i64::from(page.saturating_sub(1)) * i64::from(page_size);
+        let order_clause = build_target_order_clause(keyword, &mut values)?;
+        values.push(Value::Integer(i64::from(page_size)));
+        values.push(Value::Integer(offset));
+        let list_sql = format!(
+            "SELECT lt.id, lt.stable_key, lt.canonicalization_version, lt.query_type,
+                    lt.display_target_text, lt.normalized_target_text,
+                    COUNT(lto.learning_record_id), MIN(lr.created_at_unix_ms),
+                    MAX(lr.created_at_unix_ms),
+                    (
+                      SELECT latest.learning_record_id
+                      FROM learning_target_occurrences latest
+                      JOIN learning_records latest_record ON latest_record.id = latest.learning_record_id
+                      WHERE latest.learning_target_id = lt.id
+                      ORDER BY latest_record.created_at_unix_ms DESC, latest.learning_record_id DESC
+                      LIMIT 1
+                    )
+             FROM learning_targets lt
+             JOIN learning_target_occurrences lto ON lto.learning_target_id = lt.id
+             JOIN learning_records lr ON lr.id = lto.learning_record_id
+             WHERE lt.target_kind = 'learnable' {where_clause}
+             GROUP BY lt.id
+             ORDER BY {order_clause}
+             LIMIT ? OFFSET ?"
+        );
+        let mut statement = self
+            .connection
+            .prepare(&list_sql)
+            .map_err(|error| format!("学习目标分页读取语句无法准备：{error}"))?;
+        let rows = statement
+            .query_map(params_from_iter(values.iter()), |row| {
+                Ok((
+                    row.get::<_, i64>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, i64>(2)?,
+                    row.get::<_, String>(3)?,
+                    row.get::<_, String>(4)?,
+                    row.get::<_, String>(5)?,
+                    row.get::<_, i64>(6)?,
+                    row.get::<_, i64>(7)?,
+                    row.get::<_, i64>(8)?,
+                    row.get::<_, i64>(9)?,
+                ))
+            })
+            .map_err(|error| format!("学习目标分页读取失败：{error}"))?;
+        let mut targets = Vec::new();
+        for row in rows {
+            let row = row.map_err(|error| format!("学习目标行读取失败：{error}"))?;
+            targets.push(decode_learning_target_summary(&self.connection, row)?);
+        }
+
+        Ok(LearningTargetPage {
+            targets,
+            page,
+            page_size,
+            total: u64::try_from(total)
+                .map_err(|_| "学习目标总数无效，数据库返回了负数。".to_string())?,
+        })
+    }
+
+    fn get_target(&self, id: i64) -> Result<Option<LearningTargetDetail>, String> {
+        if id <= 0 {
+            return Err("学习目标 ID 无效。".to_string());
+        }
+        let row = load_learning_target_summary_row(&self.connection, id)?;
+        let Some(row) = row else { return Ok(None) };
+        let target = decode_learning_target_summary(&self.connection, row)?;
+        let mut statement = self
+            .connection
+            .prepare(&format!(
+                "{} WHERE lto.learning_target_id = ?1
+                 ORDER BY lr.created_at_unix_ms DESC, lr.id DESC",
+                select_learning_record_sql("")
+            ))
+            .map_err(|error| format!("学习目标历史出现语句无法准备：{error}"))?;
+        let rows = statement
+            .query_map([id], read_stored_learning_record)
+            .map_err(|error| format!("学习目标历史出现读取失败：{error}"))?;
+        let mut occurrences = Vec::new();
+        for row in rows {
+            occurrences.push(decode_learning_record(
+                row.map_err(|error| format!("学习目标历史出现行读取失败：{error}"))?,
+            )?);
+        }
+        Ok(Some(LearningTargetDetail {
+            target,
+            occurrences,
+        }))
     }
 }
 
@@ -1257,7 +1542,27 @@ pub(crate) fn get_learning_record_from_connection(
         .optional()
         .map_err(|error| format!("学习记录读取失败：{error}"))?;
 
-    stored.map(decode_learning_record).transpose()
+    if let Some(stored) = stored {
+        return decode_learning_record(stored).map(Some);
+    }
+
+    let mut compatibility_statement = connection
+        .prepare(
+            "SELECT lr.id, lto.learning_target_id, lr.query_text, lr.normalized_text,
+                    lr.query_type, lr.source_type, lr.source_app, lr.context_text,
+                    lr.explanation_card_json, lr.schema_version, lr.created_at_unix_ms,
+                    lr.difficulty, target.display_target_text, 'zh_to_en'
+             FROM learning_records lr
+             JOIN learning_target_occurrences lto ON lto.learning_record_id = lr.id
+             JOIN learning_targets target ON target.id = lto.learning_target_id
+             WHERE lr.id = ?1 AND target.target_kind = 'legacy_compat'",
+        )
+        .map_err(|error| format!("历史兼容学习记录读取语句无法准备：{error}"))?;
+    let compatibility = compatibility_statement
+        .query_row([id], read_stored_learning_record)
+        .optional()
+        .map_err(|error| format!("历史兼容学习记录读取失败：{error}"))?;
+    compatibility.map(decode_learning_record).transpose()
 }
 
 pub fn save_for_app(
@@ -1298,6 +1603,41 @@ pub fn search_learning_records(
 #[tauri::command]
 pub fn get_learning_record(app: AppHandle, id: i64) -> Result<Option<LearningRecord>, String> {
     LearningRecordStore::open(&database_path_for_app(&app)?)?.get(id)
+}
+
+#[tauri::command]
+pub fn list_learning_targets(
+    app: AppHandle,
+    page: Option<u32>,
+    page_size: Option<u32>,
+    query_type: Option<QueryType>,
+) -> Result<LearningTargetPage, String> {
+    LearningRecordStore::open(&database_path_for_app(&app)?)?
+        .list_targets(page, page_size, None, query_type)
+}
+
+#[tauri::command]
+pub fn search_learning_targets(
+    app: AppHandle,
+    keyword: String,
+    page: Option<u32>,
+    page_size: Option<u32>,
+    query_type: Option<QueryType>,
+) -> Result<LearningTargetPage, String> {
+    LearningRecordStore::open(&database_path_for_app(&app)?)?.list_targets(
+        page,
+        page_size,
+        Some(&keyword),
+        query_type,
+    )
+}
+
+#[tauri::command]
+pub fn get_learning_target(
+    app: AppHandle,
+    id: i64,
+) -> Result<Option<LearningTargetDetail>, String> {
+    LearningRecordStore::open(&database_path_for_app(&app)?)?.get_target(id)
 }
 
 #[tauri::command]
@@ -1360,6 +1700,13 @@ fn migrate(connection: &mut Connection) -> Result<(), String> {
             if version == 17 {
                 backfill_learning_record_targets_v17(&transaction)?;
             }
+            if version == 19 {
+                backfill_learning_targets_v19(&transaction)?;
+                backfill_legacy_compatibility_targets_v19(&transaction)?;
+                rebuild_review_tables_v19(&transaction)?;
+                rebuild_learning_target_review_states_v19(&transaction)?;
+                audit_learning_target_aggregation_v19(&transaction)?;
+            }
             transaction
                 .execute(
                     "INSERT INTO schema_migrations (version, applied_at_unix_ms) VALUES (?1, ?2)",
@@ -1412,6 +1759,144 @@ fn build_filter(
     Ok((where_clause, values))
 }
 
+fn build_target_filter(
+    keyword: Option<&str>,
+    query_type: Option<QueryType>,
+) -> Result<(String, Vec<Value>), String> {
+    let mut clauses = Vec::new();
+    let mut values = Vec::new();
+    if let Some(keyword) = keyword {
+        let normalized_keyword = canonicalize_learning_target_text(keyword);
+        if normalized_keyword.is_empty() {
+            return Err("学习目标搜索关键词不能为空。".to_string());
+        }
+        clauses.push(
+            "EXISTS (
+               SELECT 1
+               FROM learning_target_occurrences search_occurrence
+               JOIN learning_records search_record
+                 ON search_record.id = search_occurrence.learning_record_id
+               JOIN learning_record_targets search_projection
+                 ON search_projection.learning_record_id = search_record.id
+               WHERE search_occurrence.learning_target_id = lt.id
+                 AND (
+                   instr(search_projection.normalized_target_text, ?) > 0
+                   OR instr(search_record.normalized_text, ?) > 0
+                   OR instr(lower(COALESCE(search_record.context_text, '')), ?) > 0
+                   OR instr(lower(search_record.explanation_card_json), ?) > 0
+                 )
+             )"
+            .to_string(),
+        );
+        for _ in 0..4 {
+            values.push(Value::Text(normalized_keyword.clone()));
+        }
+    }
+    if let Some(query_type) = query_type {
+        clauses.push("lt.query_type = ?".to_string());
+        values.push(Value::Text(query_type_to_storage(query_type).to_string()));
+    }
+    let suffix = if clauses.is_empty() {
+        String::new()
+    } else {
+        format!(" AND {}", clauses.join(" AND "))
+    };
+    Ok((suffix, values))
+}
+
+fn build_target_order_clause(
+    keyword: Option<&str>,
+    values: &mut Vec<Value>,
+) -> Result<String, String> {
+    let Some(keyword) = keyword else {
+        return Ok("MAX(lr.created_at_unix_ms) DESC, lt.id DESC".to_string());
+    };
+    let normalized_keyword = canonicalize_learning_target_text(keyword);
+    if normalized_keyword.is_empty() {
+        return Err("学习目标搜索关键词不能为空。".to_string());
+    }
+    for _ in 0..4 {
+        values.push(Value::Text(normalized_keyword.clone()));
+    }
+    Ok("CASE
+           WHEN lt.normalized_target_text = ? THEN 0
+           WHEN instr(lt.normalized_target_text, ?) = 1 THEN 1
+           WHEN instr(lt.normalized_target_text, ?) > 0 THEN 2
+           WHEN EXISTS (
+             SELECT 1
+             FROM learning_target_occurrences rank_occurrence
+             JOIN learning_records rank_record
+               ON rank_record.id = rank_occurrence.learning_record_id
+             WHERE rank_occurrence.learning_target_id = lt.id
+               AND instr(rank_record.normalized_text, ?) > 0
+           ) THEN 3
+           ELSE 4
+         END ASC,
+         MAX(lr.created_at_unix_ms) DESC,
+         lt.id DESC"
+        .to_string())
+}
+
+type LearningTargetSummaryRow = (i64, String, i64, String, String, String, i64, i64, i64, i64);
+
+fn load_learning_target_summary_row(
+    connection: &Connection,
+    id: i64,
+) -> Result<Option<LearningTargetSummaryRow>, String> {
+    connection
+        .query_row(
+            "SELECT lt.id, lt.stable_key, lt.canonicalization_version, lt.query_type,
+                    lt.display_target_text, lt.normalized_target_text,
+                    COUNT(lto.learning_record_id), MIN(lr.created_at_unix_ms),
+                    MAX(lr.created_at_unix_ms), lt.representative_learning_record_id
+             FROM learning_targets lt
+             JOIN learning_target_occurrences lto ON lto.learning_target_id = lt.id
+             JOIN learning_records lr ON lr.id = lto.learning_record_id
+             WHERE lt.id = ?1 AND lt.target_kind = 'learnable'
+             GROUP BY lt.id",
+            [id],
+            |row| {
+                Ok((
+                    row.get(0)?,
+                    row.get(1)?,
+                    row.get(2)?,
+                    row.get(3)?,
+                    row.get(4)?,
+                    row.get(5)?,
+                    row.get(6)?,
+                    row.get(7)?,
+                    row.get(8)?,
+                    row.get(9)?,
+                ))
+            },
+        )
+        .optional()
+        .map_err(|error| format!("学习目标摘要读取失败：{error}"))
+}
+
+fn decode_learning_target_summary(
+    connection: &Connection,
+    row: LearningTargetSummaryRow,
+) -> Result<LearningTargetSummary, String> {
+    let representative_record = get_learning_record_from_connection(connection, row.9)?
+        .ok_or_else(|| format!("学习目标 {} 的代表学习记录不存在。", row.0))?;
+    if representative_record.learning_target_id != row.0 {
+        return Err(format!("学习目标 {} 的代表记录身份不一致。", row.0));
+    }
+    Ok(LearningTargetSummary {
+        id: row.0,
+        stable_key: row.1,
+        canonicalization_version: row.2,
+        query_type: query_type_from_storage(&row.3)?,
+        learning_target_text: row.4,
+        normalized_target_text: row.5,
+        query_count: u64::try_from(row.6).map_err(|_| "学习目标查询次数无效。".to_string())?,
+        first_seen_at_unix_ms: row.7,
+        last_seen_at_unix_ms: row.8,
+        representative_record,
+    })
+}
+
 fn validate_pagination(page: Option<u32>, page_size: Option<u32>) -> Result<(u32, u32), String> {
     let page = page.unwrap_or(DEFAULT_PAGE);
     let page_size = page_size.unwrap_or(DEFAULT_PAGE_SIZE);
@@ -1429,29 +1914,31 @@ fn validate_pagination(page: Option<u32>, page_size: Option<u32>) -> Result<(u32
 
 fn select_learning_record_sql(where_clause: &str) -> String {
     format!(
-        "SELECT lr.id, lr.query_text, lr.normalized_text, lr.query_type, lr.source_type,
+        "SELECT lr.id, lto.learning_target_id, lr.query_text, lr.normalized_text, lr.query_type, lr.source_type,
          lr.source_app, lr.context_text, lr.explanation_card_json, lr.schema_version,
          lr.created_at_unix_ms, lr.difficulty, lrt.learning_target_text, lrt.query_direction
          FROM learning_records lr
-         JOIN learning_record_targets lrt ON lrt.learning_record_id = lr.id {where_clause}"
+         JOIN learning_record_targets lrt ON lrt.learning_record_id = lr.id
+         JOIN learning_target_occurrences lto ON lto.learning_record_id = lr.id {where_clause}"
     )
 }
 
 fn read_stored_learning_record(row: &rusqlite::Row<'_>) -> rusqlite::Result<StoredLearningRecord> {
     Ok(StoredLearningRecord {
         id: row.get(0)?,
-        query_text: row.get(1)?,
-        normalized_text: row.get(2)?,
-        query_type: row.get(3)?,
-        source_type: row.get(4)?,
-        source_app: row.get(5)?,
-        context_text: row.get(6)?,
-        explanation_card_json: row.get(7)?,
-        schema_version: row.get(8)?,
-        created_at_unix_ms: row.get(9)?,
-        difficulty: row.get(10)?,
-        learning_target_text: row.get(11)?,
-        query_direction: row.get(12)?,
+        learning_target_id: row.get(1)?,
+        query_text: row.get(2)?,
+        normalized_text: row.get(3)?,
+        query_type: row.get(4)?,
+        source_type: row.get(5)?,
+        source_app: row.get(6)?,
+        context_text: row.get(7)?,
+        explanation_card_json: row.get(8)?,
+        schema_version: row.get(9)?,
+        created_at_unix_ms: row.get(10)?,
+        difficulty: row.get(11)?,
+        learning_target_text: row.get(12)?,
+        query_direction: row.get(13)?,
     })
 }
 
@@ -1476,6 +1963,7 @@ fn decode_learning_record(stored: StoredLearningRecord) -> Result<LearningRecord
 
     Ok(LearningRecord {
         id: stored.id,
+        learning_target_id: stored.learning_target_id,
         query_text: stored.query_text,
         learning_target_text: stored.learning_target_text,
         query_direction: query_direction_from_storage(&stored.query_direction)?,
@@ -1497,6 +1985,108 @@ fn normalize_query_text(value: &str) -> String {
         .collect::<Vec<_>>()
         .join(" ")
         .to_lowercase()
+}
+
+fn canonicalize_learning_target_text(value: &str) -> String {
+    normalize_query_text(value)
+}
+
+fn stable_learning_target_key(query_type: QueryType, normalized_target_text: &str) -> String {
+    format!(
+        "v{}:{}:{}",
+        LEARNING_TARGET_CANONICALIZATION_VERSION,
+        query_type_to_storage(query_type),
+        normalized_target_text
+    )
+}
+
+fn bind_learning_record_to_stable_target(
+    transaction: &Transaction<'_>,
+    learning_record_id: i64,
+    query_type: QueryType,
+    learning_target_text: &str,
+    created_at_unix_ms: i64,
+) -> Result<i64, String> {
+    let display_target_text = learning_target_text.trim();
+    let normalized_target_text = canonicalize_learning_target_text(display_target_text);
+    if normalized_target_text.is_empty() {
+        return Err("规范英文学习目标不能为空。".to_string());
+    }
+    let query_type_storage = query_type_to_storage(query_type);
+    let stable_key = stable_learning_target_key(query_type, &normalized_target_text);
+    transaction
+        .execute(
+            "INSERT OR IGNORE INTO learning_targets (
+               stable_key, canonicalization_version, query_type, display_target_text,
+               normalized_target_text, representative_learning_record_id,
+               created_at_unix_ms, updated_at_unix_ms
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?7)",
+            params![
+                stable_key,
+                LEARNING_TARGET_CANONICALIZATION_VERSION,
+                query_type_storage,
+                display_target_text,
+                normalized_target_text,
+                learning_record_id,
+                created_at_unix_ms,
+            ],
+        )
+        .map_err(|error| format!("学习目标创建失败：{error}"))?;
+    let learning_target_id: i64 = transaction
+        .query_row(
+            "SELECT id FROM learning_targets
+             WHERE canonicalization_version = ?1 AND query_type = ?2
+               AND normalized_target_text = ?3",
+            params![
+                LEARNING_TARGET_CANONICALIZATION_VERSION,
+                query_type_storage,
+                normalized_target_text,
+            ],
+            |row| row.get(0),
+        )
+        .map_err(|error| format!("学习目标身份读取失败：{error}"))?;
+    transaction
+        .execute(
+            "UPDATE learning_targets
+             SET display_target_text = ?1,
+                 representative_learning_record_id = ?2,
+                 updated_at_unix_ms = MAX(updated_at_unix_ms, ?3)
+             WHERE id = ?4
+               AND (
+                 representative_learning_record_id IS NULL
+                 OR EXISTS (
+                   SELECT 1
+                   FROM learning_records current_record
+                   WHERE current_record.id = learning_targets.representative_learning_record_id
+                     AND (
+                       current_record.created_at_unix_ms < ?3
+                       OR (current_record.created_at_unix_ms = ?3 AND current_record.id < ?2)
+                     )
+                 )
+               )",
+            params![
+                display_target_text,
+                learning_record_id,
+                created_at_unix_ms,
+                learning_target_id,
+            ],
+        )
+        .map_err(|error| format!("学习目标代表记录更新失败：{error}"))?;
+    transaction
+        .execute(
+            "INSERT INTO learning_target_occurrences (
+               learning_record_id, learning_target_id, canonicalization_version,
+               binding_revision, bound_at_unix_ms, updated_at_unix_ms
+             ) VALUES (?1, ?2, ?3, 0, ?4, ?4)",
+            params![
+                learning_record_id,
+                learning_target_id,
+                LEARNING_TARGET_CANONICALIZATION_VERSION,
+                created_at_unix_ms,
+            ],
+        )
+        .map_err(|error| format!("学习目标 occurrence 写入失败：{error}"))?;
+    Ok(learning_target_id)
 }
 
 fn query_direction_to_storage(direction: QueryDirection) -> &'static str {
@@ -1551,6 +2141,758 @@ fn backfill_learning_record_targets_v17(transaction: &Transaction<'_>) -> Result
                 ],
             )
             .map_err(|error| format!("v17 历史英文学习目标回填失败：{error}"))?;
+    }
+    Ok(())
+}
+
+fn backfill_learning_targets_v19(transaction: &Transaction<'_>) -> Result<(), String> {
+    let rows = {
+        let mut statement = transaction
+            .prepare(
+                "SELECT lr.id, lr.query_type, lrt.learning_target_text, lr.created_at_unix_ms
+                 FROM learning_records lr
+                 JOIN learning_record_targets lrt ON lrt.learning_record_id = lr.id
+                 ORDER BY lr.created_at_unix_ms ASC, lr.id ASC",
+            )
+            .map_err(|error| format!("v19 学习目标回填语句无法准备：{error}"))?;
+        let rows = statement
+            .query_map([], |row| {
+                Ok((
+                    row.get::<_, i64>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                    row.get::<_, i64>(3)?,
+                ))
+            })
+            .map_err(|error| format!("v19 学习目标回填读取失败：{error}"))?;
+        rows.collect::<Result<Vec<_>, _>>()
+            .map_err(|error| format!("v19 学习目标回填行读取失败：{error}"))?
+    };
+    for (learning_record_id, query_type, learning_target_text, created_at_unix_ms) in rows {
+        bind_learning_record_to_stable_target(
+            transaction,
+            learning_record_id,
+            query_type_from_storage(&query_type)?,
+            &learning_target_text,
+            created_at_unix_ms,
+        )?;
+    }
+    Ok(())
+}
+
+fn backfill_legacy_compatibility_targets_v19(transaction: &Transaction<'_>) -> Result<(), String> {
+    let records = {
+        let mut statement = transaction
+            .prepare(
+                "SELECT record.id, record.query_type, record.query_text,
+                        record.created_at_unix_ms
+                 FROM learning_records record
+                 LEFT JOIN learning_target_occurrences occurrence
+                   ON occurrence.learning_record_id = record.id
+                 WHERE occurrence.learning_record_id IS NULL
+                 ORDER BY record.id",
+            )
+            .map_err(|error| format!("v19 历史兼容记录回填语句无法准备：{error}"))?;
+        let rows = statement
+            .query_map([], |row| {
+                Ok((
+                    row.get::<_, i64>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                    row.get::<_, i64>(3)?,
+                ))
+            })
+            .map_err(|error| format!("v19 历史兼容记录回填读取失败：{error}"))?;
+        rows.collect::<Result<Vec<_>, _>>()
+            .map_err(|error| format!("v19 历史兼容记录回填行读取失败：{error}"))?
+    };
+
+    for (learning_record_id, query_type, query_text, created_at_unix_ms) in records {
+        let stable_key = format!("legacy-compat:record:{learning_record_id}");
+        transaction
+            .execute(
+                "INSERT INTO learning_targets (
+                   stable_key, target_kind, canonicalization_version, query_type,
+                   display_target_text, normalized_target_text,
+                   representative_learning_record_id, created_at_unix_ms,
+                   updated_at_unix_ms
+                 ) VALUES (?1, 'legacy_compat', 0, ?2, ?3, NULL, ?4, ?5, ?5)",
+                params![
+                    stable_key,
+                    query_type,
+                    query_text,
+                    learning_record_id,
+                    created_at_unix_ms
+                ],
+            )
+            .map_err(|error| format!("v19 历史兼容目标创建失败：{error}"))?;
+        let learning_target_id = transaction.last_insert_rowid();
+        transaction
+            .execute(
+                "INSERT INTO learning_target_occurrences (
+                   learning_record_id, learning_target_id, canonicalization_version,
+                   binding_revision, bound_at_unix_ms, updated_at_unix_ms
+                 ) VALUES (?1, ?2, 0, 0, ?3, ?3)",
+                params![learning_record_id, learning_target_id, created_at_unix_ms],
+            )
+            .map_err(|error| format!("v19 历史兼容 occurrence 创建失败：{error}"))?;
+    }
+    Ok(())
+}
+
+fn rebuild_review_tables_v19(transaction: &Transaction<'_>) -> Result<(), String> {
+    let rebuilt_tables = [
+        "review_generated_cards",
+        "review_feed_items",
+        "review_feed_attempts",
+        "review_quality_feedback",
+        "review_quality_mutations",
+        "review_card_generation_failures",
+    ];
+    let original_counts = rebuilt_tables
+        .iter()
+        .map(|table| {
+            transaction
+                .query_row(&format!("SELECT COUNT(*) FROM {table}"), [], |row| {
+                    row.get::<_, i64>(0)
+                })
+                .map_err(|error| format!("v19 {table} 重建前数量读取失败：{error}"))
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    transaction
+        .execute_batch(
+            r#"
+CREATE TABLE review_generated_cards_v19 (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  learning_record_id INTEGER NOT NULL REFERENCES learning_records(id) ON DELETE CASCADE,
+  learning_target_id INTEGER NOT NULL REFERENCES learning_targets(id) ON DELETE RESTRICT,
+  variant_index INTEGER NOT NULL CHECK (variant_index >= 0),
+  generation_request_key TEXT NOT NULL UNIQUE,
+  content_json TEXT NOT NULL,
+  model TEXT NOT NULL,
+  created_at_unix_ms INTEGER NOT NULL,
+  expires_at_unix_ms INTEGER NOT NULL,
+  last_used_at_unix_ms INTEGER NOT NULL,
+  use_count INTEGER NOT NULL CHECK (use_count >= 0),
+  UNIQUE(learning_record_id, variant_index)
+);
+
+INSERT INTO review_generated_cards_v19 (
+  id, learning_record_id, learning_target_id, variant_index,
+  generation_request_key, content_json, model, created_at_unix_ms,
+  expires_at_unix_ms, last_used_at_unix_ms, use_count
+)
+SELECT card.id, card.learning_record_id, occurrence.learning_target_id,
+       card.variant_index, card.generation_request_key, card.content_json,
+       card.model, card.created_at_unix_ms, card.expires_at_unix_ms,
+       card.last_used_at_unix_ms, card.use_count
+FROM review_generated_cards card
+JOIN learning_target_occurrences occurrence
+  ON occurrence.learning_record_id = card.learning_record_id;
+
+CREATE TABLE review_feed_items_v19 (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  day_start_unix_ms INTEGER NOT NULL,
+  day_end_unix_ms INTEGER NOT NULL CHECK (day_end_unix_ms > day_start_unix_ms),
+  learning_record_id INTEGER NOT NULL REFERENCES learning_records(id) ON DELETE CASCADE,
+  learning_target_id INTEGER NOT NULL REFERENCES learning_targets(id) ON DELETE RESTRICT,
+  cycle_index INTEGER NOT NULL CHECK (cycle_index >= 0),
+  ordinal INTEGER NOT NULL CHECK (ordinal >= 0),
+  reason_code TEXT NOT NULL CHECK (
+    reason_code IN ('scheduled_today', 'new_record', 'continued_practice')
+  ),
+  generated_card_id INTEGER REFERENCES review_generated_cards_v19(id) ON DELETE SET NULL,
+  target_slot_active INTEGER NOT NULL CHECK (target_slot_active IN (0, 1)),
+  created_at_unix_ms INTEGER NOT NULL,
+  UNIQUE(day_start_unix_ms, cycle_index, learning_record_id),
+  UNIQUE(day_start_unix_ms, ordinal)
+);
+
+INSERT INTO review_feed_items_v19 (
+  id, day_start_unix_ms, day_end_unix_ms, learning_record_id,
+  learning_target_id, cycle_index, ordinal, reason_code, generated_card_id,
+  target_slot_active, created_at_unix_ms
+)
+SELECT item.id, item.day_start_unix_ms, item.day_end_unix_ms,
+       item.learning_record_id, occurrence.learning_target_id, item.cycle_index,
+       item.ordinal, item.reason_code, item.generated_card_id,
+       CASE WHEN target.target_kind = 'legacy_compat' THEN 0
+       WHEN item.id = (
+         SELECT candidate.id
+         FROM review_feed_items candidate
+         JOIN learning_target_occurrences candidate_occurrence
+           ON candidate_occurrence.learning_record_id = candidate.learning_record_id
+         LEFT JOIN review_feed_attempts active_attempt
+           ON active_attempt.feed_item_id = candidate.id
+          AND active_attempt.undone_at_unix_ms IS NULL
+         WHERE candidate.day_start_unix_ms = item.day_start_unix_ms
+           AND candidate.cycle_index = item.cycle_index
+           AND candidate_occurrence.learning_target_id = occurrence.learning_target_id
+         ORDER BY CASE WHEN active_attempt.id IS NULL THEN 1 ELSE 0 END ASC,
+                  active_attempt.created_at_unix_ms DESC,
+                  active_attempt.id DESC,
+                  candidate.ordinal ASC,
+                  candidate.id ASC
+         LIMIT 1
+       ) THEN 1 ELSE 0 END,
+       item.created_at_unix_ms
+FROM review_feed_items item
+JOIN learning_target_occurrences occurrence
+  ON occurrence.learning_record_id = item.learning_record_id
+JOIN learning_targets target ON target.id = occurrence.learning_target_id;
+
+CREATE TABLE review_feed_attempts_v19 (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  feed_item_id INTEGER NOT NULL REFERENCES review_feed_items_v19(id) ON DELETE CASCADE,
+  learning_record_id INTEGER NOT NULL REFERENCES learning_records(id) ON DELETE CASCADE,
+  learning_target_id INTEGER NOT NULL REFERENCES learning_targets(id) ON DELETE RESTRICT,
+  request_key TEXT NOT NULL UNIQUE,
+  expected_revision INTEGER NOT NULL CHECK (expected_revision >= 0),
+  target_revision INTEGER NOT NULL CHECK (target_revision > expected_revision),
+  outcome TEXT NOT NULL CHECK (outcome IN ('remembered', 'forgotten')),
+  used_hint INTEGER NOT NULL CHECK (used_hint IN (0, 1)),
+  next_review_at_unix_ms INTEGER NOT NULL,
+  previous_next_review_at_unix_ms INTEGER NOT NULL,
+  previous_attempt_count INTEGER NOT NULL CHECK (previous_attempt_count >= 0),
+  previous_remembered_count INTEGER NOT NULL CHECK (previous_remembered_count >= 0),
+  previous_forgotten_count INTEGER NOT NULL CHECK (previous_forgotten_count >= 0),
+  previous_success_streak INTEGER NOT NULL CHECK (previous_success_streak >= 0),
+  previous_last_reviewed_at_unix_ms INTEGER,
+  previous_last_outcome TEXT CHECK (previous_last_outcome IN ('remembered', 'forgotten')),
+  previous_last_used_hint INTEGER CHECK (previous_last_used_hint IN (0, 1)),
+  previous_last_attempt_id INTEGER,
+  created_at_unix_ms INTEGER NOT NULL,
+  undone_at_unix_ms INTEGER,
+  undo_request_key TEXT UNIQUE,
+  undo_expected_revision INTEGER,
+  undo_target_revision INTEGER
+);
+
+INSERT INTO review_feed_attempts_v19 (
+  id, feed_item_id, learning_record_id, learning_target_id, request_key,
+  expected_revision, target_revision, outcome, used_hint, next_review_at_unix_ms,
+  previous_next_review_at_unix_ms, previous_attempt_count,
+  previous_remembered_count, previous_forgotten_count, previous_success_streak,
+  previous_last_reviewed_at_unix_ms, previous_last_outcome,
+  previous_last_used_hint, previous_last_attempt_id, created_at_unix_ms,
+  undone_at_unix_ms, undo_request_key, undo_expected_revision, undo_target_revision
+)
+SELECT attempt.id, attempt.feed_item_id, attempt.learning_record_id,
+       item.learning_target_id, attempt.request_key, attempt.expected_revision,
+       attempt.target_revision, attempt.outcome, attempt.used_hint,
+       attempt.next_review_at_unix_ms, attempt.previous_next_review_at_unix_ms,
+       attempt.previous_attempt_count, attempt.previous_remembered_count,
+       attempt.previous_forgotten_count, attempt.previous_success_streak,
+       attempt.previous_last_reviewed_at_unix_ms, attempt.previous_last_outcome,
+       attempt.previous_last_used_hint, attempt.previous_last_attempt_id,
+       attempt.created_at_unix_ms, attempt.undone_at_unix_ms,
+       attempt.undo_request_key, attempt.undo_expected_revision,
+       attempt.undo_target_revision
+FROM review_feed_attempts attempt
+JOIN review_feed_items_v19 item ON item.id = attempt.feed_item_id
+WHERE item.learning_record_id = attempt.learning_record_id;
+
+CREATE TABLE review_quality_feedback_v19 (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  feed_item_id INTEGER NOT NULL REFERENCES review_feed_items_v19(id) ON DELETE CASCADE,
+  learning_record_id INTEGER NOT NULL REFERENCES learning_records(id) ON DELETE CASCADE,
+  generated_card_id INTEGER,
+  card_context_key TEXT NOT NULL,
+  revision INTEGER NOT NULL DEFAULT 0 CHECK (revision >= 0),
+  active INTEGER NOT NULL CHECK (active IN (0, 1)),
+  polarity TEXT NOT NULL CHECK (polarity IN ('up', 'down')),
+  reason_codes_json TEXT NOT NULL,
+  detail TEXT,
+  created_at_unix_ms INTEGER NOT NULL,
+  updated_at_unix_ms INTEGER NOT NULL,
+  UNIQUE(feed_item_id, card_context_key)
+);
+
+INSERT INTO review_quality_feedback_v19
+SELECT * FROM review_quality_feedback;
+
+CREATE TABLE review_quality_mutations_v19 (
+  request_key TEXT PRIMARY KEY,
+  feed_item_id INTEGER NOT NULL REFERENCES review_feed_items_v19(id) ON DELETE CASCADE,
+  learning_record_id INTEGER NOT NULL REFERENCES learning_records(id) ON DELETE CASCADE,
+  operation TEXT NOT NULL CHECK (operation IN ('save', 'undo')),
+  input_json TEXT NOT NULL,
+  result_json TEXT NOT NULL,
+  created_at_unix_ms INTEGER NOT NULL
+);
+
+INSERT INTO review_quality_mutations_v19
+SELECT * FROM review_quality_mutations;
+
+CREATE TABLE review_card_generation_failures_v19 (
+  request_key TEXT PRIMARY KEY,
+  feed_item_id INTEGER NOT NULL REFERENCES review_feed_items_v19(id) ON DELETE CASCADE,
+  learning_record_id INTEGER NOT NULL REFERENCES learning_records(id) ON DELETE CASCADE,
+  failure_count INTEGER NOT NULL CHECK (failure_count > 0),
+  retry_after_unix_ms INTEGER NOT NULL,
+  last_error TEXT NOT NULL,
+  created_at_unix_ms INTEGER NOT NULL,
+  updated_at_unix_ms INTEGER NOT NULL
+);
+
+INSERT INTO review_card_generation_failures_v19
+SELECT * FROM review_card_generation_failures;
+
+DROP TABLE review_quality_mutations;
+DROP TABLE review_quality_feedback;
+DROP TABLE review_card_generation_failures;
+DROP TABLE review_feed_attempts;
+DROP TABLE review_feed_items;
+DROP TABLE review_generated_cards;
+
+ALTER TABLE review_generated_cards_v19 RENAME TO review_generated_cards;
+ALTER TABLE review_feed_items_v19 RENAME TO review_feed_items;
+ALTER TABLE review_feed_attempts_v19 RENAME TO review_feed_attempts;
+ALTER TABLE review_quality_feedback_v19 RENAME TO review_quality_feedback;
+ALTER TABLE review_quality_mutations_v19 RENAME TO review_quality_mutations;
+ALTER TABLE review_card_generation_failures_v19 RENAME TO review_card_generation_failures;
+
+CREATE INDEX idx_review_generated_cards_learning_record
+  ON review_generated_cards(learning_record_id, variant_index);
+CREATE INDEX idx_review_generated_cards_pool
+  ON review_generated_cards(expires_at_unix_ms, last_used_at_unix_ms, id);
+CREATE INDEX idx_review_generated_cards_target
+  ON review_generated_cards(learning_target_id, last_used_at_unix_ms, id);
+CREATE INDEX idx_review_feed_items_day
+  ON review_feed_items(day_start_unix_ms, ordinal);
+CREATE UNIQUE INDEX idx_review_feed_items_active_target
+  ON review_feed_items(day_start_unix_ms, cycle_index, learning_target_id)
+  WHERE target_slot_active = 1;
+CREATE INDEX idx_review_feed_items_target_cycle
+  ON review_feed_items(day_start_unix_ms, cycle_index, learning_target_id, ordinal);
+CREATE UNIQUE INDEX idx_review_feed_attempts_active_item
+  ON review_feed_attempts(feed_item_id)
+  WHERE undone_at_unix_ms IS NULL;
+CREATE INDEX idx_review_feed_attempts_learning_record
+  ON review_feed_attempts(learning_record_id, created_at_unix_ms DESC, id DESC);
+CREATE INDEX idx_review_feed_attempts_target_time
+  ON review_feed_attempts(learning_target_id, created_at_unix_ms, id);
+CREATE INDEX idx_review_quality_feedback_record
+  ON review_quality_feedback(learning_record_id, updated_at_unix_ms DESC, id DESC);
+CREATE INDEX idx_review_quality_mutations_item
+  ON review_quality_mutations(feed_item_id, created_at_unix_ms DESC);
+CREATE INDEX idx_review_card_generation_failures_retry
+  ON review_card_generation_failures(retry_after_unix_ms, feed_item_id);
+"#,
+        )
+        .map_err(|error| format!("v19 复习链路强身份重建失败：{error}"))?;
+    for (table, original_count) in rebuilt_tables.iter().zip(original_counts) {
+        let rebuilt_count: i64 = transaction
+            .query_row(&format!("SELECT COUNT(*) FROM {table}"), [], |row| {
+                row.get(0)
+            })
+            .map_err(|error| format!("v19 {table} 重建后数量读取失败：{error}"))?;
+        if rebuilt_count != original_count {
+            return Err(format!(
+                "v19 {table} 重建前后数量不一致：{original_count} -> {rebuilt_count}。"
+            ));
+        }
+    }
+    Ok(())
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct ReplayedLearningTargetReviewState {
+    learning_target_id: i64,
+    revision: i64,
+    next_review_at_unix_ms: i64,
+    attempt_count: i64,
+    remembered_count: i64,
+    forgotten_count: i64,
+    success_streak: i64,
+    last_reviewed_at_unix_ms: Option<i64>,
+    last_outcome: Option<String>,
+    last_used_hint: Option<i64>,
+    last_attempt_id: Option<i64>,
+    created_at_unix_ms: i64,
+    updated_at_unix_ms: i64,
+}
+
+fn replay_learning_target_review_states_v19(
+    transaction: &Transaction<'_>,
+) -> Result<HashMap<i64, ReplayedLearningTargetReviewState>, String> {
+    let mut states = HashMap::new();
+    {
+        let mut statement = transaction
+            .prepare(
+                "SELECT lt.id,
+                        CASE WHEN EXISTS (
+                          SELECT 1 FROM review_targets old_state
+                          JOIN learning_target_occurrences old_occurrence
+                            ON old_occurrence.learning_record_id = old_state.learning_record_id
+                          WHERE old_occurrence.learning_target_id = lt.id
+                        ) THEN COALESCE((
+                          SELECT MAX(old_state.revision) + 1
+                          FROM review_targets old_state
+                          JOIN learning_target_occurrences old_occurrence
+                            ON old_occurrence.learning_record_id = old_state.learning_record_id
+                          WHERE old_occurrence.learning_target_id = lt.id
+                        ), 1) ELSE 0 END,
+                        MIN(record.created_at_unix_ms),
+                        MAX(lt.updated_at_unix_ms)
+                 FROM learning_targets lt
+                 JOIN learning_target_occurrences occurrence ON occurrence.learning_target_id = lt.id
+                 JOIN learning_records record ON record.id = occurrence.learning_record_id
+                 GROUP BY lt.id
+                 ORDER BY lt.id",
+            )
+            .map_err(|error| format!("v19 目标级复习状态初始化语句无法准备：{error}"))?;
+        let rows = statement
+            .query_map([], |row| {
+                Ok((
+                    row.get::<_, i64>(0)?,
+                    row.get::<_, i64>(1)?,
+                    row.get::<_, i64>(2)?,
+                    row.get::<_, i64>(3)?,
+                ))
+            })
+            .map_err(|error| format!("v19 目标级复习状态初始化读取失败：{error}"))?;
+        for row in rows {
+            let (learning_target_id, revision, first_seen, updated_at) =
+                row.map_err(|error| format!("v19 目标级复习状态初始化行失败：{error}"))?;
+            states.insert(
+                learning_target_id,
+                ReplayedLearningTargetReviewState {
+                    learning_target_id,
+                    revision,
+                    next_review_at_unix_ms: first_seen,
+                    attempt_count: 0,
+                    remembered_count: 0,
+                    forgotten_count: 0,
+                    success_streak: 0,
+                    last_reviewed_at_unix_ms: None,
+                    last_outcome: None,
+                    last_used_hint: None,
+                    last_attempt_id: None,
+                    created_at_unix_ms: first_seen,
+                    updated_at_unix_ms: updated_at.max(first_seen),
+                },
+            );
+        }
+    }
+
+    let attempts = {
+        let mut statement = transaction
+            .prepare(
+                "SELECT id, learning_target_id, outcome, used_hint, created_at_unix_ms
+                 FROM review_feed_attempts
+                 WHERE undone_at_unix_ms IS NULL
+                 ORDER BY created_at_unix_ms ASC, id ASC",
+            )
+            .map_err(|error| format!("v19 active attempt 重放语句无法准备：{error}"))?;
+        let rows = statement
+            .query_map([], |row| {
+                Ok((
+                    row.get::<_, i64>(0)?,
+                    row.get::<_, i64>(1)?,
+                    row.get::<_, String>(2)?,
+                    row.get::<_, i64>(3)?,
+                    row.get::<_, i64>(4)?,
+                ))
+            })
+            .map_err(|error| format!("v19 active attempt 重放读取失败：{error}"))?;
+        rows.collect::<Result<Vec<_>, _>>()
+            .map_err(|error| format!("v19 active attempt 重放行读取失败：{error}"))?
+    };
+    for (attempt_id, learning_target_id, outcome, used_hint, created_at_unix_ms) in attempts {
+        let state = states
+            .get_mut(&learning_target_id)
+            .ok_or_else(|| format!("v19 attempt {attempt_id} 缺少稳定学习目标。"))?;
+        let (days, next_streak) = match (outcome.as_str(), used_hint != 0) {
+            ("forgotten", _) => {
+                state.forgotten_count += 1;
+                (1_i64, 0_i64)
+            }
+            ("remembered", true) => {
+                state.remembered_count += 1;
+                (2_i64, state.success_streak)
+            }
+            ("remembered", false) => {
+                state.remembered_count += 1;
+                let streak = state.success_streak.saturating_add(1);
+                let days = match streak {
+                    0 | 1 => 3_i64,
+                    2 => 7_i64,
+                    3 => 14_i64,
+                    _ => 30_i64,
+                };
+                (days, streak)
+            }
+            _ => return Err(format!("v19 attempt {attempt_id} 包含未知结果。")),
+        };
+        state.success_streak = next_streak;
+        state.next_review_at_unix_ms = created_at_unix_ms
+            .checked_add(days.saturating_mul(REVIEW_DAY_UNIX_MS))
+            .ok_or_else(|| format!("v19 attempt {attempt_id} 调度时间超出范围。"))?;
+        state.attempt_count += 1;
+        state.last_reviewed_at_unix_ms = Some(created_at_unix_ms);
+        state.last_outcome = Some(outcome);
+        state.last_used_hint = Some(used_hint);
+        state.last_attempt_id = Some(attempt_id);
+        state.updated_at_unix_ms = state.updated_at_unix_ms.max(created_at_unix_ms);
+    }
+    Ok(states)
+}
+
+fn rebuild_learning_target_review_states_v19(transaction: &Transaction<'_>) -> Result<(), String> {
+    let states = replay_learning_target_review_states_v19(transaction)?;
+    for state in states.values() {
+        transaction
+            .execute(
+                "INSERT INTO learning_target_review_states (
+                   learning_target_id, revision, next_review_at_unix_ms, attempt_count,
+                   remembered_count, forgotten_count, success_streak,
+                   last_reviewed_at_unix_ms, last_outcome, last_used_hint,
+                   last_attempt_id, created_at_unix_ms, updated_at_unix_ms
+                 ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
+                params![
+                    state.learning_target_id,
+                    state.revision,
+                    state.next_review_at_unix_ms,
+                    state.attempt_count,
+                    state.remembered_count,
+                    state.forgotten_count,
+                    state.success_streak,
+                    state.last_reviewed_at_unix_ms,
+                    state.last_outcome,
+                    state.last_used_hint,
+                    state.last_attempt_id,
+                    state.created_at_unix_ms,
+                    state.updated_at_unix_ms,
+                ],
+            )
+            .map_err(|error| format!("v19 目标级复习状态写入失败：{error}"))?;
+    }
+    Ok(())
+}
+
+fn audit_learning_target_aggregation_v19(transaction: &Transaction<'_>) -> Result<(), String> {
+    let invalid_identity_count: i64 = transaction
+        .query_row(
+            "SELECT COUNT(*)
+             FROM learning_target_occurrences occurrence
+             JOIN learning_records record ON record.id = occurrence.learning_record_id
+             LEFT JOIN learning_record_targets projection ON projection.learning_record_id = record.id
+             JOIN learning_targets target ON target.id = occurrence.learning_target_id
+             WHERE occurrence.canonicalization_version <> target.canonicalization_version
+                OR target.query_type <> record.query_type
+                OR (
+                  target.target_kind = 'learnable' AND (
+                    projection.learning_record_id IS NULL
+                    OR target.canonicalization_version <> ?1
+                    OR target.normalized_target_text <> projection.normalized_target_text
+                  )
+                )
+                OR (
+                  target.target_kind = 'legacy_compat' AND (
+                    projection.learning_record_id IS NOT NULL
+                    OR target.canonicalization_version <> 0
+                    OR target.normalized_target_text IS NOT NULL
+                    OR target.stable_key <> 'legacy-compat:record:' || record.id
+                    OR (SELECT COUNT(*) FROM learning_target_occurrences same_target
+                        WHERE same_target.learning_target_id = target.id) <> 1
+                  )
+                )",
+            [LEARNING_TARGET_CANONICALIZATION_VERSION],
+            |row| row.get(0),
+        )
+        .map_err(|error| format!("v19 occurrence 身份审计失败：{error}"))?;
+    let record_count: i64 = transaction
+        .query_row("SELECT COUNT(*) FROM learning_records", [], |row| {
+            row.get(0)
+        })
+        .map_err(|error| format!("v19 学习记录数量审计失败：{error}"))?;
+    let occurrence_count: i64 = transaction
+        .query_row(
+            "SELECT COUNT(*) FROM learning_target_occurrences",
+            [],
+            |row| row.get(0),
+        )
+        .map_err(|error| format!("v19 occurrence 数量审计失败：{error}"))?;
+    if invalid_identity_count != 0 || record_count != occurrence_count {
+        return Err("v19 occurrence 与原始学习目标投影不一致。".to_string());
+    }
+
+    let invalid_representatives: i64 = transaction
+        .query_row(
+            "SELECT COUNT(*) FROM learning_targets target
+             WHERE target.representative_learning_record_id IS NULL
+                OR target.representative_learning_record_id <> (
+                  SELECT occurrence.learning_record_id
+                  FROM learning_target_occurrences occurrence
+                  JOIN learning_records record ON record.id = occurrence.learning_record_id
+                  WHERE occurrence.learning_target_id = target.id
+                  ORDER BY record.created_at_unix_ms DESC, record.id DESC
+                  LIMIT 1
+                )",
+            [],
+            |row| row.get(0),
+        )
+        .map_err(|error| format!("v19 代表记录审计失败：{error}"))?;
+    if invalid_representatives != 0 {
+        return Err("v19 学习目标代表记录不是确定性的最近 occurrence。".to_string());
+    }
+
+    for (table, join_condition) in [
+        (
+            "review_feed_items",
+            "row.learning_target_id <> occurrence.learning_target_id",
+        ),
+        (
+            "review_generated_cards",
+            "row.learning_target_id <> occurrence.learning_target_id",
+        ),
+    ] {
+        let sql = format!(
+            "SELECT COUNT(*) FROM {table} row
+             JOIN learning_target_occurrences occurrence
+               ON occurrence.learning_record_id = row.learning_record_id
+             WHERE row.learning_target_id IS NULL OR {join_condition}"
+        );
+        let invalid: i64 = transaction
+            .query_row(&sql, [], |row| row.get(0))
+            .map_err(|error| format!("v19 {table} target 身份审计失败：{error}"))?;
+        if invalid != 0 {
+            return Err(format!("v19 {table} 存在不一致的 target 身份。"));
+        }
+    }
+    let invalid_attempts: i64 = transaction
+        .query_row(
+            "SELECT COUNT(*) FROM review_feed_attempts attempt
+             JOIN review_feed_items item ON item.id = attempt.feed_item_id
+             WHERE attempt.learning_target_id IS NULL
+                OR attempt.learning_target_id <> item.learning_target_id
+                OR attempt.learning_record_id <> item.learning_record_id",
+            [],
+            |row| row.get(0),
+        )
+        .map_err(|error| format!("v19 attempt target 身份审计失败：{error}"))?;
+    if invalid_attempts != 0 {
+        return Err("v19 attempt 与 Feed target/occurrence 身份不一致。".to_string());
+    }
+    let invalid_active_slots: i64 = transaction
+        .query_row(
+            "SELECT COUNT(*)
+             FROM review_feed_items item
+             JOIN learning_targets target ON target.id = item.learning_target_id
+             WHERE item.target_slot_active <> CASE
+             WHEN target.target_kind = 'legacy_compat' THEN 0
+             WHEN item.id = (
+               SELECT candidate.id
+               FROM review_feed_items candidate
+               LEFT JOIN review_feed_attempts active_attempt
+                 ON active_attempt.feed_item_id = candidate.id
+                AND active_attempt.undone_at_unix_ms IS NULL
+               WHERE candidate.day_start_unix_ms = item.day_start_unix_ms
+                 AND candidate.cycle_index = item.cycle_index
+                 AND candidate.learning_target_id = item.learning_target_id
+               ORDER BY CASE WHEN active_attempt.id IS NULL THEN 1 ELSE 0 END ASC,
+                        active_attempt.created_at_unix_ms DESC,
+                        active_attempt.id DESC,
+                        candidate.ordinal ASC,
+                        candidate.id ASC
+               LIMIT 1
+             ) THEN 1 ELSE 0 END",
+            [],
+            |row| row.get(0),
+        )
+        .map_err(|error| format!("v19 Feed active target 槽位审计失败：{error}"))?;
+    if invalid_active_slots != 0 {
+        return Err("v19 Feed active target 槽位未保留目标的权威 active attempt。".to_string());
+    }
+    for table in [
+        "review_quality_feedback",
+        "review_quality_mutations",
+        "review_card_generation_failures",
+    ] {
+        let invalid: i64 = transaction
+            .query_row(
+                &format!(
+                    "SELECT COUNT(*) FROM {table} row
+                     JOIN review_feed_items item ON item.id = row.feed_item_id
+                     WHERE row.learning_record_id <> item.learning_record_id"
+                ),
+                [],
+                |row| row.get(0),
+            )
+            .map_err(|error| format!("v19 {table} occurrence 追溯审计失败：{error}"))?;
+        if invalid != 0 {
+            return Err(format!("v19 {table} 与 Feed occurrence 身份不一致。"));
+        }
+    }
+    let invalid_feedback_cards: i64 = transaction
+        .query_row(
+            "SELECT COUNT(*) FROM review_quality_feedback feedback
+             JOIN review_generated_cards card ON card.id = feedback.generated_card_id
+             WHERE feedback.generated_card_id IS NOT NULL
+               AND feedback.learning_record_id <> card.learning_record_id",
+            [],
+            |row| row.get(0),
+        )
+        .map_err(|error| format!("v19 feedback 卡片追溯审计失败：{error}"))?;
+    if invalid_feedback_cards != 0 {
+        return Err("v19 feedback 与 generated-card occurrence 身份不一致。".to_string());
+    }
+
+    let expected_states = replay_learning_target_review_states_v19(transaction)?;
+    let stored_state_count: i64 = transaction
+        .query_row(
+            "SELECT COUNT(*) FROM learning_target_review_states",
+            [],
+            |row| row.get(0),
+        )
+        .map_err(|error| format!("v19 目标级复习状态数量审计失败：{error}"))?;
+    if usize::try_from(stored_state_count).ok() != Some(expected_states.len()) {
+        return Err("v19 目标级复习状态数量不一致。".to_string());
+    }
+    for expected in expected_states.values() {
+        let actual = transaction
+            .query_row(
+                "SELECT learning_target_id, revision, next_review_at_unix_ms,
+                        attempt_count, remembered_count, forgotten_count, success_streak,
+                        last_reviewed_at_unix_ms, last_outcome, last_used_hint,
+                        last_attempt_id, created_at_unix_ms, updated_at_unix_ms
+                 FROM learning_target_review_states WHERE learning_target_id = ?1",
+                [expected.learning_target_id],
+                |row| {
+                    Ok(ReplayedLearningTargetReviewState {
+                        learning_target_id: row.get(0)?,
+                        revision: row.get(1)?,
+                        next_review_at_unix_ms: row.get(2)?,
+                        attempt_count: row.get(3)?,
+                        remembered_count: row.get(4)?,
+                        forgotten_count: row.get(5)?,
+                        success_streak: row.get(6)?,
+                        last_reviewed_at_unix_ms: row.get(7)?,
+                        last_outcome: row.get(8)?,
+                        last_used_hint: row.get(9)?,
+                        last_attempt_id: row.get(10)?,
+                        created_at_unix_ms: row.get(11)?,
+                        updated_at_unix_ms: row.get(12)?,
+                    })
+                },
+            )
+            .map_err(|error| format!("v19 目标级复习状态审计读取失败：{error}"))?;
+        if actual != *expected {
+            return Err(format!(
+                "v19 学习目标 {} 的复习状态未按 active attempt 顺序重建。",
+                expected.learning_target_id
+            ));
+        }
+    }
+
+    let foreign_key_error_count: i64 = transaction
+        .query_row("SELECT COUNT(*) FROM pragma_foreign_key_check", [], |row| {
+            row.get(0)
+        })
+        .map_err(|error| format!("v19 外键一致性审计失败：{error}"))?;
+    if foreign_key_error_count != 0 {
+        return Err("v19 迁移后存在外键一致性错误。".to_string());
     }
     Ok(())
 }
@@ -1704,6 +3046,82 @@ mod tests {
         store.save(&input, &card).unwrap()
     }
 
+    fn migrate_fresh_database_through_v18(connection: &mut Connection) {
+        connection
+            .execute_batch(
+                "PRAGMA foreign_keys = ON;
+                 CREATE TABLE schema_migrations (
+                   version INTEGER PRIMARY KEY,
+                   applied_at_unix_ms INTEGER NOT NULL
+                 );",
+            )
+            .unwrap();
+        let transaction = connection.transaction().unwrap();
+        for &(version, sql) in MIGRATIONS.iter().filter(|(version, _)| *version <= 18) {
+            transaction.execute_batch(sql).unwrap();
+            if version == 15 {
+                repair_review_targets_v15(&transaction, 10_000).unwrap();
+            }
+            if version == 16 {
+                repair_review_quality_feedback_v16(&transaction).unwrap();
+            }
+            if version == 17 {
+                backfill_learning_record_targets_v17(&transaction).unwrap();
+            }
+            transaction
+                .execute(
+                    "INSERT INTO schema_migrations (version, applied_at_unix_ms)
+                     VALUES (?1, ?2)",
+                    params![version, 1_000 + version],
+                )
+                .unwrap();
+        }
+        transaction.commit().unwrap();
+    }
+
+    fn insert_v18_record(
+        connection: &Connection,
+        id: i64,
+        query_text: &str,
+        learning_target_text: &str,
+        query_type: QueryType,
+        created_at_unix_ms: i64,
+    ) {
+        let card = card_for(learning_target_text, query_type);
+        connection
+            .execute(
+                "INSERT INTO learning_records (
+                   id, query_text, normalized_text, query_type, source_type, source_app,
+                   context_text, explanation_card_json, schema_version,
+                   created_at_unix_ms, difficulty
+                 ) VALUES (?1, ?2, ?3, ?4, 'manual', 'test.exe', ?5, ?6, 2, ?7, NULL)",
+                params![
+                    id,
+                    query_text,
+                    normalize_query_text(query_text),
+                    query_type_to_storage(query_type),
+                    format!("Context {id}: {query_text}"),
+                    serde_json::to_string(&card).unwrap(),
+                    created_at_unix_ms,
+                ],
+            )
+            .unwrap();
+        connection
+            .execute(
+                "INSERT INTO learning_record_targets (
+                   learning_record_id, query_direction, learning_target_text,
+                   normalized_target_text, created_at_unix_ms
+                 ) VALUES (?1, 'en_to_zh', ?2, ?3, ?4)",
+                params![
+                    id,
+                    learning_target_text,
+                    canonicalize_learning_target_text(learning_target_text),
+                    created_at_unix_ms
+                ],
+            )
+            .unwrap();
+    }
+
     #[test]
     fn first_migration_creates_database() {
         let (root, path) = test_database_path();
@@ -1719,6 +3137,746 @@ mod tests {
         assert!(path.exists());
         drop(store);
         let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn version_eighteen_upgrade_aggregates_only_exact_canonical_targets() {
+        let (root, path) = test_database_path();
+        fs::create_dir_all(&root).unwrap();
+        let mut connection = Connection::open(&path).unwrap();
+        migrate_fresh_database_through_v18(&mut connection);
+        for (id, query, target, query_type, created_at) in [
+            (1, "SQLite", "SQLite", QueryType::Word, 1_000),
+            (2, " sqlite ", "  sqlite  ", QueryType::Word, 1_000),
+            (3, "SQLite", "SQLite", QueryType::Phrase, 1_100),
+            (4, "config", "config", QueryType::Word, 1_200),
+            (5, "configuration", "configuration", QueryType::Word, 1_300),
+            (6, "run", "run", QueryType::Word, 1_400),
+            (7, "running", "running", QueryType::Word, 1_500),
+            (8, "ran", "ran", QueryType::Word, 1_600),
+        ] {
+            insert_v18_record(&connection, id, query, target, query_type, created_at);
+        }
+        drop(connection);
+
+        let store = LearningRecordStore::open(&path).unwrap();
+        let page = store.list_targets(Some(1), Some(20), None, None).unwrap();
+        assert_eq!(page.total, 7);
+        let sqlite_word = page
+            .targets
+            .iter()
+            .find(|target| {
+                target.query_type == QueryType::Word && target.normalized_target_text == "sqlite"
+            })
+            .unwrap();
+        assert_eq!(sqlite_word.query_count, 2);
+        assert_eq!(sqlite_word.representative_record.id, 2);
+        assert_eq!(sqlite_word.canonicalization_version, 1);
+        assert_eq!(
+            store
+                .get_target(sqlite_word.id)
+                .unwrap()
+                .unwrap()
+                .occurrences
+                .len(),
+            2
+        );
+        let phrase_count = page
+            .targets
+            .iter()
+            .filter(|target| {
+                target.query_type == QueryType::Phrase && target.normalized_target_text == "sqlite"
+            })
+            .count();
+        assert_eq!(phrase_count, 1);
+
+        for (table, column) in [
+            ("learning_target_occurrences", "learning_target_id"),
+            ("review_feed_items", "learning_target_id"),
+            ("review_generated_cards", "learning_target_id"),
+            ("review_feed_attempts", "learning_target_id"),
+        ] {
+            let not_null: i64 = store
+                .connection
+                .query_row(
+                    "SELECT \"notnull\" FROM pragma_table_info(?1) WHERE name = ?2",
+                    params![table, column],
+                    |row| row.get(0),
+                )
+                .unwrap();
+            assert_eq!(not_null, 1, "{table}.{column} 必须为 NOT NULL");
+        }
+        audit_learning_target_aggregation_v19(&store.connection.unchecked_transaction().unwrap())
+            .unwrap();
+        drop(store);
+
+        let reopened = LearningRecordStore::open(&path).unwrap();
+        assert_eq!(
+            reopened
+                .connection
+                .query_row("SELECT COUNT(*) FROM learning_targets", [], |row| row
+                    .get::<_, i64>(0))
+                .unwrap(),
+            7
+        );
+        drop(reopened);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn version_nineteen_audit_failure_rolls_back_the_whole_migration() {
+        let (root, path) = test_database_path();
+        fs::create_dir_all(&root).unwrap();
+        let mut connection = Connection::open(&path).unwrap();
+        migrate_fresh_database_through_v18(&mut connection);
+        insert_v18_record(&connection, 1, "SQLite", "SQLite", QueryType::Word, 1_000);
+        connection
+            .execute(
+                "UPDATE learning_record_targets
+                 SET normalized_target_text = 'corrupt-projection'
+                 WHERE learning_record_id = 1",
+                [],
+            )
+            .unwrap();
+        drop(connection);
+
+        let error = match LearningRecordStore::open(&path) {
+            Ok(_) => panic!("损坏投影必须让 v19 迁移失败"),
+            Err(error) => error,
+        };
+        assert!(error.contains("occurrence 与原始学习目标投影不一致"));
+        let connection = Connection::open(&path).unwrap();
+        let max_version: i64 = connection
+            .query_row("SELECT MAX(version) FROM schema_migrations", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        let target_table_exists: bool = connection
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM sqlite_master
+                 WHERE type = 'table' AND name = 'learning_targets')",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        let feed_target_column_exists: bool = connection
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM pragma_table_info('review_feed_items')
+                 WHERE name = 'learning_target_id')",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(max_version, 18);
+        assert!(!target_table_exists);
+        assert!(!feed_target_column_exists);
+        drop(connection);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn version_nineteen_replays_active_attempts_and_preserves_review_traceability() {
+        let (root, path) = test_database_path();
+        fs::create_dir_all(&root).unwrap();
+        let mut connection = Connection::open(&path).unwrap();
+        migrate_fresh_database_through_v18(&mut connection);
+        insert_v18_record(&connection, 1, "SQLite", "SQLite", QueryType::Word, 1_000);
+        insert_v18_record(&connection, 2, " sqlite ", "sqlite", QueryType::Word, 1_100);
+        connection
+            .execute_batch(
+                r#"
+INSERT INTO review_targets (
+  learning_record_id, revision, next_review_at_unix_ms, attempt_count,
+  remembered_count, forgotten_count, success_streak,
+  created_at_unix_ms, updated_at_unix_ms
+) VALUES
+  (1, 5, 9000, 1, 1, 0, 1, 1000, 9000),
+  (2, 7, 9000, 1, 0, 1, 0, 1100, 9000);
+
+INSERT INTO review_generated_cards (
+  id, learning_record_id, variant_index, generation_request_key, content_json,
+  model, created_at_unix_ms, expires_at_unix_ms, last_used_at_unix_ms, use_count
+) VALUES (301, 1, 0, 'card-301', '{}', 'test-model', 1500, 999999, 1500, 1);
+
+INSERT INTO review_feed_items (
+  id, day_start_unix_ms, day_end_unix_ms, learning_record_id, cycle_index,
+  ordinal, reason_code, generated_card_id, created_at_unix_ms
+) VALUES
+  (101, 10000, 20000, 1, 0, 0, 'new_record', 301, 1500),
+  (102, 10000, 20000, 2, 0, 1, 'new_record', NULL, 1600),
+  (103, 10000, 20000, 1, 1, 2, 'continued_practice', NULL, 1700);
+
+INSERT INTO review_feed_attempts (
+  id, feed_item_id, learning_record_id, request_key, expected_revision,
+  target_revision, outcome, used_hint, next_review_at_unix_ms,
+  previous_next_review_at_unix_ms, previous_attempt_count,
+  previous_remembered_count, previous_forgotten_count, previous_success_streak,
+  previous_last_reviewed_at_unix_ms, previous_last_outcome,
+  previous_last_used_hint, previous_last_attempt_id, created_at_unix_ms,
+  undone_at_unix_ms, undo_request_key, undo_expected_revision, undo_target_revision
+) VALUES
+  (201, 101, 1, 'attempt-later', 0, 1, 'remembered', 0, 259203000,
+   1000, 0, 0, 0, 0, NULL, NULL, NULL, NULL, 3000,
+   NULL, NULL, NULL, NULL),
+  (202, 102, 2, 'attempt-earlier', 0, 1, 'forgotten', 0, 86402000,
+   1100, 0, 0, 0, 0, NULL, NULL, NULL, NULL, 2000,
+   NULL, NULL, NULL, NULL),
+  (203, 103, 1, 'attempt-undone', 1, 2, 'remembered', 1, 172804000,
+   259203000, 1, 1, 0, 1, 3000, 'remembered', 0, 201, 4000,
+   5000, 'undo-203', 2, 3);
+
+INSERT INTO review_quality_feedback (
+  id, feed_item_id, learning_record_id, generated_card_id, card_context_key,
+  revision, active, polarity, reason_codes_json, detail,
+  created_at_unix_ms, updated_at_unix_ms
+) VALUES (401, 101, 1, 301, 'generated:301', 2, 1, 'up', '["needed"]',
+          '保留反馈', 3500, 3600);
+
+INSERT INTO review_quality_mutations (
+  request_key, feed_item_id, learning_record_id, operation,
+  input_json, result_json, created_at_unix_ms
+) VALUES ('quality-401', 101, 1, 'save', '{}', '{}', 3600);
+
+INSERT INTO review_card_generation_failures (
+  request_key, feed_item_id, learning_record_id, failure_count,
+  retry_after_unix_ms, last_error, created_at_unix_ms, updated_at_unix_ms
+) VALUES ('failure-102', 102, 2, 2, 9000, 'temporary', 3700, 3800);
+"#,
+            )
+            .unwrap();
+        drop(connection);
+
+        let store = LearningRecordStore::open(&path).unwrap();
+        let target_id: i64 = store
+            .connection
+            .query_row(
+                "SELECT learning_target_id FROM learning_target_occurrences
+                 WHERE learning_record_id = 1",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        let second_target_id: i64 = store
+            .connection
+            .query_row(
+                "SELECT learning_target_id FROM learning_target_occurrences
+                 WHERE learning_record_id = 2",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(target_id, second_target_id);
+        let state: (i64, i64, i64, i64, i64, i64, Option<i64>) = store
+            .connection
+            .query_row(
+                "SELECT revision, next_review_at_unix_ms, attempt_count,
+                        remembered_count, forgotten_count, success_streak, last_attempt_id
+                 FROM learning_target_review_states WHERE learning_target_id = ?1",
+                [target_id],
+                |row| {
+                    Ok((
+                        row.get(0)?,
+                        row.get(1)?,
+                        row.get(2)?,
+                        row.get(3)?,
+                        row.get(4)?,
+                        row.get(5)?,
+                        row.get(6)?,
+                    ))
+                },
+            )
+            .unwrap();
+        assert_eq!(state, (8, 259_203_000, 2, 1, 1, 1, Some(201)));
+
+        for (table, expected) in [
+            ("review_feed_items", 3_i64),
+            ("review_feed_attempts", 3),
+            ("review_generated_cards", 1),
+            ("review_quality_feedback", 1),
+            ("review_quality_mutations", 1),
+            ("review_card_generation_failures", 1),
+        ] {
+            assert_eq!(
+                store
+                    .connection
+                    .query_row(&format!("SELECT COUNT(*) FROM {table}"), [], |row| row
+                        .get::<_, i64>(0))
+                    .unwrap(),
+                expected,
+                "{table} 行数必须保留"
+            );
+        }
+        let feed_slots: Vec<(i64, i64)> = {
+            let mut statement = store
+                .connection
+                .prepare(
+                    "SELECT id, target_slot_active FROM review_feed_items
+                     WHERE cycle_index = 0 ORDER BY ordinal",
+                )
+                .unwrap();
+            statement
+                .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))
+                .unwrap()
+                .map(Result::unwrap)
+                .collect()
+        };
+        assert_eq!(feed_slots, vec![(101, 1), (102, 0)]);
+        let undone_at: Option<i64> = store
+            .connection
+            .query_row(
+                "SELECT undone_at_unix_ms FROM review_feed_attempts WHERE id = 203",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(undone_at, Some(5_000));
+        audit_learning_target_aggregation_v19(&store.connection.unchecked_transaction().unwrap())
+            .unwrap();
+        drop(store);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn version_nineteen_active_slot_prefers_latest_active_attempt_without_requiring_repeat() {
+        let (root, path) = test_database_path();
+        fs::create_dir_all(&root).unwrap();
+        let mut connection = Connection::open(&path).unwrap();
+        migrate_fresh_database_through_v18(&mut connection);
+        for (id, query, target) in [
+            (1, "SQLite", "SQLite"),
+            (2, " sqlite ", "sqlite"),
+            (3, "config", "config"),
+            (4, " CONFIG ", " config "),
+        ] {
+            insert_v18_record(&connection, id, query, target, QueryType::Word, 1_000 + id);
+        }
+        connection
+            .execute_batch(
+                r#"
+INSERT INTO review_feed_items (
+  id, day_start_unix_ms, day_end_unix_ms, learning_record_id, cycle_index,
+  ordinal, reason_code, generated_card_id, created_at_unix_ms
+) VALUES
+  (101, 10000, 20000, 1, 0, 0, 'new_record', NULL, 1500),
+  (102, 10000, 20000, 2, 0, 1, 'new_record', NULL, 1600),
+  (103, 10000, 20000, 3, 0, 2, 'new_record', NULL, 1700),
+  (104, 10000, 20000, 4, 0, 3, 'new_record', NULL, 1800);
+
+INSERT INTO review_feed_attempts (
+  id, feed_item_id, learning_record_id, request_key, expected_revision,
+  target_revision, outcome, used_hint, next_review_at_unix_ms,
+  previous_next_review_at_unix_ms, previous_attempt_count,
+  previous_remembered_count, previous_forgotten_count, previous_success_streak,
+  previous_last_reviewed_at_unix_ms, previous_last_outcome,
+  previous_last_used_hint, previous_last_attempt_id, created_at_unix_ms,
+  undone_at_unix_ms, undo_request_key, undo_expected_revision, undo_target_revision
+) VALUES
+  (201, 102, 2, 'late-slot-completed', 0, 1, 'remembered', 0,
+   259202000, 1002, 0, 0, 0, 0, NULL, NULL, NULL, NULL, 2000,
+   NULL, NULL, NULL, NULL),
+  (202, 103, 3, 'first-completed-slot', 0, 1, 'remembered', 0,
+   259203000, 1003, 0, 0, 0, 0, NULL, NULL, NULL, NULL, 3000,
+   NULL, NULL, NULL, NULL),
+  (203, 104, 4, 'latest-completed-slot', 0, 1, 'forgotten', 0,
+   86403000, 1004, 0, 0, 0, 0, NULL, NULL, NULL, NULL, 3000,
+   NULL, NULL, NULL, NULL);
+"#,
+            )
+            .unwrap();
+        drop(connection);
+
+        let store = LearningRecordStore::open(&path).unwrap();
+        let slots: Vec<(i64, i64)> = store
+            .connection
+            .prepare(
+                "SELECT id, target_slot_active FROM review_feed_items
+                 WHERE day_start_unix_ms = 10000 ORDER BY ordinal, id",
+            )
+            .unwrap()
+            .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))
+            .unwrap()
+            .map(Result::unwrap)
+            .collect();
+        assert_eq!(slots, vec![(101, 0), (102, 1), (103, 0), (104, 1)]);
+
+        let visible_stats: (i64, i64, i64) = store
+            .connection
+            .query_row(
+                "SELECT COUNT(*),
+                        COALESCE(SUM(CASE WHEN attempt.outcome = 'remembered' THEN 1 ELSE 0 END), 0),
+                        COALESCE(SUM(CASE WHEN attempt.outcome = 'forgotten' THEN 1 ELSE 0 END), 0)
+                 FROM review_feed_attempts attempt
+                 JOIN review_feed_items item ON item.id = attempt.feed_item_id
+                 WHERE item.day_start_unix_ms = 10000
+                   AND item.target_slot_active = 1
+                   AND attempt.undone_at_unix_ms IS NULL",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .unwrap();
+        let visible_without_active_attempt: i64 = store
+            .connection
+            .query_row(
+                "SELECT COUNT(*) FROM review_feed_items item
+                 WHERE item.day_start_unix_ms = 10000
+                   AND item.target_slot_active = 1
+                   AND NOT EXISTS (
+                     SELECT 1 FROM review_feed_attempts attempt
+                     WHERE attempt.feed_item_id = item.id
+                       AND attempt.undone_at_unix_ms IS NULL
+                   )",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        let preserved_counts: (i64, i64) = store
+            .connection
+            .query_row(
+                "SELECT (SELECT COUNT(*) FROM review_feed_items),
+                        (SELECT COUNT(*) FROM review_feed_attempts)",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(visible_stats, (2, 1, 1));
+        assert_eq!(visible_without_active_attempt, 0);
+        assert_eq!(preserved_counts, (4, 3));
+        audit_learning_target_aggregation_v19(&store.connection.unchecked_transaction().unwrap())
+            .unwrap();
+        drop(store);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn version_nineteen_preserves_cross_day_feed_without_english_projection_as_compatibility_history(
+    ) {
+        let (root, path) = test_database_path();
+        fs::create_dir_all(&root).unwrap();
+        let mut connection = Connection::open(&path).unwrap();
+        migrate_fresh_database_through_v18(&mut connection);
+        insert_v18_record(&connection, 1, "SQLite", "SQLite", QueryType::Word, 1_000);
+        for (id, query, created_at) in [
+            (38, "时练习，优先保证", 1_038),
+            (60, "界面", 1_060),
+            (62, "微调", 1_062),
+        ] {
+            let card = card_for(query, QueryType::Phrase);
+            connection
+                .execute(
+                    "INSERT INTO learning_records (
+                       id, query_text, normalized_text, query_type, source_type, source_app,
+                       context_text, explanation_card_json, schema_version,
+                       created_at_unix_ms, difficulty
+                     ) VALUES (?1, ?2, ?3, 'phrase', 'manual', 'legacy.exe',
+                               ?4, ?5, 1, ?6, NULL)",
+                    params![
+                        id,
+                        query,
+                        normalize_query_text(query),
+                        format!("历史上下文 {id}"),
+                        serde_json::to_string(&card).unwrap(),
+                        created_at
+                    ],
+                )
+                .unwrap();
+        }
+        connection
+            .execute_batch(
+                r#"
+INSERT INTO review_targets (
+  learning_record_id, revision, next_review_at_unix_ms, attempt_count,
+  remembered_count, forgotten_count, success_streak,
+  created_at_unix_ms, updated_at_unix_ms
+) VALUES (1, 1, 259203000, 1, 1, 0, 1, 1000, 3000);
+
+INSERT INTO review_generated_cards (
+  id, learning_record_id, variant_index, generation_request_key, content_json,
+  model, created_at_unix_ms, expires_at_unix_ms, last_used_at_unix_ms, use_count
+) VALUES (301, 1, 0, 'compat-gap-card', '{}', 'test-model', 1500, 999999, 1500, 1);
+
+INSERT INTO review_feed_items (
+  id, day_start_unix_ms, day_end_unix_ms, learning_record_id, cycle_index,
+  ordinal, reason_code, generated_card_id, created_at_unix_ms
+) VALUES
+  (101, 10000, 20000, 1, 0, 0, 'new_record', 301, 1500),
+  (138, 10000, 20000, 38, 0, 1, 'new_record', NULL, 1501),
+  (238, 20000, 30000, 38, 0, 0, 'continued_practice', NULL, 2501),
+  (338, 30000, 40000, 38, 0, 0, 'continued_practice', NULL, 3501),
+  (160, 10000, 20000, 60, 0, 2, 'new_record', NULL, 1502),
+  (260, 20000, 30000, 60, 0, 1, 'continued_practice', NULL, 2502),
+  (162, 10000, 20000, 62, 0, 3, 'new_record', NULL, 1503),
+  (262, 20000, 30000, 62, 0, 2, 'continued_practice', NULL, 2503);
+
+INSERT INTO review_feed_attempts (
+  id, feed_item_id, learning_record_id, request_key, expected_revision,
+  target_revision, outcome, used_hint, next_review_at_unix_ms,
+  previous_next_review_at_unix_ms, previous_attempt_count,
+  previous_remembered_count, previous_forgotten_count, previous_success_streak,
+  previous_last_reviewed_at_unix_ms, previous_last_outcome,
+  previous_last_used_hint, previous_last_attempt_id, created_at_unix_ms,
+  undone_at_unix_ms, undo_request_key, undo_expected_revision, undo_target_revision
+) VALUES (201, 101, 1, 'compat-gap-attempt', 0, 1, 'remembered', 0,
+          259203000, 1000, 0, 0, 0, 0, NULL, NULL, NULL, NULL, 3000,
+          NULL, NULL, NULL, NULL);
+
+INSERT INTO review_quality_feedback (
+  id, feed_item_id, learning_record_id, generated_card_id, card_context_key,
+  revision, active, polarity, reason_codes_json, detail,
+  created_at_unix_ms, updated_at_unix_ms
+) VALUES (401, 101, 1, 301, 'generated:301', 1, 1, 'up', '[]',
+          '保留反馈', 3100, 3100);
+
+INSERT INTO review_quality_mutations (
+  request_key, feed_item_id, learning_record_id, operation,
+  input_json, result_json, created_at_unix_ms
+) VALUES ('compat-gap-feedback', 101, 1, 'save', '{}', '{}', 3100);
+
+INSERT INTO review_card_generation_failures (
+  request_key, feed_item_id, learning_record_id, failure_count,
+  retry_after_unix_ms, last_error, created_at_unix_ms, updated_at_unix_ms
+) VALUES ('compat-gap-failure', 101, 1, 1, 5000, 'temporary', 3200, 3200);
+"#,
+            )
+            .unwrap();
+        drop(connection);
+
+        let store = LearningRecordStore::open(&path).unwrap();
+        for (table, expected) in [
+            ("review_feed_items", 8_i64),
+            ("review_generated_cards", 1),
+            ("review_feed_attempts", 1),
+            ("review_quality_feedback", 1),
+            ("review_quality_mutations", 1),
+            ("review_card_generation_failures", 1),
+        ] {
+            assert_eq!(
+                store
+                    .connection
+                    .query_row(&format!("SELECT COUNT(*) FROM {table}"), [], |row| row
+                        .get::<_, i64>(0))
+                    .unwrap(),
+                expected,
+                "{table} 数量必须完整保留"
+            );
+        }
+        let compatibility_targets: Vec<(i64, String, i64, Option<String>, i64)> = store
+            .connection
+            .prepare(
+                "SELECT target.representative_learning_record_id, target.stable_key,
+                        target.canonicalization_version, target.normalized_target_text,
+                        COUNT(occurrence.learning_record_id)
+                 FROM learning_targets target
+                 JOIN learning_target_occurrences occurrence
+                   ON occurrence.learning_target_id = target.id
+                 WHERE target.target_kind = 'legacy_compat'
+                 GROUP BY target.id ORDER BY target.representative_learning_record_id",
+            )
+            .unwrap()
+            .query_map([], |row| {
+                Ok((
+                    row.get(0)?,
+                    row.get(1)?,
+                    row.get(2)?,
+                    row.get(3)?,
+                    row.get(4)?,
+                ))
+            })
+            .unwrap()
+            .map(Result::unwrap)
+            .collect();
+        assert_eq!(
+            compatibility_targets,
+            vec![
+                (38, "legacy-compat:record:38".to_string(), 0, None, 1),
+                (60, "legacy-compat:record:60".to_string(), 0, None, 1),
+                (62, "legacy-compat:record:62".to_string(), 0, None, 1),
+            ]
+        );
+        let compatibility_feed: Vec<(i64, i64, i64)> = store
+            .connection
+            .prepare(
+                "SELECT item.id, item.learning_target_id, item.target_slot_active
+                 FROM review_feed_items item
+                 JOIN learning_targets target ON target.id = item.learning_target_id
+                 WHERE target.target_kind = 'legacy_compat'
+                 ORDER BY item.id",
+            )
+            .unwrap()
+            .query_map([], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))
+            .unwrap()
+            .map(Result::unwrap)
+            .collect();
+        assert_eq!(compatibility_feed.len(), 7);
+        assert!(compatibility_feed
+            .iter()
+            .all(|(_, target_id, active)| *target_id > 0 && *active == 0));
+        assert_eq!(
+            store
+                .list_targets(Some(1), Some(20), None, None)
+                .unwrap()
+                .total,
+            1
+        );
+        assert_eq!(
+            store
+                .list_targets(Some(1), Some(20), Some("界面"), None)
+                .unwrap()
+                .total,
+            0
+        );
+        let compatibility_target_id: i64 = store
+            .connection
+            .query_row(
+                "SELECT id FROM learning_targets
+                 WHERE stable_key = 'legacy-compat:record:60'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert!(store.get_target(compatibility_target_id).unwrap().is_none());
+        assert!(get_learning_record_from_connection(&store.connection, 38)
+            .unwrap()
+            .is_some());
+        let foreign_key_errors: i64 = store
+            .connection
+            .query_row("SELECT COUNT(*) FROM pragma_foreign_key_check", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        assert_eq!(foreign_key_errors, 0);
+        audit_learning_target_aggregation_v19(&store.connection.unchecked_transaction().unwrap())
+            .unwrap();
+        drop(store);
+
+        let reopened = LearningRecordStore::open(&path).unwrap();
+        assert_eq!(
+            reopened
+                .connection
+                .query_row("SELECT COUNT(*) FROM review_feed_items", [], |row| row
+                    .get::<_, i64>(0))
+                .unwrap(),
+            8
+        );
+        assert_eq!(
+            reopened
+                .connection
+                .query_row("SELECT COUNT(*) FROM learning_targets", [], |row| row
+                    .get::<_, i64>(0))
+                .unwrap(),
+            4
+        );
+        drop(reopened);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn target_memory_search_pagination_history_and_delete_use_aggregate_identity() {
+        let (root, path) = test_database_path();
+        let mut store = LearningRecordStore::open(&path).unwrap();
+        let first = store
+            .save(
+                &CaptureInput {
+                    query_text: "SQLite".to_string(),
+                    context_text: Some("The app keeps a local database.".to_string()),
+                    source_type: SourceType::WindowsUia,
+                    source_app: Some("Code.exe".to_string()),
+                },
+                &word_card("SQLite"),
+            )
+            .unwrap();
+        let reverse_card = ExplanationCard::Word {
+            source_text: "数据库".to_string(),
+            learning_target_text: "SQLite".to_string(),
+            headword: "SQLite".to_string(),
+            part_of_speech: Some("noun".to_string()),
+            phonetic: None,
+            basic_meanings: vec!["嵌入式数据库".to_string()],
+            context_meaning: Some("在配置页面中查询本地数据库".to_string()),
+            source_sentence: None,
+            source_sentence_zh: None,
+            phrases: vec![],
+            near_meanings: vec![],
+            examples: vec![],
+            review_hint: None,
+        };
+        let second = store
+            .save(
+                &CaptureInput {
+                    query_text: "数据库".to_string(),
+                    context_text: Some("在配置页面中再次看到这个数据库名称。".to_string()),
+                    source_type: SourceType::Manual,
+                    source_app: Some("Obsidian.exe".to_string()),
+                },
+                &reverse_card,
+            )
+            .unwrap();
+        save(&store, "configuration", SourceType::Manual);
+
+        let page = store.list_targets(Some(1), Some(1), None, None).unwrap();
+        assert_eq!(page.total, 2);
+        assert_eq!(page.targets.len(), 1);
+        let sqlite_target = store
+            .list_targets(Some(1), Some(20), Some("sqlite"), None)
+            .unwrap()
+            .targets
+            .pop()
+            .unwrap();
+        assert_eq!(sqlite_target.query_count, 2);
+        assert_eq!(sqlite_target.representative_record.id, second.id);
+        for keyword in ["数据库", "配置页面", "嵌入式数据库"] {
+            let result = store
+                .list_targets(Some(1), Some(20), Some(keyword), None)
+                .unwrap();
+            assert_eq!(result.total, 1, "历史字段 {keyword} 必须能命中聚合目标");
+            assert_eq!(result.targets[0].id, sqlite_target.id);
+        }
+        let detail = store.get_target(sqlite_target.id).unwrap().unwrap();
+        assert_eq!(detail.occurrences.len(), 2);
+        assert_eq!(detail.occurrences[0].id, second.id);
+        assert_eq!(detail.occurrences[1].id, first.id);
+
+        assert!(store.delete(second.id).unwrap());
+        let after_delete = store.get_target(sqlite_target.id).unwrap().unwrap();
+        assert_eq!(after_delete.target.query_count, 1);
+        assert_eq!(after_delete.target.representative_record.id, first.id);
+        assert_eq!(after_delete.occurrences.len(), 1);
+        drop(store);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn target_memory_search_prioritizes_exact_target_over_newer_context_match() {
+        let (root, path) = test_database_path();
+        let store = LearningRecordStore::open(&path).unwrap();
+        save(&store, "config", SourceType::Manual);
+        save(&store, "configuration", SourceType::Manual);
+        store
+            .save(
+                &CaptureInput {
+                    query_text: "toward".to_string(),
+                    context_text: Some("SQLite then handoff then config then toward.".to_string()),
+                    source_type: SourceType::Manual,
+                    source_app: Some("ChatGPT.exe".to_string()),
+                },
+                &word_card("toward"),
+            )
+            .unwrap();
+
+        let result = store
+            .list_targets(Some(1), Some(20), Some("config"), None)
+            .unwrap();
+        assert_eq!(result.total, 3);
+        assert_eq!(
+            result
+                .targets
+                .iter()
+                .map(|target| target.normalized_target_text.as_str())
+                .collect::<Vec<_>>(),
+            vec!["config", "configuration", "toward"]
+        );
+
+        drop(store);
+        fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
@@ -3122,6 +5280,11 @@ mod tests {
         drop(store);
 
         let upgraded = LearningRecordStore::open(&path).unwrap();
+        let target_backfill = upgraded.connection.unchecked_transaction().unwrap();
+        backfill_learning_targets_v19(&target_backfill).unwrap();
+        rebuild_learning_target_review_states_v19(&target_backfill).unwrap();
+        audit_learning_target_aggregation_v19(&target_backfill).unwrap();
+        target_backfill.commit().unwrap();
         let raw_count: i64 = upgraded
             .connection
             .query_row("SELECT COUNT(*) FROM learning_records", [], |row| {
@@ -3321,7 +5484,7 @@ mod tests {
     #[test]
     fn search_filter_pagination_and_delete_work() {
         let (root, path) = test_database_path();
-        let store = LearningRecordStore::open(&path).unwrap();
+        let mut store = LearningRecordStore::open(&path).unwrap();
         let first = save(&store, "market", SourceType::Manual);
         let second = save(&store, "market share", SourceType::Manual);
         save(&store, "The market is growing.", SourceType::WindowsUia);

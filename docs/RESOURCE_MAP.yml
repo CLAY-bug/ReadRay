@@ -4,8 +4,8 @@ project:
   repo_root: "."
 
 meta:
-  version: "1.66"
-  last_updated: "2026-08-13"
+  version: "1.71"
+  last_updated: "2026-08-14"
   updated_by: "Codex"
   source_of_truth: "docs/RESOURCE_MAP.yml"
   language: "zh-CN"
@@ -87,7 +87,7 @@ core_docs:
     read_when:
       - "执行或验收 Quick AI 浮层体验升级。"
       - "恢复本轮 Quick AI 交互优化上下文。"
-    notes: "严格一次只执行一个任务；任务 1～6 已通过用户验收。任务 7 自动回归已通过，当前只等待真实 Tauri 视觉与交互验收；验收前不得把任务 7 标为完成或进入后续工作。任务 6 经用户确认允许最小修改主窗口统一历史，并为既有会话表增加创建来源字段。"
+    notes: "任务 1～7 均已完成；任务 7 的自动回归与用户真实 Tauri 视觉/交互验收已于 2026-08-13 通过。任务 6 经用户确认允许最小修改主窗口统一历史，并为既有会话表增加创建来源字段。"
     risk: "除任务 6 已明确的主窗口历史来源展示和 SQLite 来源字段外，不得扩展到选区解释浮层、模型能力、第二套会话存储或未规划功能。"
 
   - path: "doc/selection-translation-optimization-task.md"
@@ -277,8 +277,8 @@ source_areas:
     status: "active"
     read_when:
       - "调整真实复习卡映射、来源统计、推荐理由或 mutation 结果应用。"
-    notes: "卡片标题、完形答案与制卡输入统一消费 learningTargetText；queryText/contextText 只作为可追溯来源。只把 learning_record.context_text 中保存且包含英文目标的完整英文语境直接映射为卡片；ExplanationCard 的 AI 例句或 sourceSentence 不冒充学习时语境。无可用英文语境或进入后续轮次时标记为待制卡，接收 Rust 已持久化并验证的 AI 英文语境。按最终英文内容稳定映射密度与视觉类型。Service 校验规范英文目标、查询方向、全局完成数与反馈身份。"
-    risk: "不得按 normalizedText 合并记录、把中文上下文冒充英文卡、在前端自行生成 AI 语境，或根据质量反馈声称已改变策略。"
+    notes: "显式区分 learningTargetId（调度/revision 身份）与 learningRecordId（本卡真实 occurrence 身份）；分页合并、状态写回按 targetId 传播，卡片内容、generated card、failure 和 quality feedback 仍严格核对具体 record/feed/card。卡片标题、完形答案与制卡输入统一消费 learningTargetText；queryText/contextText 只作为可追溯来源。无可用英文语境或进入后续轮次时标记为待制卡，接收 Rust 已持久化并验证的 AI 英文语境。按最终英文内容稳定映射密度与视觉类型。"
+    risk: "不得把 targetId 与 recordId 再次耦合、按文本在前端合并、把中文上下文冒充英文卡、在前端自行生成 AI 语境，或根据质量反馈声称已改变策略。"
 
   - path: "src/reviewRequestIdentity.ts"
     purpose: "复习 mutation 的页面/条目/requestKey 迟到结果守卫与稳定请求键生成。"
@@ -311,7 +311,7 @@ source_areas:
     read_when:
       - "调整后台预生成水位、并发数、重试或迟到结果处理。"
       - "排查 pending 卡片进入 Feed、重复模型请求或页面切换后的恢复。"
-    notes: "以尚未浏览的 Ready、queued 和 working 总数作为真实缓冲：低于 6 才按需补到高水位 12，生成并发上限 2；候选不足时才通知页面补一页，全部生成失败时暂停自动扩张。主应用后台预热与 ReviewPage 共用该协调器；页面消费者挂载后接管 Feed，迟到预热结果必须放弃。每张可见卡按 feedItemId 单独登记消费，后面的 Ready 卡不会使更早 pending/失败卡出队；SQLite 返回的未到期失败退避会直接进入 failed 状态，不在启动预热时再次请求模型，用户显式重试才携带 explicitRetry 并复用原 key。同一 Feed 条目按 dayStart/feedItemId/learningRecordId/cycleIndex 派生确定性 request key，全部队列与缓存也使用该复合身份。生成继续走 ReviewService 并由 Rust 写入 SQLite；页面卸载后结果只留协调器缓存，重挂载再按完整身份对账。"
+    notes: "以尚未浏览的 Ready、queued 和 working 总数作为真实缓冲：低于 6 才按需补到高水位 12，生成并发上限 2；候选不足时才通知页面补一页，全部生成失败时暂停自动扩张。主应用后台预热与 ReviewPage 共用该协调器；页面消费者挂载后接管 Feed，迟到预热结果必须放弃。每张可见卡按 feedItemId 单独登记消费，后面的 Ready 卡不会使更早 pending/失败卡出队；SQLite 返回的未到期失败退避会直接进入 failed 状态，不在启动预热时再次请求模型，用户显式重试才携带 explicitRetry 并复用原 key。同一 Feed 条目按 dayStart/feedItemId/learningTargetId/learningRecordId/cycleIndex 派生确定性 request key，目标级状态与具体 occurrence 均冻结；生成继续走 ReviewService 并由 Rust 写入 SQLite。"
     risk: "不得导入 fixture、Tauri API 或 localStorage；不得让某一生成结果的全局 generation 排斥同批其他合法结果，也不得自动热重试失败项。"
 
   - path: "src/types/review.ts"
@@ -319,7 +319,7 @@ source_areas:
     status: "active"
     read_when:
       - "Rust 复习返回字段或 command 输入变化。"
-    notes: "一个 ReviewFeedItem 固定绑定一个 learningRecordId 和 cycleIndex；同一目标可跨轮次生成不同 Feed 条目。generatedCard 携带池有效期、最后使用时间和使用次数；generationFailure 携带稳定 key、失败次数和退避截止时间；attempt 与按具体 feed/generated 语境保存的 qualityFeedback 保持分离，反馈写入还携带 cardContextKey 防止迟到请求误写到已更换的语境。"
+    notes: "一个 ReviewFeedItem 同时冻结 learningTargetId、具体 learningRecordId 和 cycleIndex；target 状态以 learningTargetId 为键，attempt 同时保存两种身份，generatedCard 也同时保存 target 与来源 record。generationFailure 和 qualityFeedback 继续按具体 feed/record/card 语境隔离，反馈写入携带 cardContextKey 防止迟到请求误写到已更换的语境。"
     risk: "协议变化必须同步 Rust serde、repository、service 与聚焦测试。"
 
   - path: "src/reviewQualitySaveQueue.ts"
@@ -592,7 +592,7 @@ source_areas:
     read_when:
       - "调整记忆页内容布局、筛选、选择或历史展开交互。"
       - "将记忆页 fixture 接入现有 learning_records Rust commands。"
-    notes: "复用 MainAppShell、MainSidebar 和标题栏；通过装配层注入的 MemoryService 读取真实分页列表与单条详情，搜索和四类筛选均下推 Rust commands；保留键盘导航和 980px 以下列表/详情切换。"
+    notes: "复用 MainAppShell、MainSidebar 和标题栏；通过装配层注入的 MemoryService 读取稳定学习目标分页与详情，显示目标级总数、查询次数、最近确定性代表记录和全部真实 occurrence；搜索和四类筛选均下推 Rust commands，目标详情可按 targetId 跨页直达；保留键盘导航和 980px 以下列表/详情切换。"
     risk: "不要复制第二套 App Shell，不要在页面组件直接调用 Tauri、读取 SQLite 或退回全量前端过滤。"
 
   - path: "src/components/WritingPage.tsx"
@@ -758,17 +758,25 @@ source_areas:
     read_when:
       - "调整记忆页 list/search/get command 调用。"
       - "排查关键词、queryType 或分页参数是否下推后端。"
-    notes: "TauriMemoryRepository 根据关键词选择 list_learning_records 或 search_learning_records，并通过 get_learning_record 读取详情；不暴露 SQL。"
+    notes: "TauriMemoryRepository 根据关键词选择 list_learning_targets 或 search_learning_targets，并通过 get_learning_target 读取聚合详情；不暴露 SQL。"
     risk: "不要在 repository 中加入页面展示逻辑，也不要把搜索改为前端全量过滤。"
 
   - path: "src/memoryService.ts"
-    purpose: "LearningRecord/ExplanationCard 到 MemoryRecordItem 的真实数据映射与记忆业务服务。"
+    purpose: "LearningTargetSummary/Detail 与真实 occurrence 到 MemoryRecordItem 的映射和记忆业务服务。"
     status: "active"
     read_when:
       - "调整四类解释卡在记忆页的字段映射。"
       - "调整真实来源应用、时间分组或详情读取。"
-    notes: "按本地日期分为今天/昨天/更早；主标题只消费 learningTargetText，queryText/contextText 继续用于详情来源追溯；来源优先使用 sourceApp，缺失时只按真实 sourceType 标记；正式映射不生成过去出现次数。word/phrase 的 SQLite 旧卡片复用 sourceSentenceForDisplay，中文主导原句不再重复显示中译。"
-    risk: "不得补造后端缺失的语境义、翻译、难度或重复出现聚合。"
+    notes: "按最近代表 occurrence 的本地日期分为今天/昨天/更早；目标标题与 queryCount 消费 Rust 聚合事实，详情把全部真实 occurrence 的 recordId、原始 query、来源、上下文和时间映射到过去出现；来源优先使用 sourceApp，缺失时只按真实 sourceType 标记。word/phrase 的 SQLite 旧卡片复用 sourceSentenceForDisplay，中文主导原句不再重复显示中译。"
+    risk: "不得在前端自行聚合、补造后端缺失的语境义、翻译、难度或重复出现事实。"
+
+  - path: "tests/memoryService.test.mjs"
+    purpose: "记忆页稳定目标映射、聚合分页、查询次数与真实 occurrence 历史聚焦测试。"
+    status: "active"
+    read_when:
+      - "修改 Memory target 协议、代表记录、查询次数或历史出现映射。"
+    notes: "使用 Node 内置 test runner，不新增依赖；覆盖 targetId 列表身份、最近代表记录、后端聚合 total/page 原样透传、详情全部真实 recordId/query/context/source 和无效目标身份。"
+    risk: "纯映射测试不替代真实 Tauri/SQLite 数据升级与记忆页视觉人工验收。"
 
   - path: "src/memoryPageFixture.ts"
     purpose: "记忆页浏览器预览与测试专用 fixture。"
@@ -1089,8 +1097,8 @@ source_areas:
       - "调整学习记录 schema、迁移或存储字段。"
       - "实现学习记录窗口、搜索、筛选、单条读取或删除。"
       - "排查自动保存或应用数据目录中的 SQLite 问题。"
-    notes: "使用 rusqlite bundled；v1～v16 保持既有学习记录、Quick AI、写作、usage、偏好、主题、来源与复习 schema。v17 追加 learning_record_targets 伴生投影，保存新事件时在同一事务写入 queryDirection/learningTargetText；v18 追加 explanation_card_cache，缓存 repository 由 explanation_cache.rs 负责。升级只为可靠旧英文 query 确定性回填，旧中文不调用模型、不猜译文且原始事件继续保留。list/search/get/Today 在 SQL 层联结投影，分页与计数一致；搜索匹配英文目标及原始 query/context。"
-    risk: "learning_records 继续只做不可修改的原始事件，不做去重或覆盖；复习状态必须留在独立表，新增 schema 继续追加 migration，不能改写已发布迁移。"
+    notes: "使用 rusqlite bundled；v1～v18 保持既有 schema 不变。v19 一次新增 learning_targets、learning_target_occurrences 与 learning_target_review_states，并在同一事务回填稳定目标、以强 NOT NULL target 身份重建 Feed/generated-card/attempt 表、按 createdAt/id 重放全部未撤销 attempt、隐藏而不删除同轮历史重复 target，最后执行数量、身份、代表记录、状态重放、来源和外键一致性审计。正常目标唯一身份显式为 canonicalizationVersion + queryType + normalizedTargetText，规范化只合并大小写和空白格式；缺少 v17 可靠英文投影的旧记录各自绑定 targetKind=legacy_compat、canonicalizationVersion=0、normalizedTargetText=NULL 的不可聚合兼容身份，旧 Feed 与子链路保留但 active 槽关闭，Memory 和未来 Review 候选统一排除。新学习事件仍追加 learning_records，并与 v17 投影、稳定 target/occurrence 同事务保存。Memory target commands 的搜索/分页/总数均按正常目标；搜索保留目标、历史原文、解释与上下文多字段命中，但按精确目标、目标前缀、目标包含、原始查询、语境/解释的相关度排序，同级再按最近 occurrence 排序。"
+    risk: "learning_records 继续只做不可修改的原始事件，不做去重或覆盖；不得修改已发布 v1～v18，后续 target 重绑/拆分必须保持原始 occurrence 和历史 Feed/card/attempt 追溯。"
 
   - path: "src-tauri/src/review.rs"
     purpose: "阶段八 SQLite 复习仓库、连续分页 Feed、AI 英文语境持久化、调度、结果/撤销、质量反馈和 typed Tauri commands。"
@@ -1098,8 +1106,8 @@ source_areas:
     read_when:
       - "调整 Feed 候选/轮次、语境生成、调度间隔、attempt、幂等或 revision 事务。"
       - "调整卡片质量反馈保存、补充详情或撤销。"
-    notes: "按本机日历持久化无硬上限游标 Feed；候选、已保存页、统计与 canContinue 均联结 learning_record_targets，旧中文或其他无可靠英文目标的原始事件不会进入 Feed，也不会造成分页不足。制卡 Prompt、英文语境包含校验和卡片目标统一使用 learningTargetText，queryText 只保留为来源。既有轮次、缓存池、退避、调度、attempt/撤销、质量反馈和条目级权威对账语义保持不变。"
-    risk: "不得按 normalized_text 合并、修改 learning_records、让质量反馈改变学习结果、跨事务制造重复 attempt，或把本阶段扩展到写作/对话/长期学习者记忆和个性化排序。"
+    notes: "按稳定 learningTargetId 持久化无硬上限游标 Feed 和目标级调度，同一轮每个 target 只创建一个 active 项；具体 learningRecordId 继续冻结真实 occurrence、ExplanationCard 与卡片/反馈来源。跨轮按既有确定性规则轮换该目标的真实 occurrence；存在替代候选时按稳定 targetId 做跨页/跨轮边界相邻避让，不做语义主题判断。generated-card 池按具体 learning record 保持 3 张软容量，targetId 只作为强身份校验和追溯字段，卡片不跨 record 复用；attempt 同时保存 target/record，撤销后按全部未撤销 target attempt 的 createdAt/id 重放。既有幂等、失败退避、质量反馈、模糊成功权威对账和安全退出语义保持。"
+    risk: "不得按文本在前端合并、修改 learning_records、让质量反馈改变学习结果、丢失具体 card/record 追溯，或把本任务扩展到阶段九长期画像、记忆注入和个性化排序。"
 
   - path: "scripts/"
     purpose: "辅助脚本目录。"

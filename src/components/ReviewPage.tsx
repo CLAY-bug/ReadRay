@@ -231,6 +231,7 @@ function ReviewPage({
         dayStartUnixMs: next.dayStartUnixMs,
         feedItemId: card.feedItemId,
         learningRecordId: card.learningRecordId,
+        learningTargetId: card.learningTargetId,
         cycleIndex: card.cycleIndex,
       });
       if (card.needsPreparation && prepared) {
@@ -426,6 +427,7 @@ function ReviewPage({
         current.dayStartUnixMs !== event.task.dayStartUnixMs ||
         !target?.needsPreparation ||
         target.learningRecordId !== event.task.learningRecordId ||
+        target.learningTargetId !== event.task.learningTargetId ||
         target.cycleIndex !== event.task.cycleIndex
       ) {
         return;
@@ -578,6 +580,7 @@ function ReviewPage({
     const input: SubmitReviewOutcomeInput = {
       feedItemId: card.feedItemId,
       learningRecordId: card.learningRecordId,
+      learningTargetId: card.learningTargetId,
       expectedRevision: card.target.revision,
       outcome,
       usedHint: hintUsedItemsRef.current.has(card.feedItemId),
@@ -654,6 +657,7 @@ function ReviewPage({
       attemptId: card.attempt.id,
       feedItemId: card.feedItemId,
       learningRecordId: card.learningRecordId,
+      learningTargetId: card.learningTargetId,
       expectedRevision: card.target.revision,
       requestKey,
     };
@@ -1080,7 +1084,7 @@ function ReviewPage({
                 <div><dt>进入 Feed 的原因</dt><dd>{activeCard.reason}</dd></div>
                 {activeCard.generatedCard ? <div><dt>当前语境</dt><dd>由 {activeCard.generatedCard.model} 生成并保存；原始学习记录未修改。</dd></div> : null}
               </dl>
-              <button type="button" className="rr-review-open-memory" onClick={() => onOpenMemoryRecord(String(activeCard.learningRecordId))}>在记忆页查看这条记录</button>
+              <button type="button" className="rr-review-open-memory" onClick={() => onOpenMemoryRecord(String(activeCard.learningTargetId))}>在记忆页查看这个学习目标</button>
             </aside>
           ) : null}
 

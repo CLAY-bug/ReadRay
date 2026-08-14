@@ -7,7 +7,11 @@ import type {
   MemoryRepository,
 } from "./memoryRepository";
 import type { QueryType, SourceType } from "./types/explanation";
-import type { LearningRecord } from "./types/learningRecord";
+import type {
+  LearningRecord,
+  LearningTargetDetail,
+  LearningTargetSummary,
+} from "./types/learningRecord";
 import { sourceSentenceForDisplay } from "./sourceSentenceDisplay.js";
 
 export type MemoryRecordPageModel = {
@@ -117,7 +121,9 @@ export function mapLearningRecordToMemoryItem(
 ): MemoryRecordItem {
   const { explanationCard: card } = record;
   const shared = {
-    id: String(record.id),
+    id: String(record.learningTargetId),
+    representativeLearningRecordId: String(record.id),
+    queryCount: 1,
     ...timeParts(record.createdAtUnixMs, now),
     query: cleanDisplayedSource(record.learningTargetText),
     app: sourceApp(record),
@@ -127,6 +133,8 @@ export function mapLearningRecordToMemoryItem(
   } satisfies Pick<
     MemoryRecordItem,
     | "id"
+    | "representativeLearningRecordId"
+    | "queryCount"
     | "group"
     | "query"
     | "app"
@@ -207,6 +215,40 @@ export function mapLearningRecordToMemoryItem(
   }
 }
 
+export function mapLearningTargetToMemoryItem(
+  target: LearningTargetSummary,
+  now = new Date(),
+): MemoryRecordItem {
+  return {
+    ...mapLearningRecordToMemoryItem(target.representativeRecord, now),
+    id: String(target.id),
+    representativeLearningRecordId: String(target.representativeRecord.id),
+    query: cleanDisplayedSource(target.learningTargetText),
+    queryCount: target.queryCount,
+  };
+}
+
+function mapOccurrenceToHistory(record: LearningRecord, now: Date) {
+  const card = record.explanationCard;
+  return {
+    learningRecordId: String(record.id),
+    time: timeParts(record.createdAtUnixMs, now).sourceTime,
+    app: sourceApp(record),
+    query: cleanDisplayedSource(record.queryText),
+    context: contextualSource(record, card.sourceText),
+  };
+}
+
+function mapLearningTargetDetailToMemoryItem(
+  detail: LearningTargetDetail,
+  now = new Date(),
+) {
+  return {
+    ...mapLearningTargetToMemoryItem(detail.target, now),
+    history: detail.occurrences.map((record) => mapOccurrenceToHistory(record, now)),
+  };
+}
+
 export class RepositoryMemoryService implements MemoryService {
   private readonly repository: MemoryRepository;
 
@@ -218,8 +260,8 @@ export class RepositoryMemoryService implements MemoryService {
     const result = await this.repository.list(query);
     const now = new Date();
     return {
-      records: result.records.map((record) =>
-        mapLearningRecordToMemoryItem(record, now),
+      records: result.targets.map((target) =>
+        mapLearningTargetToMemoryItem(target, now),
       ),
       page: result.page,
       pageSize: result.pageSize,
@@ -230,10 +272,10 @@ export class RepositoryMemoryService implements MemoryService {
   async getRecord(id: string) {
     const numericId = Number(id);
     if (!Number.isSafeInteger(numericId)) {
-      throw new Error("学习记录 ID 无效。");
+      throw new Error("学习目标 ID 无效。");
     }
 
-    const record = await this.repository.get(numericId);
-    return record ? mapLearningRecordToMemoryItem(record) : null;
+    const target = await this.repository.get(numericId);
+    return target ? mapLearningTargetDetailToMemoryItem(target) : null;
   }
 }

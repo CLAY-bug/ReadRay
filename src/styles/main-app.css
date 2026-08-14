@@ -1408,6 +1408,14 @@
   align-items: center;
 }
 
+.rr-memory-query-count {
+  margin: 10px 0 0;
+  color: var(--rr-main-meta);
+  font-family: var(--rr-main-font-mono);
+  font-size: calc(10px * var(--rr-ui-font-scale));
+  line-height: 1.4;
+}
+
 .rr-memory-lexical-line {
   display: flex;
   flex-wrap: wrap;

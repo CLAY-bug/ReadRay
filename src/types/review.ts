@@ -10,7 +10,7 @@ export type ReviewOutcome = "remembered" | "forgotten";
 export type ReviewQualityPolarity = "up" | "down";
 
 export type ReviewTarget = {
-  learningRecordId: number;
+  learningTargetId: number;
   revision: number;
   nextReviewAtUnixMs: number;
   attemptCount: number;
@@ -27,6 +27,7 @@ export type ReviewAttempt = {
   id: number;
   feedItemId: number;
   learningRecordId: number;
+  learningTargetId: number;
   requestKey: string;
   expectedRevision: number;
   targetRevision: number;
@@ -56,6 +57,7 @@ export type ReviewQualityFeedback = {
 export type GeneratedReviewCard = {
   id: number;
   learningRecordId: number;
+  learningTargetId: number;
   variantIndex: number;
   englishContext: string;
   englishContextZh: string;
@@ -106,6 +108,7 @@ export type ReviewFeedPage = {
 export type PrepareReviewFeedCardInput = {
   feedItemId: number;
   learningRecordId: number;
+  learningTargetId: number;
   requestKey: string;
   explicitRetry?: boolean;
 };
@@ -113,6 +116,7 @@ export type PrepareReviewFeedCardInput = {
 export type SubmitReviewOutcomeInput = {
   feedItemId: number;
   learningRecordId: number;
+  learningTargetId: number;
   expectedRevision: number;
   outcome: ReviewOutcome;
   usedHint: boolean;
@@ -123,6 +127,7 @@ export type UndoReviewOutcomeInput = {
   attemptId: number;
   feedItemId: number;
   learningRecordId: number;
+  learningTargetId: number;
   expectedRevision: number;
   requestKey: string;
 };

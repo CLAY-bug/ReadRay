@@ -30,6 +30,7 @@ export type ReviewCardModel = {
   ordinal: number;
   cycleIndex: number;
   learningRecordId: number;
+  learningTargetId: number;
   reasonCode: ReviewReasonCode;
   reason: string;
   typeLabel: string;
@@ -436,7 +437,7 @@ function validateTarget(value: unknown): ReviewTarget {
     throw new Error("复习目标 lastUsedHint 无效。");
   }
   return {
-    learningRecordId: assertInteger(target.learningRecordId, "复习目标 learningRecordId", 1),
+    learningTargetId: assertInteger(target.learningTargetId, "复习目标 learningTargetId", 1),
     revision: assertInteger(target.revision, "复习目标 revision"),
     nextReviewAtUnixMs: assertInteger(target.nextReviewAtUnixMs, "复习目标 nextReviewAtUnixMs"),
     attemptCount: assertInteger(target.attemptCount, "复习目标 attemptCount"),
@@ -462,6 +463,7 @@ function validateAttempt(value: unknown): ReviewAttempt {
     id: assertInteger(attempt.id, "复习 attempt id", 1),
     feedItemId: assertInteger(attempt.feedItemId, "复习 attempt feedItemId", 1),
     learningRecordId: assertInteger(attempt.learningRecordId, "复习 attempt learningRecordId", 1),
+    learningTargetId: assertInteger(attempt.learningTargetId, "复习 attempt learningTargetId", 1),
     requestKey: assertString(attempt.requestKey, "复习 attempt requestKey"),
     expectedRevision: assertInteger(attempt.expectedRevision, "复习 attempt expectedRevision"),
     targetRevision: assertInteger(attempt.targetRevision, "复习 attempt targetRevision", 1),
@@ -522,6 +524,7 @@ function validateLearningRecord(value: unknown): LearningRecord {
     throw new Error("复习学习记录与 ExplanationCard 类型不一致。");
   }
   assertInteger(record.id, "复习学习记录 id", 1);
+  assertInteger(record.learningTargetId, "复习学习记录 learningTargetId", 1);
   assertString(record.queryText, "复习学习记录 queryText");
   if (record.queryDirection !== "enToZh" && record.queryDirection !== "zhToEn") {
     throw new Error("复习学习记录 queryDirection 无效。");
@@ -539,6 +542,7 @@ function validateGeneratedCard(value: unknown): GeneratedReviewCard {
   return {
     id: assertInteger(card.id, "AI 复习卡 id", 1),
     learningRecordId: assertInteger(card.learningRecordId, "AI 复习卡 learningRecordId", 1),
+    learningTargetId: assertInteger(card.learningTargetId, "AI 复习卡 learningTargetId", 1),
     variantIndex: assertInteger(card.variantIndex, "AI 复习卡 variantIndex"),
     englishContext: assertString(card.englishContext, "AI 复习卡 englishContext"),
     englishContextZh: assertString(card.englishContextZh, "AI 复习卡 englishContextZh"),
@@ -590,13 +594,14 @@ function validateFeedItem(value: unknown): ReviewFeedItem {
   const learningRecord = validateLearningRecord(item.learningRecord);
   const target = validateTarget(item.target);
   const id = assertInteger(item.id, "复习 Feed 条目 id", 1);
-  if (learningRecord.id !== target.learningRecordId) {
+  if (learningRecord.learningTargetId !== target.learningTargetId) {
     throw new Error("复习 Feed 条目的记录与目标身份不一致。");
   }
   const attempt = item.attempt == null ? undefined : validateAttempt(item.attempt);
   if (
     attempt &&
     (attempt.learningRecordId !== learningRecord.id ||
+      attempt.learningTargetId !== target.learningTargetId ||
       attempt.feedItemId !== id ||
       attempt.undoneAtUnixMs !== undefined)
   ) {
@@ -615,7 +620,8 @@ function validateFeedItem(value: unknown): ReviewFeedItem {
   const cycleIndex = assertInteger(item.cycleIndex, "复习 Feed 条目 cycleIndex");
   if (
     generatedCard &&
-    generatedCard.learningRecordId !== learningRecord.id
+    (generatedCard.learningRecordId !== learningRecord.id ||
+      generatedCard.learningTargetId !== target.learningTargetId)
   ) {
     throw new Error("AI 复习卡与 Feed 条目身份不一致。");
   }
@@ -720,6 +726,7 @@ function mapFeedItem(item: ReviewFeedItem): ReviewCardModel {
     ordinal: item.ordinal,
     cycleIndex: item.cycleIndex,
     learningRecordId: record.id,
+    learningTargetId: item.target.learningTargetId,
     reasonCode: item.reasonCode,
     reason: reasonLabels[item.reasonCode],
     typeLabel: queryTypeLabels[record.queryType],
@@ -786,17 +793,17 @@ export function appendReviewFeedPage(current: ReviewFeedModel, next: ReviewFeedM
   }
   const byId = new Map(current.cards.map((card) => [card.feedItemId, card]));
   for (const card of next.cards) byId.set(card.feedItemId, card);
-  const targetByRecord = new Map<number, ReviewTarget>();
+  const targetById = new Map<number, ReviewTarget>();
   for (const card of byId.values()) {
-    const knownTarget = targetByRecord.get(card.learningRecordId);
+    const knownTarget = targetById.get(card.learningTargetId);
     if (!knownTarget || card.target.revision > knownTarget.revision) {
-      targetByRecord.set(card.learningRecordId, card.target);
+      targetById.set(card.learningTargetId, card.target);
     }
   }
   const cards = [...byId.values()]
     .map((card) => ({
       ...card,
-      target: targetByRecord.get(card.learningRecordId) ?? card.target,
+      target: targetById.get(card.learningTargetId) ?? card.target,
     }))
     .sort((a, b) => a.ordinal - b.ordinal);
   return {
@@ -824,7 +831,11 @@ export function applyReviewFeedItemState(
   const current = feed.cards.find(
     (card) => card.feedItemId === state.card.feedItemId,
   );
-  if (current && current.learningRecordId !== state.card.learningRecordId) {
+  if (
+    current &&
+    (current.learningRecordId !== state.card.learningRecordId ||
+      current.learningTargetId !== state.card.learningTargetId)
+  ) {
     throw new Error("复习 Feed 条目权威状态与当前页面身份不一致。");
   }
   const byId = new Map(feed.cards.map((card) => [card.feedItemId, card]));
@@ -833,7 +844,7 @@ export function applyReviewFeedItemState(
     .map((card) => ({
       ...card,
       target:
-        card.learningRecordId === state.card.learningRecordId
+        card.learningTargetId === state.card.learningTargetId
           ? state.card.target
           : card.target,
     }))
@@ -884,7 +895,10 @@ export function applyPreparedReviewCard(
   let matched = false;
   const cards = feed.cards.map((card) => {
     if (card.feedItemId !== feedItemId) return card;
-    if (card.learningRecordId !== generatedCard.learningRecordId) {
+    if (
+      card.learningRecordId !== generatedCard.learningRecordId ||
+      card.learningTargetId !== generatedCard.learningTargetId
+    ) {
       throw new Error("AI 复习卡与当前 Feed 条目身份不一致。");
     }
     matched = true;
@@ -913,9 +927,10 @@ export function applyReviewOutcomeResult(
   const targetItem = feed.cards.find((card) => card.feedItemId === feedItemId);
   if (
     !targetItem ||
-    targetItem.learningRecordId !== result.target.learningRecordId ||
+    targetItem.learningTargetId !== result.target.learningTargetId ||
     result.attempt.feedItemId !== feedItemId ||
-    result.attempt.learningRecordId !== targetItem.learningRecordId
+    result.attempt.learningRecordId !== targetItem.learningRecordId ||
+    result.attempt.learningTargetId !== targetItem.learningTargetId
   ) {
     throw new Error("复习结果与当前页面条目身份不一致。");
   }
@@ -926,7 +941,7 @@ export function applyReviewOutcomeResult(
   const cards = feed.cards.map((card) => ({
     ...card,
     target:
-      card.learningRecordId === result.target.learningRecordId
+      card.learningTargetId === result.target.learningTargetId
         ? result.target
         : card.target,
     attempt:
@@ -977,7 +992,7 @@ function validateOutcomeResult(value: unknown): ReviewOutcomeWriteResult {
   const target = validateTarget(result.target);
   const attempt = validateAttempt(result.attempt);
   if (
-    target.learningRecordId !== attempt.learningRecordId ||
+    target.learningTargetId !== attempt.learningTargetId ||
     target.revision < (attempt.undoTargetRevision ?? attempt.targetRevision)
   ) {
     throw new Error("复习结果写回的目标与 attempt 身份不一致。");

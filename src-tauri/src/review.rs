@@ -53,7 +53,7 @@ pub enum ReviewQualityPolarity {
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ReviewTarget {
-    pub learning_record_id: i64,
+    pub learning_target_id: i64,
     pub revision: i64,
     pub next_review_at_unix_ms: i64,
     pub attempt_count: i64,
@@ -72,6 +72,7 @@ pub struct ReviewAttempt {
     pub id: i64,
     pub feed_item_id: i64,
     pub learning_record_id: i64,
+    pub learning_target_id: i64,
     pub request_key: String,
     pub expected_revision: i64,
     pub target_revision: i64,
@@ -105,6 +106,7 @@ pub struct ReviewQualityFeedback {
 pub struct GeneratedReviewCard {
     pub id: i64,
     pub learning_record_id: i64,
+    pub learning_target_id: i64,
     pub variant_index: i64,
     pub english_context: String,
     pub english_context_zh: String,
@@ -163,6 +165,7 @@ pub struct ReviewFeedPage {
 pub struct SubmitReviewOutcomeInput {
     pub feed_item_id: i64,
     pub learning_record_id: i64,
+    pub learning_target_id: i64,
     pub expected_revision: i64,
     pub outcome: ReviewOutcome,
     pub used_hint: bool,
@@ -195,6 +198,7 @@ pub struct UndoReviewOutcomeInput {
     pub attempt_id: i64,
     pub feed_item_id: i64,
     pub learning_record_id: i64,
+    pub learning_target_id: i64,
     pub expected_revision: i64,
     pub request_key: String,
 }
@@ -228,6 +232,7 @@ pub struct UndoReviewQualityFeedbackInput {
 pub struct PrepareReviewFeedCardInput {
     pub feed_item_id: i64,
     pub learning_record_id: i64,
+    pub learning_target_id: i64,
     pub request_key: String,
     #[serde(default)]
     pub explicit_retry: bool,
@@ -348,13 +353,17 @@ impl ReviewStore {
         now_unix_ms: i64,
     ) -> Result<ReviewOutcomeWriteResult, String> {
         validate_request_key(&input.request_key)?;
-        if input.feed_item_id <= 0 || input.learning_record_id <= 0 || input.expected_revision < 0 {
+        if input.feed_item_id <= 0
+            || input.learning_record_id <= 0
+            || input.learning_target_id <= 0
+            || input.expected_revision < 0
+        {
             return Err("复习结果请求包含无效的条目、记录或 revision。".to_string());
         }
 
         if let Some(attempt) = load_attempt_by_request_key(&self.connection, &input.request_key)? {
             ensure_attempt_matches_submission(&attempt, input)?;
-            let target = load_target(&self.connection, input.learning_record_id)?
+            let target = load_target(&self.connection, input.learning_target_id)?
                 .ok_or_else(|| "幂等复习结果对应的学习目标不存在。".to_string())?
                 .target;
             let can_continue =
@@ -370,14 +379,16 @@ impl ReviewStore {
             .connection
             .transaction_with_behavior(TransactionBehavior::Immediate)
             .map_err(|error| format!("复习结果事务无法开始：{error}"))?;
-        let item_record_id = feed_item_learning_record_id(&transaction, input.feed_item_id)?;
-        if item_record_id != input.learning_record_id {
-            return Err("复习结果的页面条目与学习记录身份不一致。".to_string());
+        let (item_record_id, item_target_id) =
+            feed_item_identity(&transaction, input.feed_item_id)?;
+        if item_record_id != input.learning_record_id || item_target_id != input.learning_target_id
+        {
+            return Err("复习结果的页面条目与学习记录/目标身份不一致。".to_string());
         }
         if active_attempt_for_feed_item(&transaction, input.feed_item_id)?.is_some() {
             return Err("这个复习 Feed 条目已经完成，请先撤销已有结果。".to_string());
         }
-        let stored_target = load_target(&transaction, input.learning_record_id)?
+        let stored_target = load_target(&transaction, input.learning_target_id)?
             .ok_or_else(|| "复习结果对应的学习目标不存在。".to_string())?;
         if stored_target.target.revision != input.expected_revision {
             return Err(format!(
@@ -396,7 +407,7 @@ impl ReviewStore {
         transaction
             .execute(
                 "INSERT INTO review_feed_attempts (
-                   feed_item_id, learning_record_id, request_key, expected_revision,
+                   feed_item_id, learning_record_id, learning_target_id, request_key, expected_revision,
                    target_revision, outcome, used_hint, next_review_at_unix_ms,
                    previous_next_review_at_unix_ms, previous_attempt_count,
                    previous_remembered_count, previous_forgotten_count,
@@ -405,11 +416,12 @@ impl ReviewStore {
                    created_at_unix_ms
                  ) VALUES (
                    ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12,
-                   ?13, ?14, ?15, ?16, ?17, ?18
+                   ?13, ?14, ?15, ?16, ?17, ?18, ?19
                  )",
                 params![
                     input.feed_item_id,
                     input.learning_record_id,
+                    input.learning_target_id,
                     input.request_key,
                     input.expected_revision,
                     target_revision,
@@ -434,7 +446,7 @@ impl ReviewStore {
         let forgotten_increment = i64::from(input.outcome == ReviewOutcome::Forgotten);
         let affected = transaction
             .execute(
-                "UPDATE review_targets
+                "UPDATE learning_target_review_states
                  SET revision = ?1,
                      next_review_at_unix_ms = ?2,
                      attempt_count = attempt_count + 1,
@@ -446,7 +458,7 @@ impl ReviewStore {
                      last_used_hint = ?8,
                      last_attempt_id = ?9,
                      updated_at_unix_ms = ?6
-                 WHERE learning_record_id = ?10 AND revision = ?11",
+                 WHERE learning_target_id = ?10 AND revision = ?11",
                 params![
                     target_revision,
                     next_review_at_unix_ms,
@@ -457,7 +469,7 @@ impl ReviewStore {
                     outcome_to_storage(input.outcome),
                     bool_to_integer(input.used_hint),
                     attempt_id,
-                    input.learning_record_id,
+                    input.learning_target_id,
                     input.expected_revision,
                 ],
             )
@@ -470,7 +482,7 @@ impl ReviewStore {
             .map_err(|error| format!("复习结果事务提交失败：{error}"))?;
 
         Ok(ReviewOutcomeWriteResult {
-            target: load_target(&self.connection, input.learning_record_id)?
+            target: load_target(&self.connection, input.learning_target_id)?
                 .ok_or_else(|| "复习结果提交后无法读取学习目标。".to_string())?
                 .target,
             attempt: load_attempt(&self.connection, attempt_id)?
@@ -492,6 +504,7 @@ impl ReviewStore {
         if input.attempt_id <= 0
             || input.feed_item_id <= 0
             || input.learning_record_id <= 0
+            || input.learning_target_id <= 0
             || input.expected_revision < 0
         {
             return Err("撤销复习结果请求包含无效身份或 revision。".to_string());
@@ -501,7 +514,7 @@ impl ReviewStore {
             load_attempt_by_undo_request_key(&self.connection, &input.request_key)?
         {
             ensure_attempt_matches_undo(&attempt, input)?;
-            let target = load_target(&self.connection, input.learning_record_id)?
+            let target = load_target(&self.connection, input.learning_target_id)?
                 .ok_or_else(|| "幂等撤销对应的学习目标不存在。".to_string())?
                 .target;
             let can_continue =
@@ -523,7 +536,7 @@ impl ReviewStore {
         if stored_attempt.undone_at_unix_ms.is_some() {
             return Err("这次复习结果已经撤销。".to_string());
         }
-        let stored_target = load_target(&transaction, input.learning_record_id)?
+        let stored_target = load_target(&transaction, input.learning_target_id)?
             .ok_or_else(|| "要撤销的学习目标不存在。".to_string())?;
         if stored_target.target.revision != input.expected_revision {
             return Err(format!(
@@ -554,7 +567,7 @@ impl ReviewStore {
         }
         recompute_target_after_undo(
             &transaction,
-            input.learning_record_id,
+            input.learning_target_id,
             input.expected_revision,
             undo_target_revision,
             now_unix_ms,
@@ -564,7 +577,7 @@ impl ReviewStore {
             .map_err(|error| format!("撤销复习结果事务提交失败：{error}"))?;
 
         Ok(ReviewOutcomeWriteResult {
-            target: load_target(&self.connection, input.learning_record_id)?
+            target: load_target(&self.connection, input.learning_target_id)?
                 .ok_or_else(|| "撤销后无法读取学习目标。".to_string())?
                 .target,
             attempt: load_attempt(&self.connection, input.attempt_id)?
@@ -845,16 +858,21 @@ fn ensure_feed_page(
     page_size: u32,
     now_unix_ms: i64,
 ) -> Result<(), String> {
-    let total_records: i64 = transaction
+    let total_targets: i64 = transaction
         .query_row(
-            "SELECT COUNT(*) FROM learning_records lr
-             JOIN learning_record_targets lrt ON lrt.learning_record_id = lr.id
-             WHERE lr.created_at_unix_ms <= ?1",
+            "SELECT COUNT(*) FROM learning_targets target
+             WHERE target.target_kind = 'learnable'
+               AND EXISTS (
+               SELECT 1 FROM learning_target_occurrences occurrence
+               JOIN learning_records record ON record.id = occurrence.learning_record_id
+               WHERE occurrence.learning_target_id = target.id
+                 AND record.created_at_unix_ms <= ?1
+             )",
             [now_unix_ms],
             |row| row.get(0),
         )
-        .map_err(|error| format!("复习 Feed 学习记录数量读取失败：{error}"))?;
-    if total_records == 0 {
+        .map_err(|error| format!("复习 Feed 学习目标数量读取失败：{error}"))?;
+    if total_targets == 0 {
         return Ok(());
     }
 
@@ -871,8 +889,8 @@ fn ensure_feed_page(
         let available: i64 = transaction
             .query_row(
                 "SELECT COUNT(*) FROM review_feed_items fi
-                 JOIN learning_record_targets lrt ON lrt.learning_record_id = fi.learning_record_id
-                 WHERE fi.day_start_unix_ms = ?1 AND fi.ordinal > ?2",
+                 WHERE fi.day_start_unix_ms = ?1 AND fi.ordinal > ?2
+                   AND fi.target_slot_active = 1",
                 params![day_start_unix_ms, cursor],
                 |row| row.get(0),
             )
@@ -882,33 +900,42 @@ fn ensure_feed_page(
             return Ok(());
         }
 
+        let candidate_limit = remaining.saturating_add(1);
         let mut candidates = {
             let mut statement = transaction
                 .prepare(
-                    "SELECT lr.id, lr.created_at_unix_ms,
+                    "SELECT target.id,
+                            MIN(record.created_at_unix_ms) AS first_seen_at_unix_ms,
                             CASE
-                              WHEN rt.learning_record_id IS NULL THEN 'new_record'
-                              WHEN rt.next_review_at_unix_ms < ?1 THEN 'scheduled_today'
+                              WHEN state.learning_target_id IS NULL OR state.attempt_count = 0 THEN 'new_record'
+                              WHEN state.next_review_at_unix_ms < ?1 THEN 'scheduled_today'
                               ELSE 'continued_practice'
                             END AS reason_code,
                             CASE
-                              WHEN rt.learning_record_id IS NOT NULL AND rt.next_review_at_unix_ms < ?1 THEN 0
-                              WHEN rt.learning_record_id IS NULL THEN 1
+                              WHEN state.attempt_count > 0 AND state.next_review_at_unix_ms < ?1 THEN 0
+                              WHEN state.learning_target_id IS NULL OR state.attempt_count = 0 THEN 1
                               ELSE 2
                             END AS priority
-                     FROM learning_records lr
-                     JOIN learning_record_targets lrt ON lrt.learning_record_id = lr.id
-                     LEFT JOIN review_targets rt ON rt.learning_record_id = lr.id
-                     WHERE lr.created_at_unix_ms <= ?2
+                     FROM learning_targets target
+                     JOIN learning_target_occurrences occurrence
+                       ON occurrence.learning_target_id = target.id
+                     JOIN learning_records record ON record.id = occurrence.learning_record_id
+                     LEFT JOIN learning_target_review_states state
+                       ON state.learning_target_id = target.id
+                     WHERE target.target_kind = 'learnable'
+                       AND record.created_at_unix_ms <= ?2
                        AND NOT EXISTS (
                          SELECT 1 FROM review_feed_items fi
                          WHERE fi.day_start_unix_ms = ?3
                            AND fi.cycle_index = ?4
-                           AND fi.learning_record_id = lr.id
+                           AND fi.learning_target_id = target.id
+                           AND fi.target_slot_active = 1
                        )
+                     GROUP BY target.id
                      ORDER BY priority ASC,
-                              COALESCE(rt.next_review_at_unix_ms, lr.created_at_unix_ms) ASC,
-                              lr.id DESC
+                              COALESCE(state.next_review_at_unix_ms, MIN(record.created_at_unix_ms)) ASC,
+                              MAX(record.created_at_unix_ms) DESC,
+                              target.id DESC
                      LIMIT ?5",
                 )
                 .map_err(|error| format!("复习 Feed 候选语句无法准备：{error}"))?;
@@ -919,7 +946,7 @@ fn ensure_feed_page(
                         now_unix_ms,
                         day_start_unix_ms,
                         cycle_index,
-                        remaining
+                        candidate_limit
                     ],
                     |row| {
                         Ok((
@@ -946,8 +973,8 @@ fn ensure_feed_page(
                               WHERE a.feed_item_id = fi.id AND a.undone_at_unix_ms IS NULL
                             ) THEN 1 ELSE 0 END), 0)
                      FROM review_feed_items fi
-                     JOIN learning_record_targets lrt ON lrt.learning_record_id = fi.learning_record_id
-                     WHERE fi.day_start_unix_ms = ?1 AND fi.cycle_index = ?2",
+                     WHERE fi.day_start_unix_ms = ?1 AND fi.cycle_index = ?2
+                       AND fi.target_slot_active = 1",
                     params![day_start_unix_ms, cycle_index],
                     |row| Ok((row.get(0)?, row.get(1)?)),
                 )
@@ -961,18 +988,20 @@ fn ensure_feed_page(
             continue;
         }
 
-        let last_record_id: Option<i64> = transaction
+        let last_target_id: Option<i64> = transaction
             .query_row(
-                "SELECT learning_record_id FROM review_feed_items
-                 WHERE day_start_unix_ms = ?1 ORDER BY ordinal DESC LIMIT 1",
+                "SELECT learning_target_id FROM review_feed_items
+                 WHERE day_start_unix_ms = ?1 AND target_slot_active = 1
+                 ORDER BY ordinal DESC, id DESC LIMIT 1",
                 [day_start_unix_ms],
                 |row| row.get(0),
             )
             .optional()
             .map_err(|error| format!("复习 Feed 上一条身份读取失败：{error}"))?;
-        if candidates.len() > 1 && last_record_id == Some(candidates[0].0) {
+        if candidates.len() > 1 && last_target_id == Some(candidates[0].0) {
             candidates.rotate_left(1);
         }
+        candidates.truncate(usize::try_from(remaining).unwrap_or(usize::MAX));
 
         let mut next_ordinal: i64 = transaction
             .query_row(
@@ -983,27 +1012,35 @@ fn ensure_feed_page(
             )
             .map_err(|error| format!("复习 Feed 序号读取失败：{error}"))?;
 
-        for (learning_record_id, created_at_unix_ms, reason_code) in candidates {
+        for (learning_target_id, first_seen_at_unix_ms, reason_code) in candidates {
+            let learning_record_id = select_occurrence_for_review_cycle(
+                transaction,
+                learning_target_id,
+                cycle_index,
+                now_unix_ms,
+            )?;
             transaction
                 .execute(
-                    "INSERT OR IGNORE INTO review_targets (
-                       learning_record_id, revision, next_review_at_unix_ms,
+                    "INSERT OR IGNORE INTO learning_target_review_states (
+                       learning_target_id, revision, next_review_at_unix_ms,
                        attempt_count, remembered_count, forgotten_count, success_streak,
                        created_at_unix_ms, updated_at_unix_ms
-                     ) VALUES (?1, 0, ?2, 0, 0, 0, 0, ?3, ?3)",
-                    params![learning_record_id, created_at_unix_ms, now_unix_ms],
+                     ) VALUES (?1, 0, ?2, 0, 0, 0, 0, ?2, ?3)",
+                    params![learning_target_id, first_seen_at_unix_ms, now_unix_ms],
                 )
                 .map_err(|error| format!("复习目标初始化失败：{error}"))?;
             transaction
                 .execute(
                     "INSERT INTO review_feed_items (
                        day_start_unix_ms, day_end_unix_ms, learning_record_id,
-                       cycle_index, ordinal, reason_code, created_at_unix_ms
-                     ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+                       learning_target_id, cycle_index, ordinal, reason_code,
+                       target_slot_active, created_at_unix_ms
+                     ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 1, ?8)",
                     params![
                         day_start_unix_ms,
                         day_end_unix_ms,
                         learning_record_id,
+                        learning_target_id,
                         cycle_index,
                         next_ordinal,
                         reason_code,
@@ -1014,6 +1051,42 @@ fn ensure_feed_page(
             next_ordinal += 1;
         }
     }
+}
+
+fn select_occurrence_for_review_cycle(
+    connection: &Connection,
+    learning_target_id: i64,
+    cycle_index: i64,
+    now_unix_ms: i64,
+) -> Result<i64, String> {
+    let occurrence_count: i64 = connection
+        .query_row(
+            "SELECT COUNT(*)
+             FROM learning_target_occurrences occurrence
+             JOIN learning_records record ON record.id = occurrence.learning_record_id
+             WHERE occurrence.learning_target_id = ?1
+               AND record.created_at_unix_ms <= ?2",
+            params![learning_target_id, now_unix_ms],
+            |row| row.get(0),
+        )
+        .map_err(|error| format!("复习目标 occurrence 数量读取失败：{error}"))?;
+    if occurrence_count <= 0 {
+        return Err("复习目标没有可追溯的真实 occurrence。".to_string());
+    }
+    let offset = cycle_index.rem_euclid(occurrence_count);
+    connection
+        .query_row(
+            "SELECT occurrence.learning_record_id
+             FROM learning_target_occurrences occurrence
+             JOIN learning_records record ON record.id = occurrence.learning_record_id
+             WHERE occurrence.learning_target_id = ?1
+               AND record.created_at_unix_ms <= ?2
+             ORDER BY record.created_at_unix_ms DESC, record.id DESC
+             LIMIT 1 OFFSET ?3",
+            params![learning_target_id, now_unix_ms, offset],
+            |row| row.get(0),
+        )
+        .map_err(|error| format!("复习目标 occurrence 轮换读取失败：{error}"))
 }
 
 fn read_feed_page(
@@ -1028,10 +1101,10 @@ fn read_feed_page(
         let mut statement = connection
             .prepare(
                 "SELECT fi.id, fi.ordinal, fi.cycle_index, fi.reason_code,
-                        fi.learning_record_id, fi.generated_card_id
+                        fi.learning_record_id, fi.learning_target_id, fi.generated_card_id
                  FROM review_feed_items fi
-                 JOIN learning_record_targets lrt ON lrt.learning_record_id = fi.learning_record_id
                  WHERE fi.day_start_unix_ms = ?1 AND fi.ordinal > ?2
+                   AND fi.target_slot_active = 1
                  ORDER BY fi.ordinal ASC, fi.id ASC
                  LIMIT ?3",
             )
@@ -1046,7 +1119,8 @@ fn read_feed_page(
                         row.get::<_, i64>(2)?,
                         row.get::<_, String>(3)?,
                         row.get::<_, i64>(4)?,
-                        row.get::<_, Option<i64>>(5)?,
+                        row.get::<_, i64>(5)?,
+                        row.get::<_, Option<i64>>(6)?,
                     ))
                 },
             )
@@ -1059,11 +1133,24 @@ fn read_feed_page(
     };
 
     let mut items = Vec::with_capacity(feed_rows.len());
-    for (id, ordinal, cycle_index, reason_code, learning_record_id, generated_card_id) in feed_rows
+    for (
+        id,
+        ordinal,
+        cycle_index,
+        reason_code,
+        learning_record_id,
+        learning_target_id,
+        generated_card_id,
+    ) in feed_rows
     {
         let learning_record = get_learning_record_from_connection(connection, learning_record_id)?
             .ok_or_else(|| format!("复习 Feed 条目 {id} 对应的学习记录不存在。"))?;
-        let target = load_target(connection, learning_record_id)?
+        if learning_record.learning_target_id != learning_target_id {
+            return Err(format!(
+                "复习 Feed 条目 {id} 的 occurrence 与目标身份不一致。"
+            ));
+        }
+        let target = load_target(connection, learning_target_id)?
             .ok_or_else(|| format!("复习 Feed 条目 {id} 对应的学习目标不存在。"))?
             .target;
         items.push(ReviewFeedItem {
@@ -1090,8 +1177,8 @@ fn read_feed_page(
                     COALESCE(SUM(CASE WHEN a.outcome = 'forgotten' THEN 1 ELSE 0 END), 0)
              FROM review_feed_attempts a
              JOIN review_feed_items fi ON fi.id = a.feed_item_id
-             JOIN learning_record_targets lrt ON lrt.learning_record_id = fi.learning_record_id
-             WHERE fi.day_start_unix_ms = ?1 AND a.undone_at_unix_ms IS NULL",
+             WHERE fi.day_start_unix_ms = ?1 AND a.undone_at_unix_ms IS NULL
+               AND fi.target_slot_active = 1",
             [day_start_unix_ms],
             |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
         )
@@ -1131,13 +1218,13 @@ fn read_feed_item_state(
         cycle_index,
         reason_code,
         learning_record_id,
+        learning_target_id,
         generated_card_id,
-    ): (i64, i64, i64, i64, String, i64, Option<i64>) = connection
+    ): (i64, i64, i64, i64, String, i64, i64, Option<i64>) = connection
         .query_row(
             "SELECT fi.day_start_unix_ms, fi.day_end_unix_ms, fi.ordinal, fi.cycle_index, fi.reason_code,
-                    fi.learning_record_id, fi.generated_card_id
+                    fi.learning_record_id, fi.learning_target_id, fi.generated_card_id
              FROM review_feed_items fi
-             JOIN learning_record_targets lrt ON lrt.learning_record_id = fi.learning_record_id
              WHERE fi.id = ?1",
             [feed_item_id],
             |row| {
@@ -1149,6 +1236,7 @@ fn read_feed_item_state(
                     row.get(4)?,
                     row.get(5)?,
                     row.get(6)?,
+                    row.get(7)?,
                 ))
             },
         )
@@ -1157,7 +1245,10 @@ fn read_feed_item_state(
         .ok_or_else(|| "复习 Feed 条目不存在。".to_string())?;
     let learning_record = get_learning_record_from_connection(connection, learning_record_id)?
         .ok_or_else(|| "复习 Feed 条目的学习记录不存在。".to_string())?;
-    let target = load_target(connection, learning_record_id)?
+    if learning_record.learning_target_id != learning_target_id {
+        return Err("复习 Feed 条目的 occurrence 与目标身份不一致。".to_string());
+    }
+    let target = load_target(connection, learning_target_id)?
         .ok_or_else(|| "复习 Feed 条目的学习目标不存在。".to_string())?
         .target;
     let item = ReviewFeedItem {
@@ -1182,8 +1273,8 @@ fn read_feed_item_state(
                     COALESCE(SUM(CASE WHEN a.outcome = 'forgotten' THEN 1 ELSE 0 END), 0)
              FROM review_feed_attempts a
              JOIN review_feed_items fi ON fi.id = a.feed_item_id
-             JOIN learning_record_targets lrt ON lrt.learning_record_id = fi.learning_record_id
-             WHERE fi.day_start_unix_ms = ?1 AND a.undone_at_unix_ms IS NULL",
+             WHERE fi.day_start_unix_ms = ?1 AND a.undone_at_unix_ms IS NULL
+               AND fi.target_slot_active = 1",
             [day_start_unix_ms],
             |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
         )
@@ -1212,8 +1303,8 @@ fn feed_can_continue(
         .query_row(
             "SELECT EXISTS(
                SELECT 1 FROM review_feed_items fi
-               JOIN learning_record_targets lrt ON lrt.learning_record_id = fi.learning_record_id
                WHERE fi.day_start_unix_ms = ?1 AND fi.ordinal > ?2
+                 AND fi.target_slot_active = 1
              )",
             params![day_start_unix_ms, after_ordinal],
             |row| row.get(0),
@@ -1234,9 +1325,11 @@ fn feed_can_continue(
         return connection
             .query_row(
                 "SELECT EXISTS(
-                   SELECT 1 FROM learning_records lr
-                   JOIN learning_record_targets lrt ON lrt.learning_record_id = lr.id
-                   WHERE lr.created_at_unix_ms <= ?1
+                   SELECT 1 FROM learning_targets target
+                   JOIN learning_target_occurrences occurrence ON occurrence.learning_target_id = target.id
+                   JOIN learning_records record ON record.id = occurrence.learning_record_id
+                   WHERE target.target_kind = 'learnable'
+                     AND record.created_at_unix_ms <= ?1
                  )",
                 [now_unix_ms],
                 |row| row.get(0),
@@ -1247,14 +1340,20 @@ fn feed_can_continue(
     let has_unqueued_record: bool = connection
         .query_row(
             "SELECT EXISTS(
-               SELECT 1 FROM learning_records lr
-               JOIN learning_record_targets lrt ON lrt.learning_record_id = lr.id
-               WHERE lr.created_at_unix_ms <= ?1
+               SELECT 1 FROM learning_targets target
+               WHERE target.target_kind = 'learnable'
+                 AND EXISTS (
+                 SELECT 1 FROM learning_target_occurrences occurrence
+                 JOIN learning_records record ON record.id = occurrence.learning_record_id
+                 WHERE occurrence.learning_target_id = target.id
+                   AND record.created_at_unix_ms <= ?1
+               )
                  AND NOT EXISTS (
                    SELECT 1 FROM review_feed_items fi
                    WHERE fi.day_start_unix_ms = ?2
                      AND fi.cycle_index = ?3
-                     AND fi.learning_record_id = lr.id
+                     AND fi.learning_target_id = target.id
+                     AND fi.target_slot_active = 1
                  )
              )",
             params![now_unix_ms, day_start_unix_ms, cycle_index],
@@ -1273,8 +1372,8 @@ fn feed_can_continue(
                       WHERE a.feed_item_id = fi.id AND a.undone_at_unix_ms IS NULL
                     ) THEN 1 ELSE 0 END), 0)
              FROM review_feed_items fi
-             JOIN learning_record_targets lrt ON lrt.learning_record_id = fi.learning_record_id
-             WHERE fi.day_start_unix_ms = ?1 AND fi.cycle_index = ?2",
+             WHERE fi.day_start_unix_ms = ?1 AND fi.cycle_index = ?2
+               AND fi.target_slot_active = 1",
             params![day_start_unix_ms, cycle_index],
             |row| Ok((row.get(0)?, row.get(1)?)),
         )
@@ -1322,25 +1421,37 @@ fn prepare_generated_card_preflight(
         .transaction_with_behavior(TransactionBehavior::Immediate)
         .map_err(|error| format!("AI 复习卡池事务无法开始：{error}"))?;
     maintain_generated_card_pool(&transaction, now_unix_ms)?;
-    let (learning_record_id, day_start_unix_ms, generated_card_id): (i64, i64, Option<i64>) =
-        transaction
-            .query_row(
-                "SELECT learning_record_id, day_start_unix_ms, generated_card_id
+    let (learning_record_id, learning_target_id, day_start_unix_ms, generated_card_id): (
+        i64,
+        i64,
+        i64,
+        Option<i64>,
+    ) = transaction
+        .query_row(
+            "SELECT learning_record_id, learning_target_id, day_start_unix_ms, generated_card_id
                  FROM review_feed_items WHERE id = ?1",
-                [input.feed_item_id],
-                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
-            )
-            .optional()
-            .map_err(|error| format!("AI 复习卡 Feed 条目读取失败：{error}"))?
-            .ok_or_else(|| "AI 复习卡对应的 Feed 条目不存在。".to_string())?;
-    if learning_record_id != input.learning_record_id {
-        return Err("AI 复习卡的 Feed 条目与学习记录身份不一致。".to_string());
+            [input.feed_item_id],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+        )
+        .optional()
+        .map_err(|error| format!("AI 复习卡 Feed 条目读取失败：{error}"))?
+        .ok_or_else(|| "AI 复习卡对应的 Feed 条目不存在。".to_string())?;
+    if learning_record_id != input.learning_record_id
+        || learning_target_id != input.learning_target_id
+    {
+        return Err("AI 复习卡的 Feed 条目与学习记录/目标身份不一致。".to_string());
     }
 
     let mut ready_card_id = None;
     if let Some(card_id) = generated_card_id {
         if let Some(card) = load_generated_card(&transaction, card_id)? {
             if card.expires_at_unix_ms > now_unix_ms {
+                ensure_generated_card_matches(
+                    &card,
+                    learning_record_id,
+                    learning_target_id,
+                    now_unix_ms,
+                )?;
                 touch_generated_card(&transaction, card.id, now_unix_ms)?;
                 ready_card_id = Some(card.id);
             }
@@ -1356,7 +1467,12 @@ fn prepare_generated_card_preflight(
     }
     if ready_card_id.is_none() {
         if let Some(card) = load_generated_card_by_request_key(&transaction, &input.request_key)? {
-            ensure_generated_card_matches(&card, learning_record_id, now_unix_ms)?;
+            ensure_generated_card_matches(
+                &card,
+                learning_record_id,
+                learning_target_id,
+                now_unix_ms,
+            )?;
             attach_generated_card(&transaction, input.feed_item_id, card.id)?;
             touch_generated_card(&transaction, card.id, now_unix_ms)?;
             ready_card_id = Some(card.id);
@@ -1366,6 +1482,7 @@ fn prepare_generated_card_preflight(
         if let Some(card) = load_reusable_generated_card(
             &transaction,
             learning_record_id,
+            learning_target_id,
             day_start_unix_ms,
             input.feed_item_id,
             now_unix_ms,
@@ -1376,9 +1493,12 @@ fn prepare_generated_card_preflight(
         }
     }
     if ready_card_id.is_none() {
-        if let Some(card) =
-            load_generated_card_at_capacity(&transaction, learning_record_id, now_unix_ms)?
-        {
+        if let Some(card) = load_generated_card_at_capacity(
+            &transaction,
+            learning_record_id,
+            learning_target_id,
+            now_unix_ms,
+        )? {
             attach_generated_card(&transaction, input.feed_item_id, card.id)?;
             touch_generated_card(&transaction, card.id, now_unix_ms)?;
             ready_card_id = Some(card.id);
@@ -1426,7 +1546,7 @@ async fn prepare_generated_review_card(
     input: &PrepareReviewFeedCardInput,
 ) -> Result<GeneratedReviewCard, String> {
     validate_request_key(&input.request_key)?;
-    if input.feed_item_id <= 0 || input.learning_record_id <= 0 {
+    if input.feed_item_id <= 0 || input.learning_record_id <= 0 || input.learning_target_id <= 0 {
         return Err("AI 复习卡请求包含无效的 Feed 条目或学习记录。".to_string());
     }
 
@@ -1486,44 +1606,66 @@ async fn prepare_generated_review_card(
             .transaction_with_behavior(TransactionBehavior::Immediate)
             .map_err(|error| format!("AI 复习卡保存事务无法开始：{error}"))?;
         maintain_generated_card_pool(&transaction, saved_at_unix_ms)?;
-        let (current_record_id, current_day_start, current_card_id): (i64, i64, Option<i64>) =
+        let (current_record_id, current_target_id, current_day_start, current_card_id): (
+            i64,
+            i64,
+            i64,
+            Option<i64>,
+        ) =
             transaction
                 .query_row(
-                    "SELECT learning_record_id, day_start_unix_ms, generated_card_id
+                    "SELECT learning_record_id, learning_target_id, day_start_unix_ms, generated_card_id
                  FROM review_feed_items WHERE id = ?1",
                     [input.feed_item_id],
-                    |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+                    |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
                 )
                 .optional()
                 .map_err(|error| format!("AI 复习卡保存前 Feed 条目读取失败：{error}"))?
                 .ok_or_else(|| "AI 复习卡保存前 Feed 条目已不存在。".to_string())?;
-        if current_record_id != learning_record_id || current_day_start != day_start_unix_ms {
+        if current_record_id != learning_record_id
+            || current_target_id != input.learning_target_id
+            || current_day_start != day_start_unix_ms
+        {
             return Err("AI 复习卡保存前 Feed 条目身份已变化。".to_string());
         }
         let card = if let Some(card_id) = current_card_id {
             let card = load_generated_card(&transaction, card_id)?
                 .ok_or_else(|| "Feed 条目引用的 AI 复习卡不存在。".to_string())?;
-            ensure_generated_card_matches(&card, learning_record_id, saved_at_unix_ms)?;
+            ensure_generated_card_matches(
+                &card,
+                learning_record_id,
+                input.learning_target_id,
+                saved_at_unix_ms,
+            )?;
             touch_generated_card(&transaction, card.id, saved_at_unix_ms)?;
             card
         } else if let Some(card) =
             load_generated_card_by_request_key(&transaction, &input.request_key)?
         {
-            ensure_generated_card_matches(&card, learning_record_id, saved_at_unix_ms)?;
+            ensure_generated_card_matches(
+                &card,
+                learning_record_id,
+                input.learning_target_id,
+                saved_at_unix_ms,
+            )?;
             touch_generated_card(&transaction, card.id, saved_at_unix_ms)?;
             card
         } else if let Some(card) = load_reusable_generated_card(
             &transaction,
             learning_record_id,
+            input.learning_target_id,
             day_start_unix_ms,
             input.feed_item_id,
             saved_at_unix_ms,
         )? {
             touch_generated_card(&transaction, card.id, saved_at_unix_ms)?;
             card
-        } else if let Some(card) =
-            load_generated_card_at_capacity(&transaction, learning_record_id, saved_at_unix_ms)?
-        {
+        } else if let Some(card) = load_generated_card_at_capacity(
+            &transaction,
+            learning_record_id,
+            input.learning_target_id,
+            saved_at_unix_ms,
+        )? {
             touch_generated_card(&transaction, card.id, saved_at_unix_ms)?;
             card
         } else {
@@ -1534,12 +1676,13 @@ async fn prepare_generated_review_card(
             transaction
                 .execute(
                     "INSERT INTO review_generated_cards (
-                       learning_record_id, variant_index, generation_request_key,
+                       learning_record_id, learning_target_id, variant_index, generation_request_key,
                        content_json, model, created_at_unix_ms, expires_at_unix_ms,
                        last_used_at_unix_ms, use_count
-                     ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?6, 1)",
+                     ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?7, 1)",
                     params![
                         learning_record_id,
+                        input.learning_target_id,
                         persisted_variant_index,
                         input.request_key,
                         content_json,
@@ -1719,7 +1862,7 @@ fn load_generated_card(
 ) -> Result<Option<GeneratedReviewCard>, String> {
     connection
         .query_row(
-            "SELECT id, learning_record_id, variant_index, content_json,
+            "SELECT id, learning_record_id, learning_target_id, variant_index, content_json,
                     model, created_at_unix_ms, expires_at_unix_ms,
                     last_used_at_unix_ms, use_count
              FROM review_generated_cards WHERE id = ?1",
@@ -1733,28 +1876,31 @@ fn load_generated_card(
 fn load_reusable_generated_card(
     connection: &Connection,
     learning_record_id: i64,
+    learning_target_id: i64,
     day_start_unix_ms: i64,
     feed_item_id: i64,
     now_unix_ms: i64,
 ) -> Result<Option<GeneratedReviewCard>, String> {
     connection
         .query_row(
-            "SELECT id, learning_record_id, variant_index, content_json,
+            "SELECT id, learning_record_id, learning_target_id, variant_index, content_json,
                     model, created_at_unix_ms, expires_at_unix_ms,
                     last_used_at_unix_ms, use_count
              FROM review_generated_cards card
              WHERE card.learning_record_id = ?1
-               AND card.expires_at_unix_ms > ?2
+               AND card.learning_target_id = ?2
+               AND card.expires_at_unix_ms > ?3
                AND NOT EXISTS (
                  SELECT 1 FROM review_feed_items used
-                 WHERE used.day_start_unix_ms = ?3
+                 WHERE used.day_start_unix_ms = ?4
                    AND used.generated_card_id = card.id
-                   AND used.id <> ?4
+                   AND used.id <> ?5
                )
              ORDER BY card.last_used_at_unix_ms ASC, card.id ASC
              LIMIT 1",
             params![
                 learning_record_id,
+                learning_target_id,
                 now_unix_ms,
                 day_start_unix_ms,
                 feed_item_id
@@ -1768,29 +1914,32 @@ fn load_reusable_generated_card(
 fn load_generated_card_at_capacity(
     connection: &Connection,
     learning_record_id: i64,
+    learning_target_id: i64,
     now_unix_ms: i64,
 ) -> Result<Option<GeneratedReviewCard>, String> {
     let valid_count: i64 = connection
         .query_row(
             "SELECT COUNT(*) FROM review_generated_cards
-             WHERE learning_record_id = ?1 AND expires_at_unix_ms > ?2",
-            params![learning_record_id, now_unix_ms],
+             WHERE learning_record_id = ?1 AND learning_target_id = ?2
+               AND expires_at_unix_ms > ?3",
+            params![learning_record_id, learning_target_id, now_unix_ms],
             |row| row.get(0),
         )
-        .map_err(|error| format!("AI 复习卡池单目标容量读取失败：{error}"))?;
+        .map_err(|error| format!("AI 复习卡池单记录容量读取失败：{error}"))?;
     if valid_count < GENERATED_CARD_PER_RECORD_CAPACITY {
         return Ok(None);
     }
     connection
         .query_row(
-            "SELECT id, learning_record_id, variant_index, content_json,
+            "SELECT id, learning_record_id, learning_target_id, variant_index, content_json,
                     model, created_at_unix_ms, expires_at_unix_ms,
                     last_used_at_unix_ms, use_count
              FROM review_generated_cards
-             WHERE learning_record_id = ?1 AND expires_at_unix_ms > ?2
+             WHERE learning_target_id = ?1 AND learning_record_id = ?2
+               AND expires_at_unix_ms > ?3
              ORDER BY last_used_at_unix_ms ASC, id ASC
              LIMIT 1",
-            params![learning_record_id, now_unix_ms],
+            params![learning_target_id, learning_record_id, now_unix_ms],
             read_generated_card,
         )
         .optional()
@@ -1884,16 +2033,18 @@ fn persist_generation_failure(
     let transaction = connection
         .transaction_with_behavior(TransactionBehavior::Immediate)
         .map_err(|failure| format!("AI 复习卡失败状态事务无法开始：{failure}"))?;
-    let (feed_learning_record_id,): (i64,) = transaction
+    let (feed_learning_record_id, feed_learning_target_id): (i64, i64) = transaction
         .query_row(
-            "SELECT learning_record_id FROM review_feed_items WHERE id = ?1",
+            "SELECT learning_record_id, learning_target_id FROM review_feed_items WHERE id = ?1",
             [input.feed_item_id],
-            |row| Ok((row.get(0)?,)),
+            |row| Ok((row.get(0)?, row.get(1)?)),
         )
         .optional()
         .map_err(|failure| format!("AI 复习卡失败状态 Feed 身份读取失败：{failure}"))?
         .ok_or_else(|| "AI 复习卡失败状态对应的 Feed 条目不存在。".to_string())?;
-    if feed_learning_record_id != input.learning_record_id {
+    if feed_learning_record_id != input.learning_record_id
+        || feed_learning_target_id != input.learning_target_id
+    {
         return Err("AI 复习卡失败状态与 Feed 条目身份不一致。".to_string());
     }
     let existing = load_generation_failure_by_request_key(&transaction, &input.request_key)?;
@@ -1958,7 +2109,7 @@ fn load_generated_card_by_request_key(
 ) -> Result<Option<GeneratedReviewCard>, String> {
     connection
         .query_row(
-            "SELECT id, learning_record_id, variant_index, content_json,
+            "SELECT id, learning_record_id, learning_target_id, variant_index, content_json,
                     model, created_at_unix_ms, expires_at_unix_ms,
                     last_used_at_unix_ms, use_count
              FROM review_generated_cards WHERE generation_request_key = ?1",
@@ -1970,21 +2121,22 @@ fn load_generated_card_by_request_key(
 }
 
 fn read_generated_card(row: &rusqlite::Row<'_>) -> rusqlite::Result<GeneratedReviewCard> {
-    let content_json: String = row.get(3)?;
+    let content_json: String = row.get(4)?;
     let payload: GeneratedReviewCardPayload =
         serde_json::from_str(&content_json).map_err(to_sql_conversion_error)?;
     Ok(GeneratedReviewCard {
         id: row.get(0)?,
         learning_record_id: row.get(1)?,
-        variant_index: row.get(2)?,
+        learning_target_id: row.get(2)?,
+        variant_index: row.get(3)?,
         english_context: payload.english_context,
         english_context_zh: payload.english_context_zh,
         hint: payload.hint,
-        model: row.get(4)?,
-        created_at_unix_ms: row.get(5)?,
-        expires_at_unix_ms: row.get(6)?,
-        last_used_at_unix_ms: row.get(7)?,
-        use_count: row.get(8)?,
+        model: row.get(5)?,
+        created_at_unix_ms: row.get(6)?,
+        expires_at_unix_ms: row.get(7)?,
+        last_used_at_unix_ms: row.get(8)?,
+        use_count: row.get(9)?,
     })
 }
 
@@ -2006,9 +2158,12 @@ fn attach_generated_card(
 fn ensure_generated_card_matches(
     card: &GeneratedReviewCard,
     learning_record_id: i64,
+    learning_target_id: i64,
     now_unix_ms: i64,
 ) -> Result<(), String> {
-    if card.learning_record_id != learning_record_id {
+    if card.learning_record_id != learning_record_id
+        || card.learning_target_id != learning_target_id
+    {
         return Err("AI 复习卡 requestKey 已被不同 Feed 条目使用。".to_string());
     }
     if card.expires_at_unix_ms <= now_unix_ms {
@@ -2058,12 +2213,15 @@ fn maintain_generated_card_pool(connection: &Connection, now_unix_ms: i64) -> Re
         )
         .map_err(|error| format!("过期 AI 复习卡淘汰失败：{error}"))?;
 
-    let learning_record_ids = {
+    let learning_record_identities = {
         let mut statement = connection
-            .prepare("SELECT DISTINCT learning_record_id FROM review_generated_cards")
+            .prepare(
+                "SELECT DISTINCT learning_record_id, learning_target_id
+                 FROM review_generated_cards",
+            )
             .map_err(|error| format!("AI 复习卡池记录语句无法准备：{error}"))?;
         let rows = statement
-            .query_map([], |row| row.get::<_, i64>(0))
+            .query_map([], |row| Ok((row.get::<_, i64>(0)?, row.get::<_, i64>(1)?)))
             .map_err(|error| format!("AI 复习卡池记录读取失败：{error}"))?;
         let mut values = Vec::new();
         for row in rows {
@@ -2071,26 +2229,28 @@ fn maintain_generated_card_pool(connection: &Connection, now_unix_ms: i64) -> Re
         }
         values
     };
-    for learning_record_id in learning_record_ids {
+    for (learning_record_id, learning_target_id) in learning_record_identities {
         let protected_count: i64 = connection
             .query_row(
                 "SELECT COUNT(*)
                  FROM review_generated_cards card
                  WHERE card.learning_record_id = ?1
+                   AND card.learning_target_id = ?2
                    AND EXISTS (
                      SELECT 1 FROM review_feed_items item
                      WHERE item.generated_card_id = card.id
                    )",
-                [learning_record_id],
+                params![learning_record_id, learning_target_id],
                 |row| row.get(0),
             )
-            .map_err(|error| format!("单目标 AI 复习卡池受保护数量读取失败：{error}"))?;
+            .map_err(|error| format!("单记录 AI 复习卡池受保护数量读取失败：{error}"))?;
         let reusable_capacity = GENERATED_CARD_PER_RECORD_CAPACITY
             .saturating_sub(protected_count.min(GENERATED_CARD_PER_RECORD_CAPACITY));
         connection
             .execute(
                 "DELETE FROM review_generated_cards
                  WHERE learning_record_id = ?1
+                   AND learning_target_id = ?2
                    AND NOT EXISTS (
                      SELECT 1 FROM review_feed_items protected
                      WHERE protected.generated_card_id = review_generated_cards.id
@@ -2098,16 +2258,17 @@ fn maintain_generated_card_pool(connection: &Connection, now_unix_ms: i64) -> Re
                    AND id NOT IN (
                      SELECT candidate.id FROM review_generated_cards candidate
                      WHERE candidate.learning_record_id = ?1
+                       AND candidate.learning_target_id = ?2
                        AND NOT EXISTS (
                          SELECT 1 FROM review_feed_items protected
                          WHERE protected.generated_card_id = candidate.id
                        )
                      ORDER BY last_used_at_unix_ms DESC, id DESC
-                     LIMIT ?2
+                     LIMIT ?3
                    )",
-                params![learning_record_id, reusable_capacity],
+                params![learning_record_id, learning_target_id, reusable_capacity],
             )
-            .map_err(|error| format!("单目标 AI 复习卡池容量淘汰失败：{error}"))?;
+            .map_err(|error| format!("单记录 AI 复习卡池容量淘汰失败：{error}"))?;
     }
 
     let protected_count: i64 = connection
@@ -2157,21 +2318,21 @@ fn maintain_generated_card_pool(connection: &Connection, now_unix_ms: i64) -> Re
 
 fn load_target(
     connection: &Connection,
-    learning_record_id: i64,
+    learning_target_id: i64,
 ) -> Result<Option<StoredTarget>, String> {
     connection
         .query_row(
-            "SELECT learning_record_id, revision, next_review_at_unix_ms,
+            "SELECT learning_target_id, revision, next_review_at_unix_ms,
                     attempt_count, remembered_count, forgotten_count, success_streak,
                     last_reviewed_at_unix_ms, last_outcome, last_used_hint, last_attempt_id
-             FROM review_targets WHERE learning_record_id = ?1",
-            [learning_record_id],
+             FROM learning_target_review_states WHERE learning_target_id = ?1",
+            [learning_target_id],
             |row| {
                 let last_outcome: Option<String> = row.get(8)?;
                 let last_used_hint: Option<i64> = row.get(9)?;
                 Ok(StoredTarget {
                     target: ReviewTarget {
-                        learning_record_id: row.get(0)?,
+                        learning_target_id: row.get(0)?,
                         revision: row.get(1)?,
                         next_review_at_unix_ms: row.get(2)?,
                         attempt_count: row.get(3)?,
@@ -2195,15 +2356,15 @@ fn load_target(
         .map_err(|error| format!("复习目标读取失败：{error}"))
 }
 
-fn feed_item_learning_record_id(
+fn feed_item_identity(
     transaction: &Transaction<'_>,
     feed_item_id: i64,
-) -> Result<i64, String> {
+) -> Result<(i64, i64), String> {
     transaction
         .query_row(
-            "SELECT learning_record_id FROM review_feed_items WHERE id = ?1",
+            "SELECT learning_record_id, learning_target_id FROM review_feed_items WHERE id = ?1",
             [feed_item_id],
-            |row| row.get(0),
+            |row| Ok((row.get(0)?, row.get(1)?)),
         )
         .optional()
         .map_err(|error| format!("复习 Feed 条目身份读取失败：{error}"))?
@@ -2266,28 +2427,29 @@ fn load_attempt_by_undo_request_key(
 }
 
 fn select_attempt_sql() -> &'static str {
-    "SELECT id, feed_item_id, learning_record_id, request_key, expected_revision,
+    "SELECT id, feed_item_id, learning_record_id, learning_target_id, request_key, expected_revision,
             target_revision, outcome, used_hint, next_review_at_unix_ms,
             created_at_unix_ms, undone_at_unix_ms, undo_request_key, undo_target_revision
      FROM review_feed_attempts"
 }
 
 fn read_attempt(row: &rusqlite::Row<'_>) -> rusqlite::Result<ReviewAttempt> {
-    let outcome: String = row.get(6)?;
+    let outcome: String = row.get(7)?;
     Ok(ReviewAttempt {
         id: row.get(0)?,
         feed_item_id: row.get(1)?,
         learning_record_id: row.get(2)?,
-        request_key: row.get(3)?,
-        expected_revision: row.get(4)?,
-        target_revision: row.get(5)?,
+        learning_target_id: row.get(3)?,
+        request_key: row.get(4)?,
+        expected_revision: row.get(5)?,
+        target_revision: row.get(6)?,
         outcome: outcome_from_storage(&outcome).map_err(to_sql_conversion_error)?,
-        used_hint: row.get::<_, i64>(7)? != 0,
-        next_review_at_unix_ms: row.get(8)?,
-        created_at_unix_ms: row.get(9)?,
-        undone_at_unix_ms: row.get(10)?,
-        undo_request_key: row.get(11)?,
-        undo_target_revision: row.get(12)?,
+        used_hint: row.get::<_, i64>(8)? != 0,
+        next_review_at_unix_ms: row.get(9)?,
+        created_at_unix_ms: row.get(10)?,
+        undone_at_unix_ms: row.get(11)?,
+        undo_request_key: row.get(12)?,
+        undo_target_revision: row.get(13)?,
     })
 }
 
@@ -2297,6 +2459,7 @@ fn ensure_attempt_matches_submission(
 ) -> Result<(), String> {
     if attempt.feed_item_id != input.feed_item_id
         || attempt.learning_record_id != input.learning_record_id
+        || attempt.learning_target_id != input.learning_target_id
         || attempt.expected_revision != input.expected_revision
         || attempt.outcome != input.outcome
         || attempt.used_hint != input.used_hint
@@ -2313,6 +2476,7 @@ fn ensure_attempt_matches_undo(
     if attempt.id != input.attempt_id
         || attempt.feed_item_id != input.feed_item_id
         || attempt.learning_record_id != input.learning_record_id
+        || attempt.learning_target_id != input.learning_target_id
         || attempt.undo_target_revision.is_some()
             && attempt.undo_target_revision != Some(input.expected_revision + 1)
     {
@@ -2349,15 +2513,15 @@ fn schedule_next_review(
 
 fn recompute_target_after_undo(
     transaction: &Transaction<'_>,
-    learning_record_id: i64,
+    learning_target_id: i64,
     expected_revision: i64,
     target_revision: i64,
     now_unix_ms: i64,
 ) -> Result<(), String> {
     let created_at_unix_ms: i64 = transaction
         .query_row(
-            "SELECT created_at_unix_ms FROM learning_records WHERE id = ?1",
-            [learning_record_id],
+            "SELECT created_at_unix_ms FROM learning_target_review_states WHERE learning_target_id = ?1",
+            [learning_target_id],
             |row| row.get(0),
         )
         .optional()
@@ -2368,12 +2532,12 @@ fn recompute_target_after_undo(
         .prepare(
             "SELECT id, outcome, used_hint, created_at_unix_ms
              FROM review_feed_attempts
-             WHERE learning_record_id = ?1 AND undone_at_unix_ms IS NULL
+             WHERE learning_target_id = ?1 AND undone_at_unix_ms IS NULL
              ORDER BY created_at_unix_ms ASC, id ASC",
         )
         .map_err(|error| format!("撤销后 attempt 重算语句无法准备：{error}"))?;
     let rows = statement
-        .query_map([learning_record_id], |row| {
+        .query_map([learning_target_id], |row| {
             Ok((
                 row.get::<_, i64>(0)?,
                 row.get::<_, String>(1)?,
@@ -2413,7 +2577,7 @@ fn recompute_target_after_undo(
 
     let affected = transaction
         .execute(
-            "UPDATE review_targets
+            "UPDATE learning_target_review_states
              SET revision = ?1,
                  next_review_at_unix_ms = ?2,
                  attempt_count = ?3,
@@ -2425,7 +2589,7 @@ fn recompute_target_after_undo(
                  last_used_hint = ?9,
                  last_attempt_id = ?10,
                  updated_at_unix_ms = ?11
-             WHERE learning_record_id = ?12 AND revision = ?13",
+             WHERE learning_target_id = ?12 AND revision = ?13",
             params![
                 target_revision,
                 next_review_at_unix_ms,
@@ -2438,7 +2602,7 @@ fn recompute_target_after_undo(
                 last_used_hint.map(bool_to_integer),
                 last_attempt_id,
                 now_unix_ms,
-                learning_record_id,
+                learning_target_id,
                 expected_revision,
             ],
         )
@@ -2779,6 +2943,31 @@ mod tests {
                 params![id, query, query.to_lowercase(), created_at],
             )
             .unwrap();
+        connection
+            .execute(
+                "INSERT INTO learning_targets (
+                   id, stable_key, canonicalization_version, query_type, display_target_text,
+                   normalized_target_text, representative_learning_record_id,
+                   created_at_unix_ms, updated_at_unix_ms
+                 ) VALUES (?1, ?2, 1, 'word', ?3, ?4, ?1, ?5, ?5)",
+                params![
+                    id,
+                    format!("v1:word:{}", query.to_lowercase()),
+                    query,
+                    query.to_lowercase(),
+                    created_at
+                ],
+            )
+            .unwrap();
+        connection
+            .execute(
+                "INSERT INTO learning_target_occurrences (
+                   learning_record_id, learning_target_id, canonicalization_version,
+                   binding_revision, bound_at_unix_ms, updated_at_unix_ms
+                 ) VALUES (?1, ?1, 1, 1, ?2, ?2)",
+                params![id, created_at],
+            )
+            .unwrap();
     }
 
     fn setup(record_count: i64) -> (PathBuf, PathBuf, ReviewStore) {
@@ -2826,6 +3015,7 @@ mod tests {
         SubmitReviewOutcomeInput {
             feed_item_id: item.id,
             learning_record_id: item.learning_record.id,
+            learning_target_id: item.target.learning_target_id,
             expected_revision: item.target.revision,
             outcome: ReviewOutcome::Remembered,
             used_hint: false,
@@ -2842,6 +3032,7 @@ mod tests {
         expires_at_unix_ms: i64,
         last_used_at_unix_ms: i64,
     ) -> i64 {
+        let learning_target_id = target_id_for_record(connection, learning_record_id);
         let payload = GeneratedReviewCardPayload {
             english_context: format!(
                 "I used same {learning_record_id} while comparing two approaches."
@@ -2852,12 +3043,13 @@ mod tests {
         connection
             .execute(
                 "INSERT INTO review_generated_cards (
-                   learning_record_id, variant_index, generation_request_key,
+                   learning_record_id, learning_target_id, variant_index, generation_request_key,
                    content_json, model, created_at_unix_ms, expires_at_unix_ms,
                    last_used_at_unix_ms, use_count
-                 ) VALUES (?1, ?2, ?3, ?4, 'test-model', ?5, ?6, ?7, 1)",
+                 ) VALUES (?1, ?2, ?3, ?4, ?5, 'test-model', ?6, ?7, ?8, 1)",
                 params![
                     learning_record_id,
+                    learning_target_id,
                     variant_index,
                     request_key,
                     serde_json::to_string(&payload).unwrap(),
@@ -2868,6 +3060,54 @@ mod tests {
             )
             .unwrap();
         connection.last_insert_rowid()
+    }
+
+    fn target_id_for_record(connection: &Connection, learning_record_id: i64) -> i64 {
+        connection
+            .query_row(
+                "SELECT learning_target_id FROM learning_target_occurrences
+                 WHERE learning_record_id = ?1",
+                [learning_record_id],
+                |row| row.get(0),
+            )
+            .unwrap()
+    }
+
+    fn merge_record_into_target(
+        connection: &Connection,
+        learning_record_id: i64,
+        learning_target_id: i64,
+    ) {
+        let previous_target_id = target_id_for_record(connection, learning_record_id);
+        connection
+            .execute(
+                "DELETE FROM learning_target_occurrences WHERE learning_record_id = ?1",
+                [learning_record_id],
+            )
+            .unwrap();
+        connection
+            .execute(
+                "DELETE FROM learning_targets WHERE id = ?1",
+                [previous_target_id],
+            )
+            .unwrap();
+        connection
+            .execute(
+                "UPDATE learning_record_targets
+                 SET learning_target_text = 'same 1', normalized_target_text = 'same 1'
+                 WHERE learning_record_id = ?1",
+                [learning_record_id],
+            )
+            .unwrap();
+        connection
+            .execute(
+                "INSERT INTO learning_target_occurrences (
+                   learning_record_id, learning_target_id, canonicalization_version,
+                   binding_revision, bound_at_unix_ms, updated_at_unix_ms
+                 ) VALUES (?1, ?2, 1, 1, ?3, ?3)",
+                params![learning_record_id, learning_target_id, NOW],
+            )
+            .unwrap();
     }
 
     #[test]
@@ -2935,6 +3175,64 @@ mod tests {
     }
 
     #[test]
+    fn one_target_appears_once_per_cycle_and_rotates_real_occurrences() {
+        let (directory, _path, mut store) = setup(2);
+        merge_record_into_target(&store.connection, 2, 1);
+
+        let first = store
+            .load_feed_page(DAY_START, DAY_END, None, 2, NOW)
+            .unwrap();
+        assert_eq!(first.items.len(), 1);
+        assert_eq!(first.items[0].target.learning_target_id, 1);
+        assert_eq!(first.items[0].learning_record.id, 1);
+        let completed = store
+            .submit_outcome(&submit_input(&first.items[0], "merged-cycle-0"), NOW + 1)
+            .unwrap();
+        let second = store
+            .load_feed_page(DAY_START, DAY_END, first.next_cursor, 2, NOW + 2)
+            .unwrap();
+        assert_eq!(second.items.len(), 1);
+        assert_eq!(second.items[0].cycle_index, 1);
+        assert_eq!(second.items[0].target.learning_target_id, 1);
+        assert_eq!(second.items[0].learning_record.id, 2);
+        assert_eq!(second.items[0].target.revision, completed.target.revision);
+        drop(store);
+        fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn cross_cycle_boundary_avoids_adjacent_same_target_when_alternative_exists() {
+        let (directory, _path, mut store) = setup(2);
+        let first = store
+            .load_feed_page(DAY_START, DAY_END, None, 1, NOW)
+            .unwrap();
+        assert_eq!(first.items[0].target.learning_target_id, 2);
+        store
+            .submit_outcome(&submit_input(&first.items[0], "boundary-first"), NOW + 1)
+            .unwrap();
+
+        let second = store
+            .load_feed_page(DAY_START, DAY_END, first.next_cursor, 1, NOW + 2)
+            .unwrap();
+        assert_eq!(second.items[0].target.learning_target_id, 1);
+        let mut forgotten = submit_input(&second.items[0], "boundary-second");
+        forgotten.outcome = ReviewOutcome::Forgotten;
+        store.submit_outcome(&forgotten, NOW + 3).unwrap();
+
+        let next_cycle = store
+            .load_feed_page(DAY_START, DAY_END, second.next_cursor, 1, NOW + 4)
+            .unwrap();
+        assert_eq!(next_cycle.items[0].cycle_index, 1);
+        assert_eq!(next_cycle.items[0].target.learning_target_id, 2);
+        assert_ne!(
+            next_cycle.items[0].target.learning_target_id,
+            second.items[0].target.learning_target_id
+        );
+        drop(store);
+        fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
     fn review_feed_excludes_records_without_reliable_english_target() {
         let (directory, _path, mut store) = setup(1);
         let chinese_card = json!({
@@ -2957,6 +3255,22 @@ mod tests {
                 params![chinese_card.to_string(), NOW - 99_000],
             )
             .unwrap();
+        store
+            .connection
+            .execute_batch(&format!(
+                "INSERT INTO learning_targets (
+                   id, stable_key, target_kind, canonicalization_version, query_type,
+                   display_target_text, normalized_target_text,
+                   representative_learning_record_id, created_at_unix_ms, updated_at_unix_ms
+                 ) VALUES (99, 'legacy-compat:record:99', 'legacy_compat', 0, 'word',
+                           '旧中文记录', NULL, 99, {created_at}, {created_at});
+                 INSERT INTO learning_target_occurrences (
+                   learning_record_id, learning_target_id, canonicalization_version,
+                   binding_revision, bound_at_unix_ms, updated_at_unix_ms
+                 ) VALUES (99, 99, 0, 0, {created_at}, {created_at});",
+                created_at = NOW - 99_000
+            ))
+            .unwrap();
 
         let page = store
             .load_feed_page(DAY_START, DAY_END, None, 10, NOW)
@@ -2970,6 +3284,18 @@ mod tests {
             })
             .unwrap();
         assert_eq!(raw_count, 2);
+        store
+            .submit_outcome(
+                &submit_input(&page.items[0], "compatibility-target-excluded"),
+                NOW + 1,
+            )
+            .unwrap();
+        let next_cycle = store
+            .load_feed_page(DAY_START, DAY_END, page.next_cursor, 10, NOW + 2)
+            .unwrap();
+        assert_eq!(next_cycle.items.len(), 1);
+        assert_eq!(next_cycle.items[0].learning_record.id, 1);
+        assert_eq!(next_cycle.items[0].cycle_index, 1);
         drop(store);
         fs::remove_dir_all(directory).unwrap();
     }
@@ -3058,6 +3384,7 @@ mod tests {
             attempt_id: written.attempt.id,
             feed_item_id: page.items[0].id,
             learning_record_id: page.items[0].learning_record.id,
+            learning_target_id: page.items[0].target.learning_target_id,
             expected_revision: written.target.revision,
             request_key: "undo-stable-1".to_string(),
         };
@@ -3109,6 +3436,7 @@ mod tests {
                     attempt_id: first.attempt.id,
                     feed_item_id: first_page.items[0].id,
                     learning_record_id: first_page.items[0].learning_record.id,
+                    learning_target_id: first_page.items[0].target.learning_target_id,
                     expected_revision: second.target.revision,
                     request_key: "undo-older-attempt".to_string(),
                 },
@@ -3149,7 +3477,7 @@ mod tests {
         let retry = store.save_quality_feedback(&save, NOW + 200).unwrap();
         assert_eq!(feedback.id, retry.id);
         assert_eq!(feedback.detail.as_deref(), Some("原句上下文还不够完整。"));
-        let target_after = load_target(&store.connection, target_before.learning_record_id)
+        let target_after = load_target(&store.connection, target_before.learning_target_id)
             .unwrap()
             .unwrap()
             .target;
@@ -3257,7 +3585,7 @@ mod tests {
                 row.get(0)
             })
             .unwrap();
-        assert_eq!(registered_versions, 15);
+        assert_eq!(registered_versions, 17);
         drop(store);
 
         let mut upgraded = ReviewStore::open(&path).unwrap();
@@ -3342,7 +3670,7 @@ mod tests {
             )
             .unwrap();
 
-        assert_eq!(version, 17);
+        assert_eq!(version, 19);
         assert_eq!(context_column_count, 1);
         assert!(
             quality_feedback_unique_indexes(&upgraded.connection).contains(&vec![
@@ -3512,11 +3840,11 @@ mod tests {
         store
             .connection
             .execute(
-                "INSERT INTO review_targets (
-                   learning_record_id, revision, next_review_at_unix_ms, attempt_count,
+                "INSERT INTO learning_target_review_states (
+                   learning_target_id, revision, next_review_at_unix_ms, attempt_count,
                    remembered_count, forgotten_count, success_streak,
                    created_at_unix_ms, updated_at_unix_ms
-                 ) VALUES (1, 0, ?1, 0, 0, 0, 0, ?2, ?2)",
+                 ) VALUES (1, 0, ?1, 1, 1, 0, 1, ?2, ?2)",
                 params![DAY_START - DAY_UNIX_MS, NOW],
             )
             .unwrap();
@@ -3584,11 +3912,12 @@ mod tests {
             .connection
             .execute(
                 "INSERT INTO review_generated_cards (
-                   learning_record_id, variant_index, generation_request_key,
+                   learning_record_id, learning_target_id, variant_index, generation_request_key,
                    content_json, model, created_at_unix_ms, expires_at_unix_ms,
                    last_used_at_unix_ms, use_count
-                 ) VALUES (1, 7, 'generated-stable-1', ?1, 'test-model', ?2, ?3, ?2, 1)",
+                 ) VALUES (1, ?1, 7, 'generated-stable-1', ?2, 'test-model', ?3, ?4, ?3, 1)",
                 params![
+                    page.items[0].target.learning_target_id,
                     serde_json::to_string(&payload).unwrap(),
                     NOW,
                     NOW + GENERATED_CARD_TTL_UNIX_MS
@@ -3605,6 +3934,7 @@ mod tests {
         let reusable = load_reusable_generated_card(
             &store.connection,
             1,
+            page.items[0].target.learning_target_id,
             DAY_START + DAY_UNIX_MS,
             page.items[0].id + 1,
             NOW + 1,
@@ -3654,6 +3984,7 @@ mod tests {
         let same_day_input = PrepareReviewFeedCardInput {
             feed_item_id: second_page.items[0].id,
             learning_record_id: 1,
+            learning_target_id: second_page.items[0].target.learning_target_id,
             request_key: "review-card-same-day-next-cycle".to_string(),
             explicit_retry: false,
         };
@@ -3675,6 +4006,7 @@ mod tests {
         let next_day_input = PrepareReviewFeedCardInput {
             feed_item_id: next_day_page.items[0].id,
             learning_record_id: 1,
+            learning_target_id: next_day_page.items[0].target.learning_target_id,
             request_key: "review-card-next-day-reuse".to_string(),
             explicit_retry: false,
         };
@@ -3744,6 +4076,7 @@ mod tests {
         let fourth_input = PrepareReviewFeedCardInput {
             feed_item_id: page.items[0].id,
             learning_record_id: 1,
+            learning_target_id: page.items[0].target.learning_target_id,
             request_key: "fourth-cycle-stable-key".to_string(),
             explicit_retry: false,
         };
@@ -3765,6 +4098,7 @@ mod tests {
         let fifth_input = PrepareReviewFeedCardInput {
             feed_item_id: fifth_page.items[0].id,
             learning_record_id: 1,
+            learning_target_id: fifth_page.items[0].target.learning_target_id,
             request_key: "fifth-cycle-stable-key".to_string(),
             explicit_retry: false,
         };
@@ -3796,6 +4130,7 @@ mod tests {
         let input = PrepareReviewFeedCardInput {
             feed_item_id: page.items[0].id,
             learning_record_id: 1,
+            learning_target_id: page.items[0].target.learning_target_id,
             request_key: "persisted-generation-failure".to_string(),
             explicit_retry: false,
         };
@@ -3904,6 +4239,127 @@ mod tests {
     }
 
     #[test]
+    fn generated_card_capacity_isolated_per_occurrence_within_one_target() {
+        let (directory, path, mut store) = setup(2);
+        merge_record_into_target(&store.connection, 2, 1);
+        let first_page = store
+            .load_feed_page(DAY_START, DAY_END, None, 1, NOW)
+            .unwrap();
+        assert_eq!(first_page.items[0].learning_record.id, 1);
+        let learning_target_id = first_page.items[0].target.learning_target_id;
+        for variant_index in 0..GENERATED_CARD_PER_RECORD_CAPACITY {
+            insert_generated_test_card(
+                &store.connection,
+                1,
+                variant_index,
+                &format!("first-occurrence-card-{variant_index}"),
+                NOW + variant_index,
+                NOW + GENERATED_CARD_TTL_UNIX_MS,
+                NOW + variant_index,
+            );
+        }
+        store
+            .submit_outcome(
+                &submit_input(&first_page.items[0], "rotate-to-second-occurrence"),
+                NOW + 10,
+            )
+            .unwrap();
+        let second_page = store
+            .load_feed_page(DAY_START, DAY_END, first_page.next_cursor, 1, NOW + 11)
+            .unwrap();
+        assert_eq!(second_page.items[0].learning_record.id, 2);
+        assert_eq!(
+            second_page.items[0].target.learning_target_id,
+            learning_target_id
+        );
+
+        let input = PrepareReviewFeedCardInput {
+            feed_item_id: second_page.items[0].id,
+            learning_record_id: 2,
+            learning_target_id,
+            request_key: "second-occurrence-first-card".to_string(),
+            explicit_retry: false,
+        };
+        assert!(matches!(
+            prepare_generated_card_preflight(&path, &input, NOW + 12).unwrap(),
+            GeneratedCardPreflight::Generate { .. }
+        ));
+        assert!(
+            load_reusable_generated_card(
+                &store.connection,
+                2,
+                learning_target_id,
+                DAY_START,
+                second_page.items[0].id,
+                NOW + 12,
+            )
+            .unwrap()
+            .is_none(),
+            "生成卡不能从同 target 的其他 occurrence 跨 record 复用"
+        );
+
+        insert_generated_test_card(
+            &store.connection,
+            2,
+            0,
+            "second-occurrence-card-0",
+            NOW + 20,
+            NOW + GENERATED_CARD_TTL_UNIX_MS,
+            NOW + 20,
+        );
+        maintain_generated_card_pool(&store.connection, NOW + 21).unwrap();
+        assert!(
+            load_generated_card_at_capacity(&store.connection, 2, learning_target_id, NOW + 21)
+                .unwrap()
+                .is_none(),
+            "第二个 record 未达到自身容量时必须继续允许生成"
+        );
+        let counts_after_first: (i64, i64) = store
+            .connection
+            .query_row(
+                "SELECT SUM(CASE WHEN learning_record_id = 1 THEN 1 ELSE 0 END),
+                        SUM(CASE WHEN learning_record_id = 2 THEN 1 ELSE 0 END)
+                 FROM review_generated_cards WHERE learning_target_id = ?1",
+                [learning_target_id],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(counts_after_first, (3, 1));
+
+        for variant_index in 1..GENERATED_CARD_PER_RECORD_CAPACITY {
+            insert_generated_test_card(
+                &store.connection,
+                2,
+                variant_index,
+                &format!("second-occurrence-card-{variant_index}"),
+                NOW + 20 + variant_index,
+                NOW + GENERATED_CARD_TTL_UNIX_MS,
+                NOW + 20 + variant_index,
+            );
+        }
+        maintain_generated_card_pool(&store.connection, NOW + 30).unwrap();
+        let reused =
+            load_generated_card_at_capacity(&store.connection, 2, learning_target_id, NOW + 30)
+                .unwrap()
+                .unwrap();
+        assert_eq!(reused.learning_record_id, 2);
+        assert_eq!(reused.learning_target_id, learning_target_id);
+        let final_counts: (i64, i64) = store
+            .connection
+            .query_row(
+                "SELECT SUM(CASE WHEN learning_record_id = 1 THEN 1 ELSE 0 END),
+                        SUM(CASE WHEN learning_record_id = 2 THEN 1 ELSE 0 END)
+                 FROM review_generated_cards WHERE learning_target_id = ?1",
+                [learning_target_id],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(final_counts, (3, 3));
+        drop(store);
+        fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
     fn generated_card_pool_enforces_global_capacity_for_unreferenced_cache() {
         let record_count = GENERATED_CARD_POOL_CAPACITY + 1;
         let (directory, _path, store) = setup(record_count);
@@ -3994,6 +4450,7 @@ mod tests {
             &PrepareReviewFeedCardInput {
                 feed_item_id: earliest.0,
                 learning_record_id: earliest.1,
+                learning_target_id: target_id_for_record(&store.connection, earliest.1),
                 request_key: "pool-bound-earliest-reload".to_string(),
                 explicit_retry: false,
             },
