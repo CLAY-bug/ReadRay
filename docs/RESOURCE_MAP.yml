@@ -4,8 +4,8 @@ project:
   repo_root: "."
 
 meta:
-  version: "1.72"
-  last_updated: "2026-08-14"
+  version: "1.73"
+  last_updated: "2026-08-15"
   updated_by: "Codex"
   source_of_truth: "docs/RESOURCE_MAP.yml"
   language: "zh-CN"
@@ -246,7 +246,7 @@ source_areas:
     read_when:
       - "调整正常主应用壳、标题栏、侧栏折叠或首页装配。"
       - "将主应用接入独立 Tauri 窗口。"
-    notes: "当前通过 ?view=main 进入主应用，并在同一外壳内切换“今天”“复习”“写作”“记忆”“对话”“全部对话”和“设置”；由装配层加载 TodayService、ReviewService、MemoryService、ConversationService、WritingService、SettingsService 与最近 Quick AI 对话，页面组件不直接读取数据库。侧栏和全部历史的右键管理统一由外壳装配，成功后复用既有刷新令牌同步列表；只有实时页面、请求键和目标 ID 仍匹配时才同步当前标题或删除后进入空会话。复习来源可按 learningRecordId 进入记忆详情；写作页保持挂载并在离开时隐藏，使失败草稿仍可返回重试。外壳在应用四周渲染 8 个方向的自定义 resize 手柄（.rr-main-resize-handle），透明窗口下替代系统 resize 命中区，mousedown 经 onStartResize 调用前端 getCurrentWindow().startResizeDragging。"
+    notes: "当前通过 ?view=main 进入主应用，并在同一外壳内切换“今天”“复习”“写作”“记忆”“对话”“全部对话”和“设置”；由装配层加载 TodayService、ReviewService、MemoryService、ConversationService、WritingService、SettingsService 与最近 Quick AI 对话，页面组件不直接读取数据库。侧栏和全部历史的右键管理统一由外壳装配，成功后复用既有刷新令牌同步列表；只有实时页面、请求键和目标 ID 仍匹配时才同步当前标题或删除后进入空会话。复习来源可按 learningRecordId 进入记忆详情；写作页保持挂载并在离开时隐藏，使失败草稿仍可返回重试。外壳从 mainSidebarWidth 读取和提交展开态侧栏宽度；应用四周保留 8 个方向的自定义 resize 手柄，透明窗口下替代系统 resize 命中区，mousedown 经 onStartResize 调用前端 getCurrentWindow().startResizeDragging。"
     risk: "不要把快捷 overlay 状态机或 invoke 迁入页面组件；正式 Tauri 对话、复习、写作和设置必须使用真实 service。"
 
   - path: "src/components/MainSidebar.tsx"
@@ -254,7 +254,7 @@ source_areas:
     status: "active"
     read_when:
       - "调整主应用导航结构、最近对话展示、手动折叠态或侧边栏宽度拖拽。"
-    notes: "默认宽 252px，用户可拖拽调整；手动折叠后主内容完全铺开，左缘 hover 临时显示侧栏，移开自动隐藏，点击标题栏按钮恢复固定侧栏。展开态最近对话来自真实主窗口会话标题，并支持 loading/error/retry；列表为空时不显示冗余空状态，只保留查看全部入口。最近项左键打开，右键把数据库 ID 和标题交给统一的会话管理菜单；不维护常驻操作按钮。侧边栏右缘提供 180–360px 的拖拽调整手柄，折叠态隐藏手柄。"
+    notes: "默认宽 252px，用户可在 180–360px 内拖拽；拖动中只更新当前会话宽度，pointerup/pointercancel/lostpointercapture 时由外壳提交持久化。手动折叠后主内容完全铺开，左缘 hover 临时显示侧栏，移开自动隐藏，点击标题栏按钮恢复固定侧栏；折叠宽度和 hover 预览不覆盖已保存的展开宽度。展开态最近对话来自真实主窗口会话标题，并支持 loading/error/retry；列表为空时不显示冗余空状态，只保留查看全部入口。最近项左键打开，右键把数据库 ID 和标题交给统一的会话管理菜单；不维护常驻操作按钮。"
     risk: "组件只消费装配层数据；最近对话和查看全部入口不得自行读取 SQLite 或维护第二份会话事实。"
 
   - path: "src/components/TodayPage.tsx"
@@ -262,8 +262,26 @@ source_areas:
     status: "active"
     read_when:
       - "调整今天页内容层级、学习入口或首页输入交互。"
-    notes: "消费 TodayService 映射后的本机日期、今日学习记录事实与状态；最近记录可进入记忆详情，写作入口继续进入文章库，输入框通过 callback 进入完整对话页。"
+    notes: "消费 TodayService 映射后的本机日期、今日学习记录事实与状态；最近记录可进入记忆详情，写作入口继续进入文章库，输入框通过 callback 进入完整对话页。正文容器和输入框共用 --rr-main-dialogue-width，textarea 自动增高复用 useAutoResizeTextarea。"
     risk: "不要在本组件调用 invoke/SQLite，不得显示待复习、高频词或趋势推断；输入只负责把 prompt 交给正式 ConversationService。"
+
+  - path: "src/mainSidebarWidth.ts"
+    purpose: "主侧栏展开态宽度的范围、版本化解析和 WebView localStorage 持久化边界。"
+    status: "active"
+    read_when:
+      - "调整主侧栏默认宽度、拖拽范围或重启恢复。"
+      - "排查侧栏宽度未保存、存储损坏或折叠后覆盖展开宽度。"
+    notes: "键固定为 readray.main.sidebar-width.v1，值为 {version:1,width}；只接受有限数值并约束到 180–360px，缺失、损坏、版本不符或 localStorage 不可用时安全回退 252px。该值只是主窗口 WebView 展示偏好，不进入 SQLite，也不影响 overlay 或其他页面自己的栏宽。"
+    risk: "不要保存折叠态的 0px 或 hover 临时宽度，也不要把该轻量展示偏好扩展成第二套业务设置系统。"
+
+  - path: "src/components/useAutoResizeTextarea.ts"
+    purpose: "今天页与完整对话输入框共用的 textarea 自动增高和窗口 resize-settle 更新 hook。"
+    status: "active"
+    read_when:
+      - "调整今天页或完整对话输入框自动增高。"
+      - "排查拖动主窗口时输入框逐帧重排或频闪。"
+    notes: "用户输入变化通过 requestAnimationFrame 合并高度测量；窗口 resize 只在约 120ms 停止后重新测量，避免拖动期间每帧读取 scrollHeight 并强制布局。"
+    risk: "不要在每个 resize 事件中同步读取布局；两个输入入口应继续复用同一实现。"
 
   - path: "src/components/ReviewPage.tsx"
     purpose: "阶段八复习页的连续卡片 Feed、后台制卡、提示/翻转、学习结果、来源抽屉、撤销和卡片质量反馈交互。"
@@ -809,7 +827,7 @@ source_areas:
     status: "active"
     read_when:
       - "调整 readray-today-2 主应用视觉、响应式布局或侧栏状态。"
-    notes: "样式全部使用 rr-main-* / rr-memory-* 作用域；全局外壳、今天页和记忆页统一使用 1440×900 / scale 1 设计坐标。浏览器预览排版固定 1440×900 画布后整体等比缩放，响应式规则按应用容器尺寸触发；侧栏支持手动折叠，折叠后左缘 hover 临时预览且不改变主内容布局。真实主窗口主体使用 position:absolute + inset:0 贴合系统窗口边界，阴影交给 Tauri/Windows 原生无装饰阴影；浏览器预览保留独立留白和柔和 CSS 阴影；侧栏右缘提供拖拽调整手柄。"
+    notes: "样式全部使用 rr-main-* / rr-memory-* 作用域；全局外壳、今天页和记忆页以 1440×900 / scale 1 作为设计基线，但真实启动尺寸由 Rust 窗口状态恢复或工作区自适应决定。浏览器预览排版固定 1440×900 画布后整体等比缩放，响应式规则按应用容器尺寸触发；今天页正文与底部 composer 共用 --rr-main-dialogue-width（默认最大 736px，窄档按 48/40/28px 稳定边距），不使用随每个像素连续变化的 cqw 几何。侧栏支持手动折叠，折叠后左缘 hover 临时预览且不改变主内容布局。真实主窗口主体使用 position:absolute + inset:0 贴合系统窗口边界，阴影交给 Tauri/Windows 原生无装饰阴影；浏览器预览保留独立留白和柔和 CSS 阴影；侧栏右缘提供拖拽调整手柄。"
     risk: "不要把主应用浅色 token 写回 overlay 的 tokens.css。"
 
   - path: "src/styles/conversation-page.css"
@@ -817,7 +835,7 @@ source_areas:
     status: "active"
     read_when:
       - "调整 readray-conversation-2 对话内容区或 920px/650px 响应式规则。"
-    notes: "全部使用 rr-conversation-* 作用域并复用 main-app.css 的字体与颜色变量；1440×900 下消息列和输入区均为 736px。"
+    notes: "全部使用 rr-conversation-* 作用域并复用 main-app.css 的字体、颜色和 --rr-main-dialogue-width；1440×900 下消息列和输入区均为 736px，窄窗口与今天页使用同一组稳定边距。"
     risk: "不要在这里重定义 App Shell、全局字体、窗口控件或侧栏自动折叠行为。"
 
   - path: "src/styles/writing-page.css"
@@ -971,7 +989,7 @@ source_areas:
     read_when:
       - "调整窗口 label、入口 URL、初始尺寸、任务栏或无边框行为。"
       - "排查启动时主应用和快捷 overlay 的显示策略。"
-    notes: "main 仍为 1440×900、最小 840×600 的可缩放无边框主窗口，但静态配置先隐藏，由 Rust setup 在手动启动时显示，避免开机启动闪窗。main 开启 transparent 以支持无装饰窗口，并开启 shadow 使用 Windows 原生窗口阴影；overlay 保留透明、置顶、跳过任务栏、启动隐藏和 shadow:false 的浮窗配置。"
+    notes: "main 的静态回退尺寸仍为 1440×900、最小 840×600，但 1440×900 只是设计基线：Rust setup 会在窗口隐藏时先应用工作区约 86% 的自适应默认值，再用有效历史 SIZE/POSITION/MAXIMIZED 覆盖，最后才由手动启动路径显示。main 开启 transparent 以支持无装饰窗口，并开启 shadow 使用 Windows 原生窗口阴影；overlay 保留透明、置顶、跳过任务栏、启动隐藏和 shadow:false 的浮窗配置。"
     risk: "两类窗口必须保持独立 URL、尺寸和生命周期；不要把 main 的位置或显示状态写入 overlay 的进程内位置缓存。"
 
   - path: "src-tauri/src/windows_uia.rs"
@@ -985,12 +1003,13 @@ source_areas:
     risk: "不同应用仍需分别验证；本轮未实现 MSAA/IAccessible2、剪贴板辅助或专用应用适配器。选区查询上限与协议一致为 4096 字符，不属于整页翻译能力。"
 
   - path: "src-tauri/src/desktop_lifecycle.rs"
-    purpose: "托盘、单实例恢复、动态全局快捷键、关闭策略、启动可见性和安全退出 Rust 边界。"
+    purpose: "托盘、单实例恢复、主窗口状态、动态全局快捷键、关闭策略、启动可见性和安全退出 Rust 边界。"
     status: "active"
     read_when:
       - "调整托盘菜单、主窗口关闭/恢复、快捷键注册或安全退出。"
       - "排查手动/开机启动可见性、第二实例或运行时与 SQLite 偏好不一致。"
-    notes: "托盘左键恢复主窗口，右键菜单仅打开/快速查询/退出；快速查询复用既有 overlay intent。运行时同时保存 SQLite 映射、实际 registered set 和两项独立 startup error；任意偏好保存失败会把物理注册与完整 active 元数据一起回滚。启动双冲突可逐项更换，只注册发生变化的一项并保留另一项错误，两项恢复后清除降级状态。单实例回调只对再次手动启动恢复主窗口。真正退出由主窗口先完成设置写入和写作 flush；取消先清除 pending ID，窗口显示/聚焦失败仅记录警告而不把前端留在过期请求上。"
+      - "排查窗口重启后尺寸、位置、最大化状态未恢复，或显示器/DPI 变化后窗口越界。"
+    notes: "托盘左键恢复主窗口，右键菜单仅打开/快速查询/退出；快速查询复用既有 overlay intent。main 使用官方 tauri-plugin-window-state 的独立 .main-window-state.json，只保存 SIZE、POSITION、MAXIMIZED；setup 在首次显示前手动恢复，并把无效或离屏几何约束到当前/主显示器工作区。无历史状态时按工作区约 86% 生成不小于 840×600、不大于 1440×900 的默认边界；最大化恢复保留修正后的普通窗口边界。运行时同时保存 SQLite 快捷键映射、实际 registered set 和两项独立 startup error；任意偏好保存失败会把物理注册与完整 active 元数据一起回滚。单实例回调只对再次手动启动恢复主窗口。真正退出由主窗口先完成设置写入和写作 flush；取消先清除 pending ID，窗口显示/聚焦失败仅记录警告而不把前端留在过期请求上。"
     risk: "不得让托盘退出绕过安全退出，或让开机启动、第二实例创建额外托盘和数据库连接；overlay 窗口边界不得在此改写。"
 
   - path: "src-tauri/src/explanation.rs"
@@ -1211,7 +1230,7 @@ app_scaffold:
     read_when:
       - "调整 Tauri 插件或 Rust 依赖。"
       - "排查原生导出、SQLite 或 Windows 编译。"
-    notes: "桌面生命周期开启 tauri 的 tray-icon feature，并新增仅 Rust 使用的官方 tauri-plugin-single-instance 与 tauri-plugin-autostart；single-instance 最先注册。未新增前端插件依赖或 capability，SQLite 仍由现有 rusqlite bundled 负责。"
+    notes: "桌面生命周期开启 tauri 的 tray-icon feature，并使用仅 Rust 侧的官方 tauri-plugin-single-instance、tauri-plugin-autostart 与 tauri-plugin-window-state；single-instance 最先注册，window-state 仅过滤 main 并使用独立文件。未新增前端插件依赖或 capability，SQLite 仍由现有 rusqlite bundled 负责。"
     risk: "新增依赖前必须说明必要性、替代方案及打包影响；不得为会话管理引入第二套存储或模型客户端。"
 
   - path: "src-tauri/capabilities/default.json"

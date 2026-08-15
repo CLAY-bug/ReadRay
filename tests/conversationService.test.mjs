@@ -110,10 +110,16 @@ test("主应用稳定会话身份回调并复用统一 composer", async () => {
     "src/components/ConversationPage.tsx",
     "utf8",
   );
+  const todayPage = await readFile("src/components/TodayPage.tsx", "utf8");
+  const textareaResize = await readFile(
+    "src/components/useAutoResizeTextarea.ts",
+    "utf8",
+  );
   const conversationStyles = await readFile(
     "src/styles/conversation-page.css",
     "utf8",
   );
+  const mainStyles = await readFile("src/styles/main-app.css", "utf8");
 
   assert.match(shell, /const updateActiveConversation = useCallback\(/);
   assert.match(shell, /onThreadIdentityChange=\{updateActiveConversation\}/);
@@ -133,7 +139,27 @@ test("主应用稳定会话身份回调并复用统一 composer", async () => {
   assert.match(conversationPage, /cachedCreation\?\.requestKey === request\.key/);
   assert.match(
     conversationStyles,
-    /--rr-conversation-content-width:[\s\S]*?\.rr-conversation-page \.rr-main-composer-inner/,
+    /--rr-conversation-content-width:\s*var\(--rr-main-dialogue-width\)/,
+  );
+  assert.match(mainStyles, /--rr-main-dialogue-width:\s*min\(736px,/);
+  assert.match(
+    mainStyles,
+    /\.rr-main-home-content,\s*\.rr-main-composer-inner \{[\s\S]*?width:\s*var\(--rr-main-dialogue-width\)/,
+  );
+  assert.match(todayPage, /useAutoResizeTextarea\(inputRef, draft\)/);
+  assert.match(conversationPage, /useAutoResizeTextarea\(inputRef, draft\)/);
+  assert.match(textareaResize, /window\.requestAnimationFrame/);
+  assert.match(textareaResize, /window\.setTimeout\(scheduleResize, 120\)/);
+  assert.match(
+    textareaResize,
+    /window\.addEventListener\("resize", resizeAfterWindowSettles\)/,
+  );
+  assert.doesNotMatch(mainStyles, /\bcqw\b/);
+  assert.doesNotMatch(todayPage, /window\.addEventListener\("resize"/);
+  assert.doesNotMatch(conversationPage, /window\.addEventListener\("resize", handleResize\)/);
+  assert.doesNotMatch(
+    conversationStyles,
+    /\.rr-conversation-page \.rr-main-composer(?:-inner|-area|\s|\{|textarea)/,
   );
   assert.match(conversationPage, /rr-conversation-scroll-wrap/);
   assert.match(conversationStyles, /\.rr-conversation-scroll-wrap \{[\s\S]*?position: relative;/);
@@ -178,6 +204,22 @@ test("主应用稳定会话身份回调并复用统一 composer", async () => {
   assert.doesNotMatch(conversationStyles, /rr-conversation-stream-line/);
   assert.doesNotMatch(conversationPage, /rr-conversation-composer/);
   assert.doesNotMatch(conversationStyles, /rr-conversation-composer/);
+});
+
+test("主窗口 resize 合并最大化状态校准", async () => {
+  const app = await readFile("src/App.tsx", "utf8");
+
+  assert.match(app, /window\.setTimeout\(syncMaximizedState, 120\)/);
+  assert.match(
+    app,
+    /window\.addEventListener\("resize", scheduleMaximizedStateSync\)/,
+  );
+  assert.doesNotMatch(
+    app,
+    /window\.addEventListener\("resize", syncMaximizedState\)/,
+  );
+  assert.match(app, /requestId === maximizedStateRequestRef\.current/);
+  assert.match(app, /if \(maximizedTogglePendingRef\.current\)/);
 });
 
 test("assistant 回答悬停浮现复制按钮且优先复制原始 Markdown", async () => {

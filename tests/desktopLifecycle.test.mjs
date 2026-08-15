@@ -163,6 +163,12 @@ test("桌面正式路径保持单实例优先、三项托盘菜单和隐藏式�
   const clipboard = rust.indexOf("tauri_plugin_clipboard_manager::init");
   assert.ok(singleInstance >= 0 && singleInstance < clipboard);
   assert.match(rust, /single_instance::init\(\|app, argv,[\s\S]*?AUTOSTART_ARGUMENT[\s\S]*?show_main_window\(app\)/);
+  assert.match(
+    rust,
+    /setup_main_window_state\(app\.handle\(\)\)[\s\S]*?show_main_window\(app\.handle\(\)\)/,
+  );
+  assert.match(lifecycle, /with_filter\(\|label\| label == MAIN_WINDOW_LABEL\)/);
+  assert.match(lifecycle, /StateFlags::SIZE \| StateFlags::POSITION \| StateFlags::MAXIMIZED/);
   assert.match(lifecycle, /"打开 ReadRay"/);
   assert.match(lifecycle, /"快速查询"/);
   assert.match(lifecycle, /"退出 ReadRay"/);

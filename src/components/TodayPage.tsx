@@ -1,10 +1,11 @@
-import { useLayoutEffect, useRef, useState, type FormEvent } from "react";
+import { useRef, useState, type FormEvent } from "react";
 import type { TodayActionId, TodayPageViewModel } from "../mainAppViewModel";
 import MainAppIcon from "./MainAppIcon";
 import {
   shouldSendMultilineMessage,
   type SendShortcut,
 } from "../appPreferences";
+import { useAutoResizeTextarea } from "./useAutoResizeTextarea";
 
 type TodayPageProps = {
   viewModel: TodayPageViewModel;
@@ -15,15 +16,6 @@ type TodayPageProps = {
   onSubmitPrompt: (value: string) => void;
   sendShortcut: SendShortcut;
 };
-
-function resizePromptInput(input: HTMLTextAreaElement) {
-  input.style.height = "auto";
-  const maxHeight = Number.parseFloat(window.getComputedStyle(input).maxHeight);
-  const contentHeight = input.scrollHeight;
-
-  input.style.height = `${Math.min(contentHeight, maxHeight)}px`;
-  input.style.overflowY = contentHeight > maxHeight ? "auto" : "hidden";
-}
 
 function TodayPage({
   viewModel,
@@ -37,25 +29,7 @@ function TodayPage({
   const [draft, setDraft] = useState("");
   const inputRef = useRef<HTMLTextAreaElement>(null);
 
-  useLayoutEffect(() => {
-    const input = inputRef.current;
-    if (!input) {
-      return;
-    }
-
-    resizePromptInput(input);
-  }, [draft]);
-
-  useLayoutEffect(() => {
-    const resizeInput = () => {
-      if (inputRef.current) {
-        resizePromptInput(inputRef.current);
-      }
-    };
-
-    window.addEventListener("resize", resizeInput);
-    return () => window.removeEventListener("resize", resizeInput);
-  }, []);
+  useAutoResizeTextarea(inputRef, draft);
 
   function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();

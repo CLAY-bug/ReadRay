@@ -5,14 +5,21 @@ use std::str::FromStr;
 use std::sync::{Mutex, OnceLock};
 use tauri::menu::MenuBuilder;
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
-use tauri::{AppHandle, Emitter, Manager, WebviewWindow};
+use tauri::{AppHandle, Emitter, Manager, Monitor, PhysicalPosition, PhysicalSize, WebviewWindow};
 use tauri_plugin_global_shortcut::{GlobalShortcutExt, Shortcut};
+use tauri_plugin_window_state::{AppHandleExt as WindowStateAppHandleExt, StateFlags, WindowExt};
 
 pub const DEFAULT_QUICK_QUERY_SHORTCUT: &str = "Ctrl+Alt+R";
 pub const DEFAULT_SELECTION_EXPLANATION_SHORTCUT: &str = "Ctrl+Alt+U";
 pub const AUTOSTART_ARGUMENT: &str = "--readray-autostart";
 
 const MAIN_WINDOW_LABEL: &str = "main";
+const MAIN_WINDOW_STATE_FILENAME: &str = ".main-window-state.json";
+const MAIN_WINDOW_MIN_WIDTH: u32 = 840;
+const MAIN_WINDOW_MIN_HEIGHT: u32 = 600;
+const MAIN_WINDOW_PREFERRED_WIDTH: u32 = 1440;
+const MAIN_WINDOW_PREFERRED_HEIGHT: u32 = 900;
+const MAIN_WINDOW_DEFAULT_WORK_AREA_RATIO: f64 = 0.86;
 const TRAY_OPEN_ID: &str = "readray-tray-open";
 const TRAY_QUICK_QUERY_ID: &str = "readray-tray-quick-query";
 const TRAY_EXIT_ID: &str = "readray-tray-exit";
@@ -27,6 +34,97 @@ pub enum ShortcutAction {
 enum MainCloseAction {
     HideToTray,
     SafeExit,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct PhysicalBounds {
+    x: i32,
+    y: i32,
+    width: u32,
+    height: u32,
+}
+
+fn main_window_state_flags() -> StateFlags {
+    StateFlags::SIZE | StateFlags::POSITION | StateFlags::MAXIMIZED
+}
+
+fn work_area_bounds(monitor: &Monitor) -> PhysicalBounds {
+    let work_area = monitor.work_area();
+    PhysicalBounds {
+        x: work_area.position.x,
+        y: work_area.position.y,
+        width: work_area.size.width,
+        height: work_area.size.height,
+    }
+}
+
+fn adaptive_dimension(work_area: u32, scale_factor: f64, minimum: u32, preferred: u32) -> u32 {
+    if work_area == 0 {
+        return 0;
+    }
+    let scale_factor = if scale_factor.is_finite() && scale_factor > 0.0 {
+        scale_factor
+    } else {
+        1.0
+    };
+    let minimum = ((minimum as f64 * scale_factor).round() as u32).min(work_area);
+    let preferred = ((preferred as f64 * scale_factor).round() as u32)
+        .min(work_area)
+        .max(minimum);
+    ((work_area as f64 * MAIN_WINDOW_DEFAULT_WORK_AREA_RATIO).round() as u32)
+        .clamp(minimum, preferred)
+}
+
+fn clamp_axis(position: i32, origin: i32, work_area: u32, window: u32) -> i32 {
+    let minimum = i64::from(origin);
+    let maximum = minimum
+        .saturating_add(i64::from(work_area.saturating_sub(window)))
+        .min(i64::from(i32::MAX));
+    i64::from(position).clamp(minimum, maximum) as i32
+}
+
+fn adaptive_default_bounds(work_area: PhysicalBounds, scale_factor: f64) -> PhysicalBounds {
+    let width = adaptive_dimension(
+        work_area.width,
+        scale_factor,
+        MAIN_WINDOW_MIN_WIDTH,
+        MAIN_WINDOW_PREFERRED_WIDTH,
+    );
+    let height = adaptive_dimension(
+        work_area.height,
+        scale_factor,
+        MAIN_WINDOW_MIN_HEIGHT,
+        MAIN_WINDOW_PREFERRED_HEIGHT,
+    );
+    PhysicalBounds {
+        x: work_area
+            .x
+            .saturating_add(((work_area.width.saturating_sub(width)) / 2) as i32),
+        y: work_area
+            .y
+            .saturating_add(((work_area.height.saturating_sub(height)) / 2) as i32),
+        width,
+        height,
+    }
+}
+
+fn constrain_bounds_to_work_area(
+    bounds: PhysicalBounds,
+    work_area: PhysicalBounds,
+    scale_factor: f64,
+) -> PhysicalBounds {
+    let minimum_width =
+        ((MAIN_WINDOW_MIN_WIDTH as f64 * scale_factor).round() as u32).min(work_area.width);
+    let minimum_height =
+        ((MAIN_WINDOW_MIN_HEIGHT as f64 * scale_factor).round() as u32).min(work_area.height);
+    let width = bounds.width.clamp(minimum_width, work_area.width);
+    let height = bounds.height.clamp(minimum_height, work_area.height);
+    PhysicalBounds {
+        x: clamp_axis(bounds.x, work_area.x, work_area.width, width),
+        y: clamp_axis(bounds.y, work_area.y, work_area.height, height),
+        width,
+        height,
+    }
 }
 
 fn main_close_action(behavior: CloseBehavior) -> MainCloseAction {
@@ -438,10 +536,109 @@ pub(crate) fn close_behavior() -> CloseBehavior {
         .unwrap_or(CloseBehavior::HideToTray)
 }
 
+fn main_window(app: &AppHandle) -> Result<WebviewWindow, String> {
+    app.get_webview_window(MAIN_WINDOW_LABEL)
+        .ok_or_else(|| "ReadRay 主窗口不存在。".to_string())
+}
+
+fn set_main_window_bounds(window: &WebviewWindow, bounds: PhysicalBounds) -> Result<(), String> {
+    window
+        .set_size(PhysicalSize::new(bounds.width, bounds.height))
+        .map_err(tauri_error)?;
+    window
+        .set_position(PhysicalPosition::new(bounds.x, bounds.y))
+        .map_err(tauri_error)
+}
+
+fn current_or_primary_monitor(window: &WebviewWindow) -> Result<Option<Monitor>, String> {
+    match window.current_monitor().map_err(tauri_error)? {
+        Some(monitor) => Ok(Some(monitor)),
+        None => window.primary_monitor().map_err(tauri_error),
+    }
+}
+
+fn apply_adaptive_main_window_default(window: &WebviewWindow) -> Result<(), String> {
+    if let Some(monitor) = current_or_primary_monitor(window)? {
+        set_main_window_bounds(
+            window,
+            adaptive_default_bounds(work_area_bounds(&monitor), monitor.scale_factor()),
+        )?;
+    }
+    Ok(())
+}
+
+fn normalize_main_window_geometry(window: &WebviewWindow) -> Result<bool, String> {
+    let position = window.outer_position().map_err(tauri_error)?;
+    let size = window.inner_size().map_err(tauri_error)?;
+    let bounds = PhysicalBounds {
+        x: position.x,
+        y: position.y,
+        width: size.width,
+        height: size.height,
+    };
+    let Some(monitor) = current_or_primary_monitor(window)? else {
+        return Ok(false);
+    };
+    let constrained =
+        constrain_bounds_to_work_area(bounds, work_area_bounds(&monitor), monitor.scale_factor());
+    if constrained == bounds {
+        Ok(false)
+    } else {
+        set_main_window_bounds(window, constrained)?;
+        Ok(true)
+    }
+}
+
+fn restore_and_normalize_main_window(
+    app: &AppHandle,
+    window: &WebviewWindow,
+) -> Result<(), String> {
+    window
+        .restore_state(main_window_state_flags())
+        .map_err(tauri_error)?;
+    let was_maximized = window.is_maximized().map_err(tauri_error)?;
+    if was_maximized {
+        window.unmaximize().map_err(tauri_error)?;
+    }
+
+    let normalize_result = normalize_main_window_geometry(window);
+    // 最大化窗口要先把修正后的普通边界写入插件缓存，再恢复最大化。
+    let repair_save_result = match normalize_result {
+        Ok(true) if was_maximized => app
+            .save_window_state(main_window_state_flags())
+            .map_err(tauri_error),
+        Ok(_) => Ok(()),
+        Err(error) => Err(error),
+    };
+    let maximize_result = if was_maximized {
+        window.maximize().map_err(tauri_error)
+    } else {
+        Ok(())
+    };
+    repair_save_result.and(maximize_result)
+}
+
+pub(crate) fn setup_main_window_state(app: &AppHandle) -> Result<(), String> {
+    let window = main_window(app)?;
+    // 隐藏阶段先准备自适应默认值；有效历史状态随后会覆盖它。
+    apply_adaptive_main_window_default(&window)?;
+
+    app.plugin(
+        tauri_plugin_window_state::Builder::default()
+            .with_filename(MAIN_WINDOW_STATE_FILENAME)
+            .with_state_flags(main_window_state_flags())
+            .with_filter(|label| label == MAIN_WINDOW_LABEL)
+            // setup 中手动恢复，确保早于 show_main_window。
+            .skip_initial_state(MAIN_WINDOW_LABEL)
+            .build(),
+    )
+    .map_err(tauri_error)?;
+
+    restore_and_normalize_main_window(app, &window)
+}
+
 pub(crate) fn show_main_window(app: &AppHandle) -> Result<(), String> {
-    let window = app
-        .get_webview_window(MAIN_WINDOW_LABEL)
-        .ok_or_else(|| "ReadRay 主窗口不存在。".to_string())?;
+    let window = main_window(app)?;
     if window.is_minimized().map_err(tauri_error)? {
         window.unminimize().map_err(tauri_error)?;
     }
@@ -840,6 +1037,85 @@ mod tests {
         assert_eq!(
             main_close_action(CloseBehavior::Exit),
             MainCloseAction::SafeExit
+        );
+    }
+
+    #[test]
+    fn adaptive_default_uses_work_area_and_keeps_preferred_size_as_a_cap() {
+        assert_eq!(
+            adaptive_default_bounds(
+                PhysicalBounds {
+                    x: 0,
+                    y: 0,
+                    width: 2560,
+                    height: 1400,
+                },
+                1.0,
+            ),
+            PhysicalBounds {
+                x: 560,
+                y: 250,
+                width: 1440,
+                height: 900,
+            }
+        );
+        assert_eq!(
+            adaptive_default_bounds(
+                PhysicalBounds {
+                    x: 0,
+                    y: 0,
+                    width: 1366,
+                    height: 728,
+                },
+                1.0,
+            ),
+            PhysicalBounds {
+                x: 95,
+                y: 51,
+                width: 1175,
+                height: 626,
+            }
+        );
+    }
+
+    #[test]
+    fn restored_bounds_are_clamped_to_work_area_and_dpi_minimum() {
+        let work_area = PhysicalBounds {
+            x: -1920,
+            y: 0,
+            width: 1920,
+            height: 1040,
+        };
+        assert_eq!(
+            constrain_bounds_to_work_area(
+                PhysicalBounds {
+                    x: 2000,
+                    y: -300,
+                    width: 3000,
+                    height: 1200,
+                },
+                work_area,
+                1.0,
+            ),
+            work_area
+        );
+        assert_eq!(
+            constrain_bounds_to_work_area(
+                PhysicalBounds {
+                    x: -1800,
+                    y: 50,
+                    width: 500,
+                    height: 400,
+                },
+                work_area,
+                1.5,
+            ),
+            PhysicalBounds {
+                x: -1800,
+                y: 50,
+                width: 1260,
+                height: 900,
+            }
         );
     }
 

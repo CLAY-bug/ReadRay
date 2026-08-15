@@ -23,6 +23,7 @@ import {
   shouldSendMultilineMessage,
   type SendShortcut,
 } from "../appPreferences";
+import { useAutoResizeTextarea } from "./useAutoResizeTextarea";
 
 type ConversationPageProps = {
   request: ConversationRequest;
@@ -59,14 +60,6 @@ const CONVERSATION_PIXEL_DELAYS = [
   0, 90, 180,
   90, 180, 270,
 ];
-
-function resizeComposer(input: HTMLTextAreaElement) {
-  input.style.height = "auto";
-  const maxHeight = Number.parseFloat(getComputedStyle(input).maxHeight);
-  const contentHeight = input.scrollHeight;
-  input.style.height = `${Math.min(contentHeight, maxHeight)}px`;
-  input.style.overflowY = contentHeight > maxHeight ? "auto" : "hidden";
-}
 
 function InlineContent({ content }: { content: ConversationInline[] }) {
   return content.map((item, index) => {
@@ -994,21 +987,7 @@ function ConversationPage({
     requestAnimationFrame(() => drawerCloseRef.current?.focus());
   }, [drawerCitation]);
 
-  useLayoutEffect(() => {
-    if (inputRef.current) {
-      resizeComposer(inputRef.current);
-    }
-  }, [draft]);
-
-  useEffect(() => {
-    const handleResize = () => {
-      if (inputRef.current) {
-        resizeComposer(inputRef.current);
-      }
-    };
-    window.addEventListener("resize", handleResize);
-    return () => window.removeEventListener("resize", handleResize);
-  }, []);
+  useAutoResizeTextarea(inputRef, draft);
 
   useEffect(() => {
     const scroll = scrollRef.current;

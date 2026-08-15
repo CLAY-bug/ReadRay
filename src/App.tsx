@@ -1289,6 +1289,8 @@ function App() {
 
 function MainAppWindow() {
   const [isMaximized, setIsMaximized] = useState(false);
+  const maximizedStateRequestRef = useRef(0);
+  const maximizedTogglePendingRef = useRef(false);
   const [previewScale, setPreviewScale] = useState(1);
   const isTauriRuntime = "__TAURI_INTERNALS__" in window;
   const isResponsivePreview =
@@ -1618,15 +1620,36 @@ function MainAppWindow() {
       return;
     }
 
+    let resizeTimer: number | undefined;
+
     function syncMaximizedState() {
+      if (maximizedTogglePendingRef.current) {
+        scheduleMaximizedStateSync();
+        return;
+      }
+
+      const requestId = ++maximizedStateRequestRef.current;
       invoke<boolean>("main_window_is_maximized")
-        .then(setIsMaximized)
+        .then((nextState) => {
+          if (requestId === maximizedStateRequestRef.current) {
+            setIsMaximized(nextState);
+          }
+        })
         .catch((error) => console.error("ReadRay 主窗口状态读取失败：", error));
     }
 
+    function scheduleMaximizedStateSync() {
+      window.clearTimeout(resizeTimer);
+      resizeTimer = window.setTimeout(syncMaximizedState, 120);
+    }
+
     syncMaximizedState();
-    window.addEventListener("resize", syncMaximizedState);
-    return () => window.removeEventListener("resize", syncMaximizedState);
+    window.addEventListener("resize", scheduleMaximizedStateSync);
+    return () => {
+      window.removeEventListener("resize", scheduleMaximizedStateSync);
+      window.clearTimeout(resizeTimer);
+      maximizedStateRequestRef.current += 1;
+    };
   }, [isTauriRuntime]);
 
   const runMainWindowCommand = useCallback(
@@ -1646,11 +1669,24 @@ function MainAppWindow() {
   );
 
   const toggleMaximized = useCallback(async () => {
-    const nextState = await runMainWindowCommand<boolean>(
-      "toggle_main_window_maximized",
-    );
-    if (typeof nextState === "boolean") {
-      setIsMaximized(nextState);
+    if (maximizedTogglePendingRef.current) {
+      return;
+    }
+
+    maximizedTogglePendingRef.current = true;
+    const requestId = ++maximizedStateRequestRef.current;
+    try {
+      const nextState = await runMainWindowCommand<boolean>(
+        "toggle_main_window_maximized",
+      );
+      if (
+        typeof nextState === "boolean" &&
+        requestId === maximizedStateRequestRef.current
+      ) {
+        setIsMaximized(nextState);
+      }
+    } finally {
+      maximizedTogglePendingRef.current = false;
     }
   }, [runMainWindowCommand]);
 

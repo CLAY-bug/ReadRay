@@ -18,7 +18,7 @@
 .rr-conversation-page {
   position: relative;
   overflow: hidden;
-  --rr-conversation-content-width: min(760px, calc(100% - 48px));
+  --rr-conversation-content-width: var(--rr-main-dialogue-width);
 }
 
 .rr-conversation-bar {
@@ -218,31 +218,6 @@ button.rr-conversation-title:not(:disabled) {
 .rr-conversation-page .rr-conversation-message-column {
   width: var(--rr-conversation-content-width);
   margin-inline: auto;
-}
-
-.rr-conversation-page .rr-main-composer-inner {
-  width: var(--rr-conversation-content-width);
-  margin-inline: auto;
-}
-
-.rr-conversation-page .rr-main-composer-area {
-  padding: 10px 0 20px;
-}
-
-.rr-conversation-page .rr-main-composer {
-  min-height: 64px;
-  gap: 4px;
-  padding: 8px 14px;
-}
-
-.rr-conversation-page .rr-main-composer textarea {
-  min-height: 24px;
-  padding: 2px 0;
-}
-
-.rr-conversation-page .rr-main-send {
-  width: 34px;
-  height: 34px;
 }
 
 .rr-conversation-message-column {

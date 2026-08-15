@@ -11,15 +11,17 @@ import type {
   MainAppNavigationItem,
   RecentConversationItem,
 } from "../mainAppViewModel";
+import {
+  MAIN_SIDEBAR_DEFAULT_WIDTH,
+  clampMainSidebarWidth,
+} from "../mainSidebarWidth";
 import MainAppIcon from "./MainAppIcon";
-
-const SIDEBAR_MIN_WIDTH = 180;
-const SIDEBAR_MAX_WIDTH = 360;
 
 type MainSidebarProps = {
   collapsed: boolean;
   width: number | null;
   onWidthChange: (width: number) => void;
+  onWidthChangeEnd: (width: number) => void;
   navigation: MainAppNavigationItem[];
   recentConversations: RecentConversationItem[];
   recentStatus: "loading" | "ready" | "error";
@@ -78,6 +80,7 @@ function MainSidebar({
   collapsed,
   width,
   onWidthChange,
+  onWidthChangeEnd,
   navigation,
   recentConversations,
   recentStatus,
@@ -94,13 +97,18 @@ function MainSidebar({
   onPeekLeave,
 }: MainSidebarProps) {
   const settingsActive = activeNavigationId === "settings";
-  const dragState = useRef<{ startX: number; startWidth: number } | null>(null);
+  const dragState = useRef<{
+    startX: number;
+    startWidth: number;
+    currentWidth: number;
+  } | null>(null);
 
   const handlePointerDown = useCallback((event: PointerEvent<HTMLDivElement>) => {
     if (collapsed) return;
     dragState.current = {
       startX: event.clientX,
-      startWidth: width ?? 252,
+      startWidth: width ?? MAIN_SIDEBAR_DEFAULT_WIDTH,
+      currentWidth: width ?? MAIN_SIDEBAR_DEFAULT_WIDTH,
     };
     event.currentTarget.setPointerCapture(event.pointerId);
   }, [collapsed, width]);
@@ -108,16 +116,22 @@ function MainSidebar({
   const handlePointerMove = useCallback((event: PointerEvent<HTMLDivElement>) => {
     const state = dragState.current;
     if (!state) return;
-    const next = Math.round(
-      Math.min(SIDEBAR_MAX_WIDTH, Math.max(SIDEBAR_MIN_WIDTH, state.startWidth + (event.clientX - state.startX))),
+    const next = clampMainSidebarWidth(
+      state.startWidth + (event.clientX - state.startX),
     );
+    state.currentWidth = next;
     onWidthChange(next);
   }, [onWidthChange]);
 
   const handlePointerUp = useCallback((event: PointerEvent<HTMLDivElement>) => {
+    const state = dragState.current;
+    if (!state) return;
     dragState.current = null;
-    event.currentTarget.releasePointerCapture(event.pointerId);
-  }, []);
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+      event.currentTarget.releasePointerCapture(event.pointerId);
+    }
+    onWidthChangeEnd(state.currentWidth);
+  }, [onWidthChangeEnd]);
 
   return (
     <aside
@@ -221,6 +235,7 @@ function MainSidebar({
         onPointerMove={handlePointerMove}
         onPointerUp={handlePointerUp}
         onPointerCancel={handlePointerUp}
+        onLostPointerCapture={handlePointerUp}
       />
     </aside>
   );

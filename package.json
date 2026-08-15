@@ -11,7 +11,7 @@
     "test:conversation": "node --test tests/conversationService.test.mjs",
     "test:review": "node --test tests/reviewService.test.mjs tests/reviewPreparationCoordinator.test.mjs",
     "test:writing": "node --test tests/writing*.test.mjs",
-    "test:settings": "node --test tests/settingsService.test.mjs tests/themeService.test.mjs tests/desktopLifecycle.test.mjs tests/desktopContextMenu.test.mjs",
+    "test:settings": "node --test tests/settingsService.test.mjs tests/themeService.test.mjs tests/desktopLifecycle.test.mjs tests/desktopContextMenu.test.mjs tests/mainSidebarWidth.test.mjs",
     "test:startup": "node --test tests/startupBrand.test.mjs",
     "tauri": "tauri"
   },

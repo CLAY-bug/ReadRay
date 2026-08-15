@@ -21,6 +21,10 @@ import type {
   RecentConversationItem,
   TodayActionId,
 } from "../mainAppViewModel";
+import {
+  loadMainSidebarWidth,
+  saveMainSidebarWidth,
+} from "../mainSidebarWidth";
 import type { MemoryPageViewModel } from "../memoryViewModel";
 import type { MemoryService } from "../memoryService";
 import type { ReviewService } from "../reviewService";
@@ -129,7 +133,9 @@ function MainAppShell({
   onClose = noop,
 }: MainAppShellProps) {
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
-  const [sidebarWidth, setSidebarWidth] = useState<number | null>(null);
+  const [sidebarWidth, setSidebarWidth] = useState<number | null>(() =>
+    loadMainSidebarWidth(),
+  );
   const [activePageId, setActivePageId] =
     useState<MainAppNavigationId | "conversation" | "conversation-history">(
       "today",
@@ -213,6 +219,11 @@ function MainAppShell({
     setSidebarPeekOpen(false);
     setSidebarCollapsed((collapsed) => !collapsed);
   }
+
+  const commitSidebarWidth = useCallback((width: number) => {
+    setSidebarWidth(width);
+    saveMainSidebarWidth(width);
+  }, []);
 
   function handleSidebarPeekEnter() {
     if (!sidebarCollapsed) {
@@ -602,6 +613,7 @@ function MainAppShell({
           collapsed={sidebarCollapsed}
           width={sidebarWidth}
           onWidthChange={setSidebarWidth}
+          onWidthChangeEnd={commitSidebarWidth}
           navigation={viewModel.navigation}
           recentConversations={recentConversations}
           recentStatus={recentStatus}

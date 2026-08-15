@@ -907,6 +907,8 @@ pub fn run() {
 
             #[cfg(desktop)]
             {
+                desktop_lifecycle::setup_main_window_state(app.handle())
+                    .map_err(std::io::Error::other)?;
                 settings::initialize_desktop_preferences(app.handle())
                     .map_err(std::io::Error::other)?;
                 desktop_lifecycle::setup_tray(app).map_err(std::io::Error::other)?;
