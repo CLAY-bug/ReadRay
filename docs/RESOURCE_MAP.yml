@@ -4,7 +4,7 @@ project:
   repo_root: "."
 
 meta:
-  version: "1.71"
+  version: "1.72"
   last_updated: "2026-08-14"
   updated_by: "Codex"
   source_of_truth: "docs/RESOURCE_MAP.yml"
@@ -50,6 +50,16 @@ core_docs:
       - "规划新的实现阶段。"
     notes: "项目方向、技术栈和阶段计划以本文件为准。"
     risk: "不要从聊天历史恢复已被本文件覆盖的旧决策。"
+
+  - path: "docs/STAGE_NINE_LEARNER_MODEL_PLAN.md"
+    purpose: "阶段九学习者模型、跨功能证据、熟练状态和个性化推荐的讨论与开发方案草案。"
+    status: "draft"
+    read_when:
+      - "讨论或规划阶段九。"
+      - "设计长期学习者记忆、自动复习、写作强化或个性化推荐。"
+      - "需要恢复已经确认的学习证据与熟练状态方向。"
+    notes: "只冻结已讨论的产品方向和实现约束；证据权重、schema、算法、migration 与任务拆分仍待新会话详细讨论。建立本文不表示阶段九已经开始。"
+    risk: "不得把卡片点击直接当成熟练提升，不得把 Agent 建议冒充用户主动输出，也不得在产品语义稳定前零碎增加 migration。"
 
   - path: "docs/HANDOFF.md"
     purpose: "当前状态快照、已确认决策、下一步和当前已知限制。"

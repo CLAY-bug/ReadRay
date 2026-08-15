@@ -696,20 +696,23 @@ test("复习页通过应用级协调器保存/撤销质量反馈，不自行调�
   assert.match(coordinator, /export class ReviewQualityCoordinator/);
 });
 
-test("页面采用轻量多列 Feed、浅遮罩和 3D 翻转，不保留有限列表或阶段九伪承诺", async () => {
+test("页面采用轻量多列 Feed、浅遮罩和直接展开的完整内容，不保留旧翻面或阶段九伪承诺", async () => {
   const pageSource = await readFile("src/components/ReviewPage.tsx", "utf8");
   const styles = await readFile("src/styles/review-page.css", "utf8");
   assert.match(styles, /\.rr-review-feed\s*\{[\s\S]*?column-count:\s*3/);
-  assert.match(styles, /rotateY\(180deg\)/);
   assert.match(styles, /var\(--rr-main-scrim\), transparent 83%/);
-  assert.match(styles, /\.rr-review-flip-card\s*\{[\s\S]*?display:\s*grid/);
-  assert.match(styles, /\.rr-review-flip-face\s*\{[\s\S]*?grid-area:\s*1 \/ 1/);
-  assert.match(styles, /\.rr-review-flip-face\s*\{[\s\S]*?max-height:[\s\S]*?overflow-y:\s*auto/);
+  assert.match(styles, /\.rr-review-focus-body\s*\{[\s\S]*?max-height:[\s\S]*?overflow-y:\s*auto/);
+  assert.doesNotMatch(styles, /rotateY\(180deg\)|rr-review-flip|rr-review-answer-blank/);
+  assert.match(pageSource, /className="rr-review-focus-body"/);
+  assert.match(pageSource, /className="rr-review-answer-word"/);
+  assert.match(pageSource, /usedHint:\s*true/);
+  assert.match(pageSource, /"复习详情"/);
+  assert.doesNotMatch(pageSource, /翻到背面|先在脑中补全或理解|给一点提示|主动回忆|hintVisible|setFlipped/);
   assert.doesNotMatch(styles, /min-height:\s*168px|min-height:\s*150px|height:\s*386px/);
   assert.doesNotMatch(pageSource, /今日上限|有限列表|今日已经看过|薄弱项/);
   assert.doesNotMatch(pageSource, /等待生成英文语境|打开后生成|正在生成英文练习语境|\bprepareCard\s*\(/);
   assert.match(pageSource, /长期记忆与个性化排序留到阶段九/);
-  assert.match(pageSource, /在记忆页查看这条记录/);
+  assert.match(pageSource, /在记忆页查看这个学习目标/);
   assert.match(pageSource, /用同一请求重试/);
   assert.match(pageSource, /loadingCursorRef\.current !== cursor/);
   assert.match(pageSource, /preparationCoordinator\?\.getSnapshot\(\)\.needsMoreCandidates/);

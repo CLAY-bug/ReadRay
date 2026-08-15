@@ -115,18 +115,12 @@ function Icon({ name }: { name: "close" | "source" | "up" | "down" | "check" }) 
   );
 }
 
-function FocusPrompt({ card, revealed }: { card: ReviewCardModel; revealed: boolean }) {
+function FocusPrompt({ card }: { card: ReviewCardModel }) {
   if (card.promptKind !== "cloze") return <>{card.promptText}</>;
   return (
     <>
       {card.promptBefore}
-      {revealed ? (
-        <strong className="rr-review-answer-word">{card.promptAnswer}</strong>
-      ) : (
-        <span className="rr-review-answer-blank" aria-label="目标表达留空">
-          &nbsp;
-        </span>
-      )}
+      <strong className="rr-review-answer-word">{card.promptAnswer}</strong>
       {card.promptAfter}
     </>
   );
@@ -169,8 +163,6 @@ function ReviewPage({
   const [loadingMore, setLoadingMore] = useState(false);
   const [loadMoreError, setLoadMoreError] = useState<string>();
   const [activeFeedItemId, setActiveFeedItemId] = useState<number>();
-  const [flipped, setFlipped] = useState(false);
-  const [hintVisible, setHintVisible] = useState(false);
   const [sourceOpen, setSourceOpen] = useState(false);
   const [feedbackFeedItemId, setFeedbackFeedItemId] = useState<number>();
   const [feedbackPolarity, setFeedbackPolarity] = useState<ReviewQualityPolarity>("up");
@@ -195,7 +187,6 @@ function ReviewPage({
   const activeFeedItemIdRef = useRef(activeFeedItemId);
   const outcomeMutationRef = useRef(outcomeMutation);
   const undoMutationRef = useRef(undoMutation);
-  const hintUsedItemsRef = useRef(new Set<number>());
   const undoRequestKeysRef = useRef(new Map<number, string>());
   const pageRef = useRef<HTMLElement>(null);
   const feedElementRef = useRef<HTMLElement>(null);
@@ -342,7 +333,6 @@ function ReviewPage({
     setLoadingMore(false);
     loadingCursorRef.current = undefined;
     setLoadMoreError(undefined);
-    hintUsedItemsRef.current.clear();
     if (!service) {
       setStatus("error");
       setError("复习服务尚未准备好。");
@@ -548,8 +538,6 @@ function ReviewPage({
     if (outcomeMutationRef.current?.status === "working") return;
     setActiveFeedItemId(undefined);
     activeFeedItemIdRef.current = undefined;
-    setFlipped(false);
-    setHintVisible(false);
     setSourceOpen(false);
     setFeedbackFeedItemId(undefined);
   }
@@ -560,8 +548,6 @@ function ReviewPage({
     if (current) preparationCoordinator?.markConsumed(current, card.feedItemId);
     setActiveFeedItemId(card.feedItemId);
     activeFeedItemIdRef.current = card.feedItemId;
-    setFlipped(Boolean(card.attempt));
-    setHintVisible(false);
     setSourceOpen(false);
     setFeedbackFeedItemId(undefined);
   }
@@ -583,7 +569,8 @@ function ReviewPage({
       learningTargetId: card.learningTargetId,
       expectedRevision: card.target.revision,
       outcome,
-      usedHint: hintUsedItemsRef.current.has(card.feedItemId),
+      // 完整答案已直接可见，旧调度应保守地按“有辅助”处理本次结果。
+      usedHint: true,
       requestKey,
     };
     const identity = {
@@ -977,7 +964,7 @@ function ReviewPage({
           >
             <header className="rr-review-focus-header">
               <div>
-                <span>{activeCard.attempt ? "已完成" : "主动回忆"}</span>
+                <span>{activeCard.attempt ? "已完成" : "复习详情"}</span>
                 <p>{activeCard.typeLabel} · {activeCard.sourceLabel}</p>
               </div>
               <div className="rr-review-focus-tools">
@@ -986,64 +973,32 @@ function ReviewPage({
               </div>
             </header>
 
-            <div className="rr-review-flip-stage">
-              <div className={`rr-review-flip-card${flipped ? " is-flipped" : ""}`}>
-                    <section
-                      className="rr-review-flip-face rr-review-flip-front"
-                      aria-hidden={flipped}
-                      inert={flipped ? true : undefined}
-                    >
-                      <p className="rr-review-focus-kicker">先在脑中补全或理解</p>
-                      <div className="rr-review-focus-prompt"><FocusPrompt card={activeCard} revealed={false} /></div>
-                      {hintVisible ? <p className="rr-review-hint">提示：{activeCard.hint}</p> : (
-                        <button
-                          type="button"
-                          className="rr-review-hint-button"
-                          onClick={() => {
-                            hintUsedItemsRef.current.add(activeCard.feedItemId);
-                            setHintVisible(true);
-                          }}
-                        >
-                          给一点提示
-                        </button>
-                      )}
-                      <button type="button" className="rr-review-reveal-button" onClick={() => setFlipped(true)}>
-                        翻到背面
-                      </button>
-                    </section>
-
-                    <section
-                      className="rr-review-flip-face rr-review-flip-back"
-                      aria-hidden={!flipped}
-                      inert={!flipped ? true : undefined}
-                    >
-                      <p className="rr-review-focus-kicker">{activeCard.contextOriginLabel}</p>
-                      <div className="rr-review-revealed-context"><FocusPrompt card={activeCard} revealed /></div>
-                      {activeCard.generatedCard ? (
-                        <p className="rr-review-context-translation">{activeCard.generatedCard.englishContextZh}</p>
-                      ) : null}
-                      <dl className="rr-review-answer-details">
-                        <div><dt>语境义</dt><dd>{activeCard.answerTitle}</dd></div>
-                        {activeCard.answerDetail && activeCard.answerDetail !== activeCard.answerTitle ? (
-                          <div><dt>保存的解释</dt><dd>{activeCard.answerDetail}</dd></div>
-                        ) : null}
-                        {activeCard.answerNote ? <div><dt>补充</dt><dd>{activeCard.answerNote}</dd></div> : null}
-                        {activeCard.example ? <div><dt>保存的例句</dt><dd>{activeCard.example.en}<br />{activeCard.example.zh}</dd></div> : null}
-                      </dl>
-                      {activeCard.attempt ? (
-                        <div className="rr-review-completed-actions">
-                          <span><Icon name="check" />已记录“{activeCard.attempt.outcome === "remembered" ? "想起来了" : "没想起来"}”</span>
-                          <button type="button" onClick={() => undoOutcome(activeCard)}>撤销</button>
-                        </div>
-                      ) : (
-                        <div className="rr-review-outcome-actions">
-                          <button type="button" disabled={outcomeMutation?.status === "working"} onClick={() => submitOutcome("remembered")}>想起来了</button>
-                          <button type="button" className="is-secondary" disabled={outcomeMutation?.status === "working"} onClick={() => submitOutcome("forgotten")}>没想起来</button>
-                        </div>
-                      )}
-                    </section>
-              </div>
-            </div>
+            <section className="rr-review-focus-body">
+              <p className="rr-review-focus-kicker">{activeCard.contextOriginLabel}</p>
+              <div className="rr-review-revealed-context"><FocusPrompt card={activeCard} /></div>
+              {activeCard.generatedCard ? (
+                <p className="rr-review-context-translation">{activeCard.generatedCard.englishContextZh}</p>
+              ) : null}
+              <dl className="rr-review-answer-details">
+                <div><dt>语境义</dt><dd>{activeCard.answerTitle}</dd></div>
+                {activeCard.answerDetail && activeCard.answerDetail !== activeCard.answerTitle ? (
+                  <div><dt>保存的解释</dt><dd>{activeCard.answerDetail}</dd></div>
+                ) : null}
+                {activeCard.answerNote ? <div><dt>补充</dt><dd>{activeCard.answerNote}</dd></div> : null}
+                {activeCard.example ? <div><dt>保存的例句</dt><dd>{activeCard.example.en}<br />{activeCard.example.zh}</dd></div> : null}
+              </dl>
+              {activeCard.attempt ? (
+                <div className="rr-review-completed-actions">
+                  <span><Icon name="check" />已记录“{activeCard.attempt.outcome === "remembered" ? "想起来了" : "没想起来"}”</span>
+                  <button type="button" onClick={() => undoOutcome(activeCard)}>撤销</button>
+                </div>
+              ) : (
+                <div className="rr-review-outcome-actions">
+                  <button type="button" disabled={outcomeMutation?.status === "working"} onClick={() => submitOutcome("remembered")}>想起来了</button>
+                  <button type="button" className="is-secondary" disabled={outcomeMutation?.status === "working"} onClick={() => submitOutcome("forgotten")}>没想起来</button>
+                </div>
+              )}
+            </section>
 
             {outcomeMutation?.status === "error" && outcomeMutation.identity.queueItemId === activeCard.feedItemId ? (
                   <div className="rr-review-inline-error" role="alert">

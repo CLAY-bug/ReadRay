@@ -1,6 +1,6 @@
 # ReadRay 交接记录
 
-最后更新：2026-08-13
+最后更新：2026-08-14
 
 ## TL;DR
 
@@ -9,7 +9,7 @@
 - 当前路线：Windows 原生，Tauri + React + TypeScript + Rust + SQLite。
 - 划词优化：本轮方案已于 2026-08-12 正式收口。任务 1～4 均已完成实现、必要验证和用户真实使用验收；任务 4“SQLite 精确缓存与 single-flight”已合回主项目。SQLite v18 增加 7 天、256 条的 ExplanationCard 精确缓存；同 key 的 SQLite lookup/provider/usage/upsert 由 single-flight 共享，每个请求继续独立核对 requestKey/generation 并保存自己的真实学习事件，取消或迟到请求不能落库或写缓存。原任务 5 不含新功能，基于投入产出不再单独执行；其跨模块完整回归清单仅保留为未来正式发布、参赛演示打包或相关模块大改时的检查参考，不得记作本轮已运行。
 - 学习目标聚合（2026-08-14 已验收）：SQLite v19、稳定 target/occurrence、目标级复习状态、历史 Feed/card/attempt/feedback 追溯、`legacy_compat` 隔离、Memory 聚合次数与全部真实出现、Review 同轮去重/跨轮 occurrence 轮换和精确目标相邻避让均已完成。Memory 搜索保留历史语境与解释命中，但优先精确目标、目标前缀/包含和原始查询，同级再按最近 occurrence 排序。实现经过自动验证、父任务代码审查、真实 v18→v19 启动修复及用户真实 Tauri/SQLite 人工验收；未进入画像、记忆注入、个性化排序、效果评估或语义聚类。
-- 下一步：学习目标聚合任务已经收口；阶段九继续暂停，等待用户明确后续方向，不因本任务完成而自动进入长期学习者记忆或个性化实现。
+- 下一步：学习目标聚合任务已经收口；阶段九继续暂停。已新增 `docs/STAGE_NINE_LEARNER_MODEL_PLAN.md` 保存学习证据、熟练状态、自动复习与写作强化的讨论草案，后续新会话从该文档继续，不因建立草案而自动进入实现。
 - 阶段八：基于真实 `learning_records` 的最小复习闭环、后台英文制卡、学习结果/撤销、来源追溯、卡片质量反馈、缓存与重启恢复均已收口；写作、Quick AI、长期学习者记忆、主动表达和 Markdown 未并入本阶段，基于长期记忆的个性化排序属于阶段九。
 - 整体性能探查（2026-08-07）：按四层（启动/前端渲染/SQLite/内存体积）实测，当前真实数据规模下**无用户可感知瓶颈**。SQLite 查询全部走索引且冷热均 <4ms；每 command 重开连接 + 8 次迁移检查经真实 rusqlite 基准测得约 1.45ms（迁移去重实测无效，1.450 vs 1.452ms，已回退）；前端流式渲染每 delta 约 0.68ms（520ms 节流下无感知）；首屏 204 DOM 节点；全部对话页实际只渲染 26 个有标题会话。明确**不要**为性能引入 SQLite 连接复用（rusqlite Connection 虽 Send，但 guard 跨 await 编译失败、流式 record_for_app 持锁会冻结 UI、Mutex 非重入、backup VACUUM 长持锁，四重风险而收益 <10ms/操作）。后续若数据规模显著增长（如数万学习记录），再重测 `list_all_quick_ai_conversations` 全量列表与流式重建成本。
 - 主题启动三段式加载修复（2026-08-07）：主窗口启动曾出现"透明空白 → ReadRay Default 硬编码色 → 已选主题"的闪烁。根因：`.rr-main-app` 的 CSS 硬编码了默认主题变量（`main-app.css`），真实主题要等 `useAppTheme` 挂载后的异步 IPC `get_theme_snapshot`（SQLite 读 ~6ms）才用 inline style 覆盖，且窗口在 setup 时即 `show()`，与前端挂载并行赛跑。修复：新增 `src/themePrefetch.ts`，`main.tsx` 在 React 挂载前（仅 `view=main`）用 Tauri IPC 预取已选主题（带 2s 超时兜底、失败静默回退），`useAppTheme` 挂载 effect 改为 `useLayoutEffect`，首帧绘制前即应用预取快照（`.rr-main-app` 首帧即为已选主题），随后仍 `reload()` 权威重读。overlay / 非 Tauri 预览路径零改动（跳过预取）。验证：前端 26/30/43 测试全绿（settings 含 5 个新增预取用例）、`pnpm build` 通过、Rust 未改动（140/4 同基线）；独立审计确认无启动失败/竞态/语义破坏风险。
@@ -195,10 +195,10 @@
 - 当日本地日历使用游标分页持续生成 Feed，不设每日条数上限。每轮每条真实记录只出现一次；先取已经到期或将在今天结束前到期的目标，再排新记录与继续练习。当前轮所有条目都有生效 attempt 前，仓库不创建下一轮；完成整轮后同一目标才可再次出现。当前排序只陈述这些真实状态，不声称薄弱项或个性化策略；阶段九才用长期学习者记忆做可解释推荐排序。
 - cycle 0 只直接使用 `learning_record.context_text` 中保存的完整英文语境；ExplanationCard 的 AI 例句和 sourceSentence 不标成学习时原始语境。Tauri 主应用启动及 `learning-record-created` 更新后，在 ReviewPage 未挂载时先通过正式 ReviewService 读取首批 Feed，并用同一个应用级协调器填充首屏缓冲；页面挂载后立即接管，迟到预热读取不得覆盖页面 Feed。缺失可用英文语境或进入后续轮次时，协调器在条目发布前通过正式 service/repository/typed command 按需请求 DeepSeek。尚未浏览的 Ready、queued 与 working 低于 6 才补到目标 12，并发上限 2；每张可见卡按 feedItemId 独立登记浏览，后序 Ready 不会越过并删除前序 pending/失败。制卡失败在 SQLite 按稳定 key 记录次数和指数退避；启动预热直接跳过仍在退避期的条目，显式重试携带 `explicitRetry` 但继续复用原 key。day/feed item/learning record/cycle 组成队列身份与稳定 request key，跨日迟到结果不能进入当前页。
 - `review_generated_cards` 有效期为 30 天，每个 learning record 的 3 张与全局 256 张均是 LRU 软上限：仍被任意可恢复 Feed 引用的有效卡受保护，只让未引用复用缓存占用剩余容量，真正过期后仍可淘汰。每个真实 occurrence 的前三张优先提供不同语境，第四轮及以后只轮换复用同一 learning record 的卡；257 个不同 learning record 各有一张绑定卡时不会解绑第一张、重新制卡并逐张振荡。受保护卡可暂时超过软上限，长期数据由有效期、每记录复用与未引用缓存 LRU 共同收缩。
-- 只有“想起来了 / 没想起来”事务写回成功才完成一项；打开、提示、揭晓、来源、关闭和质量反馈均不计完成。attempt 记录是否使用提示；提示后想起与无提示想起使用不同下次时间。写回失败保留当前卡片并用同一 request key 原地重试；expected revision、稳定 request key、页面与队列条目身份共同拒绝双击、重复 attempt、模糊成功和迟到结果。
+- 只有“想起来了 / 没想起来”事务写回成功才完成一项；打开、来源、关闭和质量反馈均不计完成。复习详情现已直接展示完整语境、翻译和解释，不再挖空、提示或翻面；两个结果按钮在阶段九接入自动证据与调度前暂时保留。因为答案已经可见，新提交保守地记录 `usedHint=true`，避免旧调度把它当成无辅助回忆成功。写回失败保留当前卡片并用同一 request key 原地重试；expected revision、稳定 request key、页面与队列条目身份共同拒绝双击、重复 attempt、模糊成功和迟到结果。
 - 每次学习结果（包括较早轮次和最后一项）都可撤销；撤销在事务内按仍生效的 attempt 重算目标并推进 revision。外部 learning-record 刷新在 outcome、undo 或质量反馈写回期间延后，写回结束后通过 `get_review_feed_item_state` 读取 SQLite 权威条目和全局完成统计，避免吞掉已提交或模糊成功的结果。
 - 卡片质量赞踩点击即写入，原因和详情完全可选，关闭详情不会取消在途或已保存反馈。质量反馈由主应用装配的应用级 `ReviewQualityCoordinator` 承担，跨 ReviewPage 卸载继续运行。协调器已收口为明确异步状态机：尚未发出的同卡 save/undo 意图可合并为最后选择；一旦发送，requestKey、expectedRevision 与 payload 整体冻结。直接成功和“SQLite 已提交但 IPC 失败”的权威确认成功共用恰好一次 finished 收口；对账仍未知的失败保留冻结请求，显式重试先预读目标状态，未达成时复用完全相同输入。确定失败发出 failed 终态、按卡片身份独立展示且不阻塞其他卡片；ReviewPage 在所有终态读取 SQLite 权威条目，并在全队列结束后释放外部刷新门禁。App 已把协调器接入 `DesktopSaveCoordinator`：退出开始后拒绝新反馈，flush 等待 queued/预读/写回/对账全部完成，未解决失败携带卡片身份阻止安全退出。Rust command 继续核对 cardContextKey，旧生成语境的迟到请求不能误写到新卡。反馈仍使用独立表和幂等日志，不改变学习结果或调度，本阶段不声称已用于个性化。
-- 来源抽屉展示该卡片对应的真实 `learning_record`，并可带记录 ID 进入 `MemoryPage`。复习页按最终英文内容稳定映射紧凑/普通/长文密度与三种 editorial 样式，自然形成错落多列；主题派生纸张纹理、弱阴影、浅遮罩和 grid 3D 翻转均不使用随机布局，短内容自然收缩、长内容到上限后内部滚动。没有复制主外壳。本轮没有接写作、Quick AI、长期学习者记忆、主动表达或 Markdown；长期学习者记忆已明确移到阶段九。
+- 来源抽屉展示该卡片对应的真实 occurrence，并可带稳定学习目标进入 `MemoryPage`。复习页按最终英文内容稳定映射紧凑/普通/长文密度与三种 editorial 样式，自然形成错落多列；主题派生纸张纹理、弱阴影和浅遮罩均不使用随机布局。聚焦详情直接展开完整内容，短内容自然收缩，长内容到上限后内部滚动。没有复制主外壳。本轮没有接写作、Quick AI、长期学习者记忆、主动表达或 Markdown；长期学习者记忆已明确移到阶段九。
 - v14/v15、受保护卡片池与多卡反馈协调器复审修复后自动验证通过：复习聚焦前端 49 项、会话 27 项、Markdown 解析 20 项、写作 30 项、设置/主题/生命周期 43 项、overlay 8 项；完整 Rust 171 项通过且 4 项真实 DeepSeek 联网测试按既有规则忽略；`pnpm build`、`cargo fmt --check`、`cargo check --all-targets`、RESOURCE_MAP YAML 解析和 `git diff --check` 均正常。迁移行为测试包含 v13 安全升级保留 active/undone 后续 attempt、后续轮次“反馈但未作答”条目及其反馈保留、旧 v14 可检测 target 修复；卡片池测试真实绑定 257 个不同目标并重复维护/重载最早条目；反馈协调器测试覆盖 A working→B/C、同卡 save/undo 合并、失败隔离、模糊 save 唯一成功终态、模糊 undo 冻结输入重试、跨页面卸载、close 与安全退出全队列等待。会话套件两条 CSS 静态断言已允许 Windows CRLF，不改变产品样式。Vite 仍只有既有主 chunk 超过 500 kB 的非阻断警告。该轮自动验证没有启动浏览器、Computer Use 或真实 Tauri，随后已完成独立 code review 和用户真实桌面验收。
 - SQLite v16 兼容修复先在临时合成库验证：精确登记 v1～v15 并重建中间版反馈表，recorded/generated 两类行的 ID、revision、active、原因、详情和时间均保留，复合唯一约束及升级后的 save/undo 通过；最终结构无损、新库、v12→latest 和既有卡片语境反馈回归也通过。`cargo fmt --check`、`cargo check --lib` 与 `git diff --check` 正常。随后用户彻底退出并重启真实 Tauri，确认真实旧数据库完成 v16 升级，赞踩与可选详情可以正常写入；完整复习流程、后台英文制卡、交互、结果/撤销、来源和重启恢复均人工验收无问题，阶段八正式完成。
 
