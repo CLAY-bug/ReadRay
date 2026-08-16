@@ -1,5 +1,6 @@
 export type MainAppIconName =
-  | "panel"
+  | "panel-open"
+  | "panel-closed"
   | "plus"
   | "today"
   | "review"
@@ -27,8 +28,22 @@ type MainAppIconProps = {
 
 function IconPaths({ name }: MainAppIconProps) {
   switch (name) {
-    case "panel":
-      return <><rect x="3" y="4" width="18" height="16" rx="2" /><path d="M9 4v16" /></>;
+    case "panel-open":
+      return <>
+        <rect x="3.5" y="4" width="17" height="16" rx="2.5" />
+        <path d="M10 4v16" />
+        <path
+          d="M5.25 6.5h2.5v11h-2.5z"
+          fill="currentColor"
+          stroke="none"
+          opacity="0.28"
+        />
+      </>;
+    case "panel-closed":
+      return <>
+        <rect x="3.5" y="4" width="17" height="16" rx="2.5" />
+        <path d="M7 8v8" strokeWidth="2.4" />
+      </>;
     case "plus":
       return <path d="M12 5v14M5 12h14" />;
     case "today":

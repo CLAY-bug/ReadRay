@@ -51,10 +51,11 @@
   --rr-main-shadow: rgba(38, 37, 30, 0.1);
   --rr-main-design-scale: 1;
   --rr-main-sidebar-width: calc(252px * var(--rr-main-design-scale));
-  --rr-main-sidebar-peek-width: calc(252px * var(--rr-main-design-scale));
+  --rr-main-sidebar-layout-width: var(--rr-main-sidebar-width);
+  --rr-main-sidebar-motion-duration: 260ms;
+  --rr-main-sidebar-motion-easing: cubic-bezier(0.2, 0, 0, 1);
   --rr-main-titlebar-height: calc(44px * var(--rr-main-design-scale));
   --rr-main-sidebar-font-display: var(--rr-font-display);
-  --rr-main-sidebar-font-mono: var(--rr-font-mono);
   --rr-main-font-display: var(--rr-font-display);
   --rr-main-font-body: var(--rr-font-body);
   --rr-main-font-mono: var(--rr-font-mono);
@@ -64,7 +65,7 @@
   container-type: size;
   width: auto;
   height: auto;
-  min-width: 560px;
+  min-width: 0;
   min-height: 520px;
   overflow: hidden;
   border: calc(1px * var(--rr-main-design-scale)) solid var(--rr-main-border);
@@ -141,54 +142,56 @@
   flex: 0 0 var(--rr-main-sidebar-width);
   min-width: 0;
   align-items: center;
+  overflow: hidden;
   border-right: calc(1px * var(--rr-main-design-scale)) solid var(--rr-main-border);
   background: var(--rr-main-sidebar);
   transition:
-    width 200ms ease,
-    flex-basis 200ms ease;
+    width var(--rr-main-sidebar-motion-duration) var(--rr-main-sidebar-motion-easing),
+    flex-basis var(--rr-main-sidebar-motion-duration) var(--rr-main-sidebar-motion-easing),
+    border-color 160ms ease,
+    background-color 160ms ease;
 }
 
 .rr-main-brand-zone {
   display: flex;
   width: 100%;
   min-width: 0;
-  flex: 1 1 auto;
   align-items: center;
   gap: calc(10px * var(--rr-main-design-scale));
-  padding-right: calc(10px * var(--rr-main-design-scale));
-  padding-left: calc(16px * var(--rr-main-design-scale));
+  padding-right: calc(44px * var(--rr-main-design-scale));
+  padding-left: calc(12px * var(--rr-main-design-scale));
+  pointer-events: none;
+  opacity: 1;
+  transform: translateX(0);
+  visibility: visible;
+  transition:
+    opacity 120ms ease,
+    transform 160ms ease,
+    visibility 0s linear 0s;
 }
 
-.rr-main-brand-mark {
-  display: grid;
-  width: calc(22px * var(--rr-main-design-scale));
-  height: calc(22px * var(--rr-main-design-scale));
-  flex: 0 0 calc(22px * var(--rr-main-design-scale));
-  place-items: center;
-  border-radius: calc(6px * var(--rr-main-design-scale));
-  color: var(--rr-main-bg);
-  background: var(--rr-main-fg);
-  font-family: var(--rr-main-sidebar-font-mono);
-  font-size: calc(12px * var(--rr-ui-font-scale));
-  font-weight: 700;
-  letter-spacing: -0.04em;
+.rr-main-brand-icon {
+  width: calc(24px * var(--rr-main-design-scale));
+  height: calc(24px * var(--rr-main-design-scale));
+  flex: 0 0 calc(24px * var(--rr-main-design-scale));
+  border-radius: calc(7px * var(--rr-main-design-scale));
 }
 
 .rr-main-brand-name {
   min-width: 0;
   overflow: hidden;
-  font-size: var(--rr-ui-font-size);
+  font-size: calc(15px * var(--rr-ui-font-scale));
   font-weight: 650;
-  letter-spacing: -0.01em;
+  letter-spacing: -0.015em;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
 .rr-main-collapse {
   position: absolute;
-  z-index: 1;
+  z-index: 2;
   top: calc(7px * var(--rr-main-design-scale));
-  right: calc(10px * var(--rr-main-design-scale));
+  right: calc(3px * var(--rr-main-design-scale));
   display: grid;
   width: calc(30px * var(--rr-main-design-scale));
   height: calc(30px * var(--rr-main-design-scale));
@@ -257,12 +260,27 @@
   min-height: 0;
 }
 
-.rr-main-sidebar {
+.rr-main-sidebar-slot {
   position: relative;
+  z-index: 15;
+  width: var(--rr-main-sidebar-layout-width);
+  min-width: 0;
+  min-height: 0;
+  flex: 0 0 var(--rr-main-sidebar-layout-width);
+  transition:
+    width var(--rr-main-sidebar-motion-duration) var(--rr-main-sidebar-motion-easing),
+    flex-basis var(--rr-main-sidebar-motion-duration) var(--rr-main-sidebar-motion-easing);
+}
+
+.rr-main-sidebar {
+  position: absolute;
+  z-index: 1;
+  inset: 0 auto 0 0;
   display: flex;
   width: var(--rr-main-sidebar-width);
+  min-width: var(--rr-main-sidebar-width);
   min-height: 0;
-  flex: 0 0 var(--rr-main-sidebar-width);
+  flex: none;
   flex-direction: column;
   border-right: calc(1px * var(--rr-main-design-scale)) solid var(--rr-main-border);
   padding: calc(14px * var(--rr-main-design-scale)) calc(10px * var(--rr-main-design-scale))
@@ -272,9 +290,11 @@
   line-height: normal;
   --rr-main-sidebar-nav-font-size: max(12px, calc(var(--rr-ui-font-size) - 1px));
   --rr-main-sidebar-recent-font-size: max(12px, calc(var(--rr-ui-font-size) - 2px));
+  transform: translateX(0);
+  visibility: visible;
   transition:
-    width 200ms ease,
-    flex-basis 200ms ease;
+    transform var(--rr-main-sidebar-motion-duration) var(--rr-main-sidebar-motion-easing),
+    visibility 0s linear 0s;
 }
 
 .rr-main-sidebar-resizer {
@@ -307,16 +327,6 @@
 
 .rr-main-app.is-sidebar-collapsed .rr-main-sidebar-resizer {
   display: none;
-}
-
-.rr-main-sidebar-peek-trigger {
-  position: absolute;
-  z-index: 25;
-  top: var(--rr-main-titlebar-height);
-  bottom: 0;
-  left: calc(6px * var(--rr-main-design-scale));
-  width: calc(8px * var(--rr-main-design-scale));
-  pointer-events: auto;
 }
 
 .rr-main-resize-handle {
@@ -1765,73 +1775,55 @@
   }
 }
 .rr-main-app.is-sidebar-collapsed {
-  --rr-main-sidebar-width: 0px;
+  --rr-main-sidebar-layout-width: 0px;
 }
 
 .rr-main-app.is-sidebar-collapsed .rr-main-titlebar-leading {
   width: calc(36px * var(--rr-main-design-scale));
   flex-basis: calc(36px * var(--rr-main-design-scale));
-  border-right: 0;
+  border-right-color: transparent;
   background: transparent;
 }
 
 .rr-main-app.is-sidebar-collapsed .rr-main-brand-zone {
-  display: none;
-}
-
-.rr-main-app.is-sidebar-collapsed .rr-main-collapse {
-  right: auto;
-  left: calc(3px * var(--rr-main-design-scale));
-}
-
-.rr-main-app.is-sidebar-collapsed .rr-main-collapse svg {
-  transform: rotate(180deg);
+  visibility: hidden;
+  opacity: 0;
+  transform: translateX(calc(-8px * var(--rr-main-design-scale)));
+  transition:
+    opacity 120ms ease,
+    transform 160ms ease,
+    visibility 0s linear 160ms;
 }
 
 .rr-main-app.is-sidebar-collapsed .rr-main-sidebar {
-  width: 0;
-  min-width: 0;
-  flex-basis: 0;
-  overflow: hidden;
-  border-right: 0;
-  padding: 0;
   visibility: hidden;
   pointer-events: none;
-  opacity: 0;
-  transform: translateX(-8px);
+  transform: translateX(-100%);
   transition:
-    opacity 140ms ease,
-    transform 140ms ease,
-    visibility 0s linear 140ms;
+    transform var(--rr-main-sidebar-motion-duration) var(--rr-main-sidebar-motion-easing),
+    visibility 0s linear var(--rr-main-sidebar-motion-duration);
 }
 
 .rr-main-app.is-sidebar-collapsed.is-sidebar-peeking .rr-main-sidebar {
-  position: absolute;
-  z-index: 15;
-  top: 0;
-  right: auto;
-  bottom: 0;
-  left: 0;
-  display: flex;
-  width: var(--rr-main-sidebar-peek-width);
-  min-width: var(--rr-main-sidebar-peek-width);
-  flex: 0 0 var(--rr-main-sidebar-peek-width);
-  overflow: visible;
-  border-right: calc(1px * var(--rr-main-design-scale)) solid var(--rr-main-border);
   border-radius: 0 calc(8px * var(--rr-main-design-scale))
     calc(8px * var(--rr-main-design-scale)) 0;
-  padding: calc(14px * var(--rr-main-design-scale)) calc(10px * var(--rr-main-design-scale))
-    calc(10px * var(--rr-main-design-scale));
-  background: var(--rr-main-sidebar);
   box-shadow: 4px 0 18px color-mix(in oklab, var(--rr-main-fg), transparent 90%);
   visibility: visible;
   pointer-events: auto;
-  opacity: 1;
-  transform: none;
+  transform: translateX(0);
   transition:
-    opacity 140ms ease,
-    transform 140ms ease,
+    transform var(--rr-main-sidebar-motion-duration) var(--rr-main-sidebar-motion-easing),
     visibility 0s linear 0s;
+}
+
+/* 拖拽调整侧栏宽度时宽度逐帧更新，禁用过渡避免侧栏追赶指针产生橡皮筋抖动。 */
+.rr-main-app.is-sidebar-resizing .rr-main-sidebar,
+.rr-main-app.is-sidebar-resizing .rr-main-sidebar-slot,
+.rr-main-app.is-sidebar-resizing .rr-main-titlebar-leading,
+.rr-main-app.is-window-resizing .rr-main-sidebar,
+.rr-main-app.is-window-resizing .rr-main-sidebar-slot,
+.rr-main-app.is-window-resizing .rr-main-titlebar-leading {
+  transition: none;
 }
 
 @container (max-width: 900px) {

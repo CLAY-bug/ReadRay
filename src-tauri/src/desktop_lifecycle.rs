@@ -15,7 +15,7 @@ pub const AUTOSTART_ARGUMENT: &str = "--readray-autostart";
 
 const MAIN_WINDOW_LABEL: &str = "main";
 const MAIN_WINDOW_STATE_FILENAME: &str = ".main-window-state.json";
-const MAIN_WINDOW_MIN_WIDTH: u32 = 840;
+const MAIN_WINDOW_MIN_WIDTH: u32 = 480;
 const MAIN_WINDOW_MIN_HEIGHT: u32 = 600;
 const MAIN_WINDOW_PREFERRED_WIDTH: u32 = 1440;
 const MAIN_WINDOW_PREFERRED_HEIGHT: u32 = 900;
@@ -1113,7 +1113,7 @@ mod tests {
             PhysicalBounds {
                 x: -1800,
                 y: 50,
-                width: 1260,
+                width: 720,
                 height: 900,
             }
         );

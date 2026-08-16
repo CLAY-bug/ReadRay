@@ -4,8 +4,8 @@ project:
   repo_root: "."
 
 meta:
-  version: "1.73"
-  last_updated: "2026-08-15"
+  version: "1.79"
+  last_updated: "2026-08-16"
   updated_by: "Codex"
   source_of_truth: "docs/RESOURCE_MAP.yml"
   language: "zh-CN"
@@ -201,11 +201,11 @@ source_areas:
     risk: "不要等待业务请求后再移除启动层；异常路径不应通过第二个 Tauri 窗口制造焦点或任务栏切换。"
 
   - path: "public/branding/readray-startup-icon.png"
-    purpose: "随前端打包的 256×256 RGBA 主窗口启动品牌图标。"
+    purpose: "随前端打包的 256×256 RGBA 主窗口启动与标题栏品牌图标。"
     status: "active"
     read_when:
       - "替换启动品牌图标或检查打包后的静态资源。"
-    notes: "由 assets/branding/readray-icon-master.png 通过 Tauri 图标生成链路派生，与任务栏、托盘和安装包图标保持同一母版。"
+    notes: "由 assets/branding/readray-icon-master.png 通过 Tauri 图标生成链路派生，与任务栏、托盘和安装包图标保持同一母版；主窗口侧栏展开时标题栏左侧以 24px 展示该图标并配合 ReadRay 文字。"
     risk: "替换后必须确认 dist/branding 中仍有该文件，并在真实 Tauri 主窗口检查深色背景下的视觉尺寸。"
 
   - path: "assets/branding/"
@@ -246,7 +246,7 @@ source_areas:
     read_when:
       - "调整正常主应用壳、标题栏、侧栏折叠或首页装配。"
       - "将主应用接入独立 Tauri 窗口。"
-    notes: "当前通过 ?view=main 进入主应用，并在同一外壳内切换“今天”“复习”“写作”“记忆”“对话”“全部对话”和“设置”；由装配层加载 TodayService、ReviewService、MemoryService、ConversationService、WritingService、SettingsService 与最近 Quick AI 对话，页面组件不直接读取数据库。侧栏和全部历史的右键管理统一由外壳装配，成功后复用既有刷新令牌同步列表；只有实时页面、请求键和目标 ID 仍匹配时才同步当前标题或删除后进入空会话。复习来源可按 learningRecordId 进入记忆详情；写作页保持挂载并在离开时隐藏，使失败草稿仍可返回重试。外壳从 mainSidebarWidth 读取和提交展开态侧栏宽度；应用四周保留 8 个方向的自定义 resize 手柄，透明窗口下替代系统 resize 命中区，mousedown 经 onStartResize 调用前端 getCurrentWindow().startResizeDragging。"
+    notes: "当前通过 ?view=main 进入主应用，并在同一外壳内切换“今天”“复习”“写作”“记忆”“对话”“全部对话”和“设置”；由装配层加载 TodayService、ReviewService、MemoryService、ConversationService、WritingService、SettingsService 与最近 Quick AI 对话，页面组件不直接读取数据库。侧栏和全部历史的右键管理统一由外壳装配，成功后复用既有刷新令牌同步列表；只有实时页面、请求键和目标 ID 仍匹配时才同步当前标题或删除后进入空会话。复习来源可按 learningRecordId 进入记忆详情；写作页保持挂载并在离开时隐藏，使失败草稿仍可返回重试。外壳从 mainSidebarWidth 读取和提交展开态侧栏宽度，并通过 sidebarAutoCollapse 状态机随窗口宽度自动收放侧栏（<1000 收、>1080 放、迟滞带防抖、手动折叠优先）；侧栏调宽期间挂出 is-sidebar-resizing，窗口尺寸连续变化期间挂出 is-window-resizing 并在 120ms 稳定后才结算自动收放，避免过渡和 WebView2 尺寸追赶叠加。固定收放由独立 rr-main-sidebar-slot 连续改变布局占位，侧栏本体同步整体滑入/滑出，正文因而形成连续推开/收回。展开态标题栏左侧显示正式应用 Icon + ReadRay，状态按钮锚定侧栏标题区右缘；折叠时品牌淡出，按钮随标题区宽度连续移动到左上角，经过该按钮打开覆盖式 hover 预览，整条左边缘不触发，预览也不改变正文布局。按钮按当前固定状态切换 panel-open/panel-closed 两枚独立图标，不再旋转同一图标。应用四周保留 8 个方向的自定义 resize 手柄，透明窗口下替代系统 resize 命中区，mousedown 经 onStartResize 调用前端 getCurrentWindow().startResizeDragging。"
     risk: "不要把快捷 overlay 状态机或 invoke 迁入页面组件；正式 Tauri 对话、复习、写作和设置必须使用真实 service。"
 
   - path: "src/components/MainSidebar.tsx"
@@ -254,7 +254,7 @@ source_areas:
     status: "active"
     read_when:
       - "调整主应用导航结构、最近对话展示、手动折叠态或侧边栏宽度拖拽。"
-    notes: "默认宽 252px，用户可在 180–360px 内拖拽；拖动中只更新当前会话宽度，pointerup/pointercancel/lostpointercapture 时由外壳提交持久化。手动折叠后主内容完全铺开，左缘 hover 临时显示侧栏，移开自动隐藏，点击标题栏按钮恢复固定侧栏；折叠宽度和 hover 预览不覆盖已保存的展开宽度。展开态最近对话来自真实主窗口会话标题，并支持 loading/error/retry；列表为空时不显示冗余空状态，只保留查看全部入口。最近项左键打开，右键把数据库 ID 和标题交给统一的会话管理菜单；不维护常驻操作按钮。"
+    notes: "默认宽 252px，用户可在 180–360px 内拖拽；拖动中只更新当前会话宽度，pointerup/pointercancel/lostpointercapture 时由外壳提交持久化。手动折叠后主内容完全铺开，左上角展开按钮 hover 临时显示侧栏，移入侧栏保持、移开自动隐藏，点击按钮恢复固定侧栏；整条左边缘不触发预览。侧栏本体始终保持已保存的完整宽度并绝对定位在 rr-main-sidebar-slot 内：固定收放时布局槽与侧栏位移使用同一 260ms 曲线同步变化，形成连续推出/收回；hover 预览时布局槽保持 0，仅侧栏覆盖主页面滑入，因此主页面不移动。折叠宽度和 hover 预览不覆盖已保存的展开宽度。展开态最近对话来自真实主窗口会话标题，并支持 loading/error/retry；列表为空时不显示冗余空状态，只保留查看全部入口。最近项左键打开，右键把数据库 ID 和标题交给统一的会话管理菜单；不维护常驻操作按钮。"
     risk: "组件只消费装配层数据；最近对话和查看全部入口不得自行读取 SQLite 或维护第二份会话事实。"
 
   - path: "src/components/TodayPage.tsx"
@@ -273,6 +273,14 @@ source_areas:
       - "排查侧栏宽度未保存、存储损坏或折叠后覆盖展开宽度。"
     notes: "键固定为 readray.main.sidebar-width.v1，值为 {version:1,width}；只接受有限数值并约束到 180–360px，缺失、损坏、版本不符或 localStorage 不可用时安全回退 252px。该值只是主窗口 WebView 展示偏好，不进入 SQLite，也不影响 overlay 或其他页面自己的栏宽。"
     risk: "不要保存折叠态的 0px 或 hover 临时宽度，也不要把该轻量展示偏好扩展成第二套业务设置系统。"
+
+  - path: "src/sidebarAutoCollapse.ts"
+    purpose: "主侧栏随应用容器宽度的自动收放纯状态机（阈值、迟滞带、手动折叠优先）。"
+    status: "active"
+    read_when:
+      - "调整窄窗自动折叠/展开阈值、迟滞带或手动/自动折叠语义。"
+      - "排查窗口缩放时侧栏自动收放与用户意图冲突。"
+    notes: "首次测量或跨越阈值低于 1000px 时自动折叠，高于 1080px 自动展开，1000–1080 迟滞带内保持原状态，避免拖动边界抖动；手动折叠时不会产生自动状态，因此用户手动收起后放大窗口不会自动展开。自动折叠状态下用户手动展开会清除自动态（releaseSidebarAutoCollapse），同带内保持展开，再次跨越后才恢复自动。只消费宽度与手动折叠布尔值，不含 DOM 或存储。"
 
   - path: "src/components/useAutoResizeTextarea.ts"
     purpose: "今天页与完整对话输入框共用的 textarea 自动增高和窗口 resize-settle 更新 hook。"
@@ -389,7 +397,7 @@ source_areas:
     read_when:
       - "调整完整对话页布局、消息展示或设计稿交互。"
       - "接入真实 Quick AI 历史、发送、导出或记忆引用。"
-    notes: "复用 MainAppShell、MainSidebar 和全局标题栏；页面只消费 ConversationService。当前标题单击原地编辑，Enter 保存、Esc 或失焦安全取消；正式 Tauri 重命名、删除和导出同时绑定 mounted、request key 与数据库 ID，迟到结果只有仍对应当前页面请求时才更新；父级回调还会复核实时页面和会话身份。删除当前会话后安全进入新会话；空白会话不开放导出，取消导出不提示成功。加载到以 user 结尾的会话时恢复明确的 pending 重试态；非 Tauri fixture 继续演示分片、停止、重生成和浏览器下载。"
+    notes: "复用 MainAppShell、MainSidebar 和全局标题栏；页面只消费 ConversationService。当前标题单击原地编辑，Enter 保存、Esc 或失焦安全取消；正式 Tauri 重命名、删除和导出同时绑定 mounted、request key 与数据库 ID，迟到结果只有仍对应当前页面请求时才更新；父级回调还会复核实时页面和会话身份。删除当前会话后安全进入新会话；空白会话不开放导出，取消导出不提示成功。加载到以 user 结尾的会话时恢复明确的 pending 重试态；非 Tauri fixture 继续演示分片、停止、重生成和浏览器下载。窗口缩放触发的用户消息溢出测量与滚动区观察都按 120ms settle 更新（滚动监听保持即时），避免拖拽期间逐帧强制布局。"
     risk: "不得在页面组件直接调用 Tauri、SQLite 或 DeepSeek；真实后端不支持的停止、重生成和记忆引用必须保持禁用或无数据状态。"
 
   - path: "src/components/ConversationHistoryPage.tsx"
@@ -514,15 +522,24 @@ source_areas:
     status: "active"
     read_when:
       - "排查主题重启恢复、即时应用、窗口重新显示或设置页卸载后的回滚。"
-    notes: "只在主应用实例化 ThemeService；主题变量仅写入 .rr-main-app，非 Tauri 预览使用 ReadRay Default。"
+    notes: "只在主应用实例化 ThemeService；主题变量仅写入 .rr-main-app，非 Tauri 预览使用 ReadRay Default。每次应用已校验主题后还会通过 mainWindowBackground 同步 main 原生窗口层与 WebView2 默认底色；同步失败只记录，不反向破坏已经成功的主题切换。"
     risk: "不得在 overlay 创建主题服务，不得使用 localStorage/sessionStorage 或直接 invoke。"
+
+  - path: "src/mainWindowBackground.ts"
+    purpose: "把当前主题画布色同步到 Tauri main 原生窗口层与 WebView2 默认背景的适配器。"
+    status: "active"
+    read_when:
+      - "排查主窗口缩放时露出黑/白色带、主题切换后原生底色不一致。"
+      - "修改主题规范颜色到 Tauri Color 的转换。"
+    notes: "只在 Tauri 运行时调用 getCurrentWebviewWindow().setBackgroundColor；将主题协议允许的规范 hex/rgb/rgba 转为 Tauri 数值颜色。静态配置先以 ReadRay Default #f2f1ed 覆盖启动期，运行时再随当前主题同步。"
+    risk: "这是 WebView2 迟帧时的同色降级底板，不承诺消除平台合成延迟；失败不得阻断主题应用，也不得作用于 overlay。"
 
   - path: "tests/themeService.test.mjs"
     purpose: "主题前端 typed commands、快照校验、内置主题列表、默认变量等价、失败回滚和正式安全边界测试。"
     status: "active"
     read_when:
       - "修改主题前端协议、内置主题、运行时应用或设置页正式路径。"
-    notes: "由 test:settings 统一运行；聚焦覆盖 Rust/前端规范颜色、按 code point 的字符串长度边界、内置主题列表与 Flexoki 双模式运行时变量映射、28 个 Codex 内置主题的清单/模式支持/唯一 ID/删除限制/运行时变量映射、builtin 删除限制、导入精确目标、提交未确认对账、并发冲突、默认变量、运行时回滚和阴影 token 静态守卫；Rust 配套测试覆盖 CSS 文本解析、限制、可读性、SQLite lifecycle、重启恢复、Flexoki 与 Codex 内置主题保护。"
+    notes: "由 test:settings 统一运行；聚焦覆盖 Rust/前端规范颜色、按 code point 的字符串长度边界、内置主题列表与 Flexoki 双模式运行时变量映射、28 个 Codex 内置主题的清单/模式支持/唯一 ID/删除限制/运行时变量映射、builtin 删除限制、导入精确目标、提交未确认对账、并发冲突、默认变量、运行时回滚、主窗口背景颜色转换/配置/权限接线和阴影 token 静态守卫；Rust 配套测试覆盖 CSS 文本解析、限制、可读性、SQLite lifecycle、重启恢复、Flexoki 与 Codex 内置主题保护。"
     risk: "自动测试不替代真实 Tauri 的原生目录选择、即时视觉和重启人工验收。"
 
   - path: "src/settingsBalanceRefresh.ts"
@@ -605,6 +622,14 @@ source_areas:
       - "修改安全退出、单实例、托盘、开机启动或全局快捷键接线。"
     notes: "覆盖快捷键录制、安全退出成功/失败/取消/强制/过期结果、退出期 mutation 阻断、设置操作切页后的应用级等待、单实例插件优先、三项托盘菜单、隐藏式自动启动和页面不直接 invoke。Rust 配套测试另覆盖 active 元数据回滚、双冲突逐项恢复和窗口聚焦失败时取消一致性。"
     risk: "静态和纯逻辑测试不替代真实 Windows 托盘、注册表、快捷键冲突和单实例人工验收。"
+
+  - path: "tests/sidebarAutoCollapse.test.mjs"
+    purpose: "侧栏窄窗自动收放状态机聚焦测试与外壳/CSS 静态接线守卫。"
+    status: "active"
+    read_when:
+      - "修改 sidebarAutoCollapse、MainAppShell 自动收放接线或 is-sidebar-resizing/is-window-resizing 样式。"
+    notes: "由 test:settings 运行；覆盖首次测量、跨越折叠/展开阈值、迟滞带保持、手动折叠优先、窄窗手动展开清除自动态、再次跨越恢复自动、无效宽度忽略，以及外壳 ResizeObserver/120ms settle/状态机接线、固定收放布局槽、hover 覆盖预览和两类缩放会话过渡抑制的静态断言。"
+    risk: "纯逻辑和静态测试不替代真实 Tauri 拖拽缩放人工验收。"
 
   - path: "tests/settingsService.test.mjs"
     purpose: "设置 repository/service、正式路径隔离和关键失败边界测试。"
@@ -827,7 +852,7 @@ source_areas:
     status: "active"
     read_when:
       - "调整 readray-today-2 主应用视觉、响应式布局或侧栏状态。"
-    notes: "样式全部使用 rr-main-* / rr-memory-* 作用域；全局外壳、今天页和记忆页以 1440×900 / scale 1 作为设计基线，但真实启动尺寸由 Rust 窗口状态恢复或工作区自适应决定。浏览器预览排版固定 1440×900 画布后整体等比缩放，响应式规则按应用容器尺寸触发；今天页正文与底部 composer 共用 --rr-main-dialogue-width（默认最大 736px，窄档按 48/40/28px 稳定边距），不使用随每个像素连续变化的 cqw 几何。侧栏支持手动折叠，折叠后左缘 hover 临时预览且不改变主内容布局。真实主窗口主体使用 position:absolute + inset:0 贴合系统窗口边界，阴影交给 Tauri/Windows 原生无装饰阴影；浏览器预览保留独立留白和柔和 CSS 阴影；侧栏右缘提供拖拽调整手柄。"
+    notes: "样式全部使用 rr-main-* / rr-memory-* 作用域；全局外壳、今天页和记忆页以 1440×900 / scale 1 作为设计基线，但真实启动尺寸由 Rust 窗口状态恢复或工作区自适应决定。480px 是 Tauri 外层窗口下限；Windows 无边框 resize 边界会使实际 WebView 客户区略小，因此 `.rr-main-app` 不再重复声明 480px CSS 最小宽度，而是以 `inset:0; min-width:0` 服从真实客户区，避免窄窗横向溢出裁掉 composer 右边距。浏览器预览排版固定 1440×900 画布后整体等比缩放，响应式规则按应用容器尺寸触发；今天页正文与底部 composer 共用 --rr-main-dialogue-width（默认最大 736px，窄档按 48/40/28px 稳定对称边距），不使用随每个像素连续变化的 cqw 几何。侧栏固定收放由 --rr-main-sidebar-layout-width 驱动 rr-main-sidebar-slot，槽宽与侧栏 translateX 共用 260ms 缓动，正文连续推开/收回；折叠后仅左上角固定按钮 hover 临时预览，预览只改变绝对定位侧栏的 translateX，布局槽保持 0，因此关闭时不挤动主页面。侧栏调宽时由 is-sidebar-resizing、窗口连续缩放时由 is-window-resizing 禁用槽、侧栏与标题栏过渡。真实主窗口主体使用 position:absolute + inset:0 贴合系统窗口边界并保留圆角，阴影交给 Tauri/Windows 原生无装饰阴影；浏览器预览保留独立留白和柔和 CSS 阴影；侧栏右缘提供拖拽调整手柄。"
     risk: "不要把主应用浅色 token 写回 overlay 的 tokens.css。"
 
   - path: "src/styles/conversation-page.css"
@@ -989,7 +1014,7 @@ source_areas:
     read_when:
       - "调整窗口 label、入口 URL、初始尺寸、任务栏或无边框行为。"
       - "排查启动时主应用和快捷 overlay 的显示策略。"
-    notes: "main 的静态回退尺寸仍为 1440×900、最小 840×600，但 1440×900 只是设计基线：Rust setup 会在窗口隐藏时先应用工作区约 86% 的自适应默认值，再用有效历史 SIZE/POSITION/MAXIMIZED 覆盖，最后才由手动启动路径显示。main 开启 transparent 以支持无装饰窗口，并开启 shadow 使用 Windows 原生窗口阴影；overlay 保留透明、置顶、跳过任务栏、启动隐藏和 shadow:false 的浮窗配置。"
+    notes: "main 的静态回退尺寸仍为 1440×900、最小 480×600；在本机 150% 缩放下约为 720×900 物理像素，与 Codex 参考最小宽度一致。1440×900 只是设计基线：Rust setup 会在窗口隐藏时先应用工作区约 86% 的自适应默认值，再用有效历史 SIZE/POSITION/MAXIMIZED 覆盖，最后才由手动启动路径显示。main 开启 transparent 以使用 Windows 透明合成路径，并以 #f2f1ed 作为启动期原生/WebView 默认背景，避免尺寸追赶时暴露黑白底板；shadow 使用 Windows 原生窗口阴影。overlay 保留透明、置顶、跳过任务栏、启动隐藏和 shadow:false 的浮窗配置。"
     risk: "两类窗口必须保持独立 URL、尺寸和生命周期；不要把 main 的位置或显示状态写入 overlay 的进程内位置缓存。"
 
   - path: "src-tauri/src/windows_uia.rs"
@@ -1009,7 +1034,7 @@ source_areas:
       - "调整托盘菜单、主窗口关闭/恢复、快捷键注册或安全退出。"
       - "排查手动/开机启动可见性、第二实例或运行时与 SQLite 偏好不一致。"
       - "排查窗口重启后尺寸、位置、最大化状态未恢复，或显示器/DPI 变化后窗口越界。"
-    notes: "托盘左键恢复主窗口，右键菜单仅打开/快速查询/退出；快速查询复用既有 overlay intent。main 使用官方 tauri-plugin-window-state 的独立 .main-window-state.json，只保存 SIZE、POSITION、MAXIMIZED；setup 在首次显示前手动恢复，并把无效或离屏几何约束到当前/主显示器工作区。无历史状态时按工作区约 86% 生成不小于 840×600、不大于 1440×900 的默认边界；最大化恢复保留修正后的普通窗口边界。运行时同时保存 SQLite 快捷键映射、实际 registered set 和两项独立 startup error；任意偏好保存失败会把物理注册与完整 active 元数据一起回滚。单实例回调只对再次手动启动恢复主窗口。真正退出由主窗口先完成设置写入和写作 flush；取消先清除 pending ID，窗口显示/聚焦失败仅记录警告而不把前端留在过期请求上。"
+    notes: "托盘左键恢复主窗口，右键菜单仅打开/快速查询/退出；快速查询复用既有 overlay intent。main 使用官方 tauri-plugin-window-state 的独立 .main-window-state.json，只保存 SIZE、POSITION、MAXIMIZED；setup 在首次显示前手动恢复，并把无效或离屏几何约束到当前/主显示器工作区。无历史状态时按工作区约 86% 生成不小于 480×600、不大于 1440×900 的默认边界；历史尺寸也按相同 DPI 感知最小值约束，最大化恢复保留修正后的普通窗口边界。运行时同时保存 SQLite 快捷键映射、实际 registered set 和两项独立 startup error；任意偏好保存失败会把物理注册与完整 active 元数据一起回滚。单实例回调只对再次手动启动恢复主窗口。真正退出由主窗口先完成设置写入和写作 flush；取消先清除 pending ID，窗口显示/聚焦失败仅记录警告而不把前端留在过期请求上。"
     risk: "不得让托盘退出绕过安全退出，或让开机启动、第二实例创建额外托盘和数据库连接；overlay 窗口边界不得在此改写。"
 
   - path: "src-tauri/src/explanation.rs"
@@ -1203,7 +1228,7 @@ app_scaffold:
     read_when:
       - "调整 npm/pnpm 脚本。"
       - "排查前端构建或 Tauri CLI 调用。"
-    notes: "包管理器使用 pnpm；当前脚本包含 dev、build、preview、test:conversation、test:review、test:writing、test:settings 和 tauri。官方 @tauri-apps/plugin-dialog 同时提供 Markdown 保存路径与本地主题目录选择；test:settings 包含主题聚焦测试。"
+    notes: "包管理器使用 pnpm；当前脚本包含 dev、build、preview、test:conversation、test:review、test:writing、test:settings 和 tauri。官方 @tauri-apps/plugin-dialog 同时提供 Markdown 保存路径与本地主题目录选择；test:settings 包含主题聚焦测试与侧栏自动收放聚焦测试。"
     risk: "不要无依据新增运行时依赖。"
 
   - path: "pnpm-lock.yaml"
@@ -1239,7 +1264,7 @@ app_scaffold:
     read_when:
       - "调整主窗口插件权限。"
       - "排查原生保存对话框权限。"
-    notes: "主窗口只开放主题目录选择所需的 dialog:allow-open、导出/备份所需的 dialog:allow-save 和既有 opener 权限；主题文件仍由受控 Rust command 读取，备份内容由受控 Rust command 写入用户选择的路径，数据目录由 Rust 自行解析后打开。透明窗口自绘边缘 resize 需要 core:window:allow-start-resize-dragging 权限（前端 getCurrentWindow().startResizeDragging 调用）。"
+    notes: "主窗口只开放主题目录选择所需的 dialog:allow-open、导出/备份所需的 dialog:allow-save 和既有 opener 权限；主题文件仍由受控 Rust command 读取，备份内容由受控 Rust command 写入用户选择的路径，数据目录由 Rust 自行解析后打开。透明窗口自绘边缘 resize 需要 core:window:allow-start-resize-dragging；主题画布同步到原生窗口与 WebView2 需要 core:window:allow-set-background-color 和 core:webview:allow-set-webview-background-color。"
     risk: "只开放当前功能需要的权限，不使用 dialog:default 或无关文件系统权限扩大范围。"
 
 external_refs:

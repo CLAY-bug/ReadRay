@@ -98,9 +98,18 @@ function UserMessage({ message }: { message: ConversationUserMessage }) {
 
     measure();
     void document.fonts.ready.then(measure);
-    const observer = new ResizeObserver(measure);
+    // 窗口缩放期间每条消息都会触发观察回调；settle 后统一测量，避免逐帧强制布局。
+    let measureTimer: number | undefined;
+    const measureAfterSettles = () => {
+      window.clearTimeout(measureTimer);
+      measureTimer = window.setTimeout(measure, 120);
+    };
+    const observer = new ResizeObserver(measureAfterSettles);
     observer.observe(copy);
-    return () => observer.disconnect();
+    return () => {
+      observer.disconnect();
+      window.clearTimeout(measureTimer);
+    };
   }, [message.content]);
 
   const lineHeight = copyRef.current
@@ -1006,10 +1015,16 @@ function ConversationPage({
     update();
     scroll.addEventListener("scroll", update, { passive: true });
 
+    // 滚动监听保持即时；窗口缩放触发的观察回调按 settle 更新，避免逐帧读取滚动几何。
+    let updateTimer: number | undefined;
+    const updateAfterSettles = () => {
+      window.clearTimeout(updateTimer);
+      updateTimer = window.setTimeout(update, 120);
+    };
     const observer =
       typeof ResizeObserver === "undefined"
         ? null
-        : new ResizeObserver(update);
+        : new ResizeObserver(updateAfterSettles);
     observer?.observe(scroll);
     const messageColumn = scroll.querySelector<HTMLElement>(
       ".rr-conversation-message-column",
@@ -1021,6 +1036,7 @@ function ConversationPage({
     return () => {
       scroll.removeEventListener("scroll", update);
       observer?.disconnect();
+      window.clearTimeout(updateTimer);
     };
   }, [updateScrollToBottomVisibility]);
 

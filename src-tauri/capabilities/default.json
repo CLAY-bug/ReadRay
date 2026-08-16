@@ -6,6 +6,8 @@
   "permissions": [
     "core:default",
     "core:window:allow-start-resize-dragging",
+    "core:window:allow-set-background-color",
+    "core:webview:allow-set-webview-background-color",
     "opener:default",
     "dialog:allow-open",
     "dialog:allow-save",

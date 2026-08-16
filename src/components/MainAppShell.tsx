@@ -25,6 +25,12 @@ import {
   loadMainSidebarWidth,
   saveMainSidebarWidth,
 } from "../mainSidebarWidth";
+import {
+  createSidebarAutoCollapseState,
+  reduceSidebarAutoCollapse,
+  releaseSidebarAutoCollapse,
+  type SidebarAutoCollapseState,
+} from "../sidebarAutoCollapse";
 import type { MemoryPageViewModel } from "../memoryViewModel";
 import type { MemoryService } from "../memoryService";
 import type { ReviewService } from "../reviewService";
@@ -133,6 +139,9 @@ function MainAppShell({
   onClose = noop,
 }: MainAppShellProps) {
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+  const [sidebarAutoCollapsed, setSidebarAutoCollapsed] = useState(false);
+  const [sidebarResizing, setSidebarResizing] = useState(false);
+  const [windowResizing, setWindowResizing] = useState(false);
   const [sidebarWidth, setSidebarWidth] = useState<number | null>(() =>
     loadMainSidebarWidth(),
   );
@@ -160,9 +169,24 @@ function MainAppShell({
   const activePageIdRef = useRef(activePageId);
   const activeConversationIdRef = useRef(activeConversationId);
   const conversationRequestRef = useRef(conversationRequest);
+  const sidebarCollapsedRef = useRef(sidebarCollapsed);
+  const sidebarAutoCollapsedRef = useRef(sidebarAutoCollapsed);
+  const sidebarAutoCollapseRef = useRef<SidebarAutoCollapseState>(
+    createSidebarAutoCollapseState(),
+  );
+  const windowResizingRef = useRef(false);
+  const windowResizeSettleTimerRef = useRef<number | null>(null);
+  const lastObservedWindowSizeRef = useRef<{
+    width: number;
+    height: number;
+  } | null>(null);
   activePageIdRef.current = activePageId;
   activeConversationIdRef.current = activeConversationId;
   conversationRequestRef.current = conversationRequest;
+  sidebarCollapsedRef.current = sidebarCollapsed;
+  sidebarAutoCollapsedRef.current = sidebarAutoCollapsed;
+  // 有效折叠 = 用户手动折叠或窗口过窄触发的自动折叠；手动切换优先表达用户意图。
+  const sidebarEffectiveCollapsed = sidebarCollapsed || sidebarAutoCollapsed;
 
   function updateActivePage(
     nextPageId: MainAppNavigationId | "conversation" | "conversation-history",
@@ -217,16 +241,32 @@ function MainAppShell({
   function toggleSidebar() {
     clearSidebarPeekCloseTimer();
     setSidebarPeekOpen(false);
-    setSidebarCollapsed((collapsed) => !collapsed);
+    if (sidebarCollapsedRef.current || sidebarAutoCollapsedRef.current) {
+      // 当前处于折叠（手动或自动）：用户意图是展开，并清除自动折叠状态。
+      sidebarAutoCollapseRef.current = releaseSidebarAutoCollapse(
+        sidebarAutoCollapseRef.current,
+      );
+      setSidebarAutoCollapsed(false);
+      setSidebarCollapsed(false);
+      return;
+    }
+    setSidebarCollapsed(true);
   }
 
   const commitSidebarWidth = useCallback((width: number) => {
+    setSidebarResizing(false);
     setSidebarWidth(width);
     saveMainSidebarWidth(width);
   }, []);
 
+  // resizer 逐帧回调期间挂出 is-sidebar-resizing，抑制宽度过渡追赶指针。
+  const handleSidebarWidthChange = useCallback((width: number) => {
+    setSidebarResizing(true);
+    setSidebarWidth(width);
+  }, []);
+
   function handleSidebarPeekEnter() {
-    if (!sidebarCollapsed) {
+    if (!sidebarEffectiveCollapsed) {
       return;
     }
 
@@ -235,7 +275,7 @@ function MainAppShell({
   }
 
   function handleSidebarPeekLeave() {
-    if (!sidebarCollapsed) {
+    if (!sidebarEffectiveCollapsed) {
       return;
     }
 
@@ -251,6 +291,85 @@ function MainAppShell({
       clearSidebarPeekCloseTimer();
     };
   }, []);
+
+  // 首次测量立即决定窄窗是否折叠；连续窗口缩放只记录最终宽度，待 120ms
+  // 稳定后再执行响应式切换，避免侧栏过渡与 WebView2 尺寸追赶同时发生。
+  useEffect(() => {
+    const root = appRootRef.current;
+    if (!root || typeof ResizeObserver === "undefined") {
+      return;
+    }
+
+    const applySettledWidth = (width: number) => {
+      const previous = sidebarAutoCollapseRef.current;
+      const next = reduceSidebarAutoCollapse(
+        previous,
+        width,
+        sidebarCollapsedRef.current,
+      );
+      if (next === previous) {
+        return;
+      }
+      sidebarAutoCollapseRef.current = next;
+      if (next.autoCollapsed !== previous.autoCollapsed) {
+        setSidebarAutoCollapsed(next.autoCollapsed);
+      }
+    };
+
+    const setWindowResizeActivity = (active: boolean) => {
+      if (windowResizingRef.current === active) {
+        return;
+      }
+      windowResizingRef.current = active;
+      setWindowResizing(active);
+    };
+
+    const observer = new ResizeObserver((entries) => {
+      const entry = entries[0];
+      if (!entry) {
+        return;
+      }
+      const width = Math.round(entry.contentRect.width);
+      const height = Math.round(entry.contentRect.height);
+      const previousSize = lastObservedWindowSizeRef.current;
+      if (previousSize?.width === width && previousSize.height === height) {
+        return;
+      }
+      lastObservedWindowSizeRef.current = { width, height };
+      if (previousSize === null) {
+        applySettledWidth(width);
+        return;
+      }
+
+      setWindowResizeActivity(true);
+      if (windowResizeSettleTimerRef.current !== null) {
+        window.clearTimeout(windowResizeSettleTimerRef.current);
+      }
+      windowResizeSettleTimerRef.current = window.setTimeout(() => {
+        windowResizeSettleTimerRef.current = null;
+        applySettledWidth(width);
+        setWindowResizeActivity(false);
+      }, 120);
+    });
+    observer.observe(root);
+    return () => {
+      observer.disconnect();
+      if (windowResizeSettleTimerRef.current !== null) {
+        window.clearTimeout(windowResizeSettleTimerRef.current);
+        windowResizeSettleTimerRef.current = null;
+      }
+      windowResizingRef.current = false;
+      lastObservedWindowSizeRef.current = null;
+    };
+  }, []);
+
+  // 自动展开后侧栏恢复固定，丢弃遗留的 hover 预览状态。
+  useEffect(() => {
+    if (!sidebarEffectiveCollapsed) {
+      clearSidebarPeekCloseTimer();
+      setSidebarPeekOpen(false);
+    }
+  }, [sidebarEffectiveCollapsed]);
 
   useEffect(() => {
     let ignore = false;
@@ -503,12 +622,16 @@ function MainAppShell({
     <button
       className="rr-main-collapse"
       type="button"
-      aria-label={sidebarCollapsed ? "展开左侧栏" : "折叠左侧栏"}
-      aria-expanded={!sidebarCollapsed}
-      title={`${sidebarCollapsed ? "展开" : "折叠"}左侧栏（Ctrl+B）`}
+      aria-label={sidebarEffectiveCollapsed ? "展开左侧栏" : "折叠左侧栏"}
+      aria-expanded={!sidebarEffectiveCollapsed}
+      title={`${sidebarEffectiveCollapsed ? "展开" : "折叠"}左侧栏（Ctrl+B）`}
       onClick={toggleSidebar}
+      onPointerEnter={handleSidebarPeekEnter}
+      onPointerLeave={handleSidebarPeekLeave}
     >
-      <MainAppIcon name="panel" />
+      <MainAppIcon
+        name={sidebarEffectiveCollapsed ? "panel-closed" : "panel-open"}
+      />
     </button>
   );
 
@@ -529,18 +652,19 @@ function MainAppShell({
       inert={interactionBlocked ? true : undefined}
       aria-busy={interactionBlocked || undefined}
       className={`rr-main-app${isMaximized ? " is-maximized" : ""}${
-        sidebarCollapsed ? " is-sidebar-collapsed" : ""
+        sidebarEffectiveCollapsed ? " is-sidebar-collapsed" : ""
       }${
-        sidebarCollapsed && sidebarPeekOpen ? " is-sidebar-peeking" : ""
-      }${activePageId === "conversation" ? " is-conversation-page" : ""}`}
+        sidebarEffectiveCollapsed && sidebarPeekOpen ? " is-sidebar-peeking" : ""
+      }${sidebarResizing ? " is-sidebar-resizing" : ""}${
+        windowResizing ? " is-window-resizing" : ""
+      }${
+        activePageId === "conversation" ? " is-conversation-page" : ""
+      }`}
       style={
         sidebarWidth === null
           ? undefined
           : ({
-              "--rr-main-sidebar-width": sidebarCollapsed
-                ? "0px"
-                : `${sidebarWidth}px`,
-              "--rr-main-sidebar-peek-width": `${sidebarWidth}px`,
+              "--rr-main-sidebar-width": `${sidebarWidth}px`,
             } as CSSProperties)
       }
     >
@@ -555,14 +679,6 @@ function MainAppShell({
           }}
         />
       ))}
-      {sidebarCollapsed && (
-        <div
-          className="rr-main-sidebar-peek-trigger"
-          aria-hidden="true"
-          onPointerEnter={handleSidebarPeekEnter}
-          onPointerLeave={handleSidebarPeekLeave}
-        />
-      )}
       <header
         className="rr-main-titlebar"
         aria-label="ReadRay 窗口标题栏"
@@ -570,8 +686,14 @@ function MainAppShell({
       >
         <div className="rr-main-titlebar-leading">
           <div className="rr-main-brand-zone">
-            {!sidebarCollapsed && <span className="rr-main-brand-mark">R</span>}
-            {!sidebarCollapsed && <span className="rr-main-brand-name">ReadRay</span>}
+            <img
+              className="rr-main-brand-icon"
+              src="/branding/readray-startup-icon.png"
+              alt=""
+              width="24"
+              height="24"
+            />
+            <span className="rr-main-brand-name">ReadRay</span>
           </div>
           {collapseButton}
         </div>
@@ -609,33 +731,35 @@ function MainAppShell({
       </header>
 
       <div className="rr-main-workspace">
-        <MainSidebar
-          collapsed={sidebarCollapsed}
-          width={sidebarWidth}
-          onWidthChange={setSidebarWidth}
-          onWidthChangeEnd={commitSidebarWidth}
-          navigation={viewModel.navigation}
-          recentConversations={recentConversations}
-          recentStatus={recentStatus}
-          recentError={recentError}
-          activeNavigationId={
-            activePageId === "conversation" ||
-            activePageId === "conversation-history"
-              ? undefined
-              : activePageId
-          }
-          activeConversationId={
-            activePageId === "conversation" ? activeConversationId : undefined
-          }
-          onNewConversation={handleNewConversation}
-          onNavigate={handleNavigate}
-          onRecentConversationSelect={handleRecentConversationSelect}
-          onRecentConversationContextMenu={handleConversationContextMenu}
-          onViewAllConversations={handleViewAllConversations}
-          onRecentRetry={() => setRecentRetryToken((token) => token + 1)}
-          onPeekEnter={handleSidebarPeekEnter}
-          onPeekLeave={handleSidebarPeekLeave}
-        />
+        <div className="rr-main-sidebar-slot">
+          <MainSidebar
+            collapsed={sidebarEffectiveCollapsed}
+            width={sidebarWidth}
+            onWidthChange={handleSidebarWidthChange}
+            onWidthChangeEnd={commitSidebarWidth}
+            navigation={viewModel.navigation}
+            recentConversations={recentConversations}
+            recentStatus={recentStatus}
+            recentError={recentError}
+            activeNavigationId={
+              activePageId === "conversation" ||
+              activePageId === "conversation-history"
+                ? undefined
+                : activePageId
+            }
+            activeConversationId={
+              activePageId === "conversation" ? activeConversationId : undefined
+            }
+            onNewConversation={handleNewConversation}
+            onNavigate={handleNavigate}
+            onRecentConversationSelect={handleRecentConversationSelect}
+            onRecentConversationContextMenu={handleConversationContextMenu}
+            onViewAllConversations={handleViewAllConversations}
+            onRecentRetry={() => setRecentRetryToken((token) => token + 1)}
+            onPeekEnter={handleSidebarPeekEnter}
+            onPeekLeave={handleSidebarPeekLeave}
+          />
+        </div>
         {activePageId === "conversation" ? (
           conversationService ? (
             <ConversationPage

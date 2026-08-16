@@ -8,6 +8,7 @@ import {
 import { listen } from "@tauri-apps/api/event";
 import { desktopSaveCoordinator } from "./desktopLifecycle";
 import { getPrefetchedThemeSnapshot } from "./themePrefetch.ts";
+import { syncMainWindowBackground } from "./mainWindowBackground.ts";
 import type { ThemeService } from "./themeService.ts";
 import {
   ThemeMutationCoordinator,
@@ -53,6 +54,7 @@ export function useAppTheme(service: ThemeService | null): AppThemeController {
     const mainApp = document.querySelector<HTMLElement>(".rr-main-app");
     if (!mainApp) throw new Error("ReadRay 主应用尚未就绪，无法应用主题。");
     applyThemeVariables(mainApp.style, validated);
+    void syncMainWindowBackground(validated);
     snapshotRef.current = validated;
     setSnapshot(validated);
     setStatus("ready");

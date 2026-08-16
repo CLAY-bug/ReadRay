@@ -59,5 +59,6 @@ test("主边栏拖动期间只更新内存并在拖动结束后提交存储", as
     /commitSidebarWidth[\s\S]*?saveMainSidebarWidth\(width\)[\s\S]*?onWidthChangeEnd=\{commitSidebarWidth\}/,
   );
   assert.match(styles, /--rr-main-sidebar-width: calc\(252px \* var\(--rr-main-design-scale\)\)/);
-  assert.match(styles, /\.is-sidebar-collapsed \{\s*--rr-main-sidebar-width: 0px;/);
+  assert.match(styles, /\.is-sidebar-collapsed \{\s*--rr-main-sidebar-layout-width: 0px;/);
+  assert.doesNotMatch(styles, /\.is-sidebar-collapsed \{\s*--rr-main-sidebar-width: 0px;/);
 });

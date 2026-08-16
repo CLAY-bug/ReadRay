@@ -5,6 +5,11 @@ import { TauriThemeRepository } from "../src/themeRepository.ts";
 import { RepositoryThemeService } from "../src/themeService.ts";
 import { ThemeMutationCoordinator } from "../src/themeMutationCoordinator.ts";
 import {
+  __setMainWindowBackgroundForTest,
+  syncMainWindowBackground,
+  toMainWindowBackgroundColor,
+} from "../src/mainWindowBackground.ts";
+import {
   applyThemeVariables,
   DEFAULT_THEME_SNAPSHOT,
   FLEXOKI_THEME,
@@ -50,6 +55,58 @@ function styleTarget(initial = {}) {
     removeProperty: (name) => values.delete(name),
   };
 }
+
+test("主题画布色可无损转换为 Tauri 主窗口背景色", () => {
+  assert.deepEqual(toMainWindowBackgroundColor("#f2f1ed"), [242, 241, 237]);
+  assert.deepEqual(toMainWindowBackgroundColor("#fff"), [255, 255, 255]);
+  assert.deepEqual(toMainWindowBackgroundColor("#1234"), [17, 34, 51, 68]);
+  assert.deepEqual(toMainWindowBackgroundColor("rgb(16, 15, 15)"), [16, 15, 15]);
+  assert.deepEqual(
+    toMainWindowBackgroundColor("rgba(38, 37, 30, 0.5)"),
+    [38, 37, 30, 128],
+  );
+  assert.throws(
+    () => toMainWindowBackgroundColor("transparent"),
+    /不是主题协议允许的规范颜色/,
+  );
+});
+
+test("Tauri 主窗口背景同步使用当前主题画布色", async () => {
+  const colors = [];
+  globalThis.window = { __TAURI_INTERNALS__: {} };
+  __setMainWindowBackgroundForTest(async (color) => {
+    colors.push(color);
+  });
+  try {
+    await syncMainWindowBackground(DEFAULT_THEME_SNAPSHOT);
+  } finally {
+    delete globalThis.window;
+  }
+  assert.deepEqual(colors, [[242, 241, 237]]);
+});
+
+test("主窗口配置使用透明合成并给原生窗口与 WebView 开放主题背景同步", async () => {
+  const [configSource, capabilitySource, themeHookSource] = await Promise.all([
+    readFile("src-tauri/tauri.conf.json", "utf8"),
+    readFile("src-tauri/capabilities/default.json", "utf8"),
+    readFile("src/useAppTheme.ts", "utf8"),
+  ]);
+  const config = JSON.parse(configSource);
+  const capability = JSON.parse(capabilitySource);
+  const mainWindow = config.app.windows.find((window) => window.label === "main");
+
+  assert.equal(mainWindow.transparent, true);
+  assert.equal(mainWindow.backgroundColor, "#f2f1ed");
+  assert.equal(mainWindow.minWidth, 480);
+  assert.equal(mainWindow.minHeight, 600);
+  assert.ok(capability.permissions.includes("core:window:allow-set-background-color"));
+  assert.ok(
+    capability.permissions.includes(
+      "core:webview:allow-set-webview-background-color",
+    ),
+  );
+  assert.match(themeHookSource, /syncMainWindowBackground\(validated\)/);
+});
 
 test("主题 repository 只把原生目录选择结果交给 typed Rust commands，取消不读取文件", async () => {
   const calls = [];

@@ -256,14 +256,22 @@ function WritingAgentPanel({
     }
   }, [question]);
 
+  // 窗口缩放期间按 settle 重新测量，避免拖动每一帧强制同步布局。
   useEffect(() => {
-    const resize = () => {
-      if (questionInputRef.current) {
-        resizeQuestionInput(questionInputRef.current);
-      }
+    let resizeTimer: number | undefined;
+    const resizeAfterWindowSettles = () => {
+      window.clearTimeout(resizeTimer);
+      resizeTimer = window.setTimeout(() => {
+        if (questionInputRef.current) {
+          resizeQuestionInput(questionInputRef.current);
+        }
+      }, 120);
     };
-    window.addEventListener("resize", resize);
-    return () => window.removeEventListener("resize", resize);
+    window.addEventListener("resize", resizeAfterWindowSettles);
+    return () => {
+      window.removeEventListener("resize", resizeAfterWindowSettles);
+      window.clearTimeout(resizeTimer);
+    };
   }, []);
 
   useLayoutEffect(() => {
