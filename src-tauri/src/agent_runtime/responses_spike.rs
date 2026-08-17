@@ -387,28 +387,8 @@ mod tests {
     }
 
     fn stable_source_id(url: &str) -> String {
-        // 四路独立 FNV-1a 变体避免把 URL 本身或其前缀暴露到 source_id；不新增 hash 依赖。
-        const OFFSET_BASIS: [u64; 4] = [
-            0xcbf29ce484222325,
-            0x84222325cbf29ce4,
-            0x9e3779b185ebca87,
-            0xd6e8feb86659fd93,
-        ];
-        const PRIME: u64 = 0x00000100000001b3;
-        let mut lanes = OFFSET_BASIS;
-        for (index, byte) in url.bytes().enumerate() {
-            for (lane_index, lane) in lanes.iter_mut().enumerate() {
-                let salt = (lane_index as u64 + 1).wrapping_mul(0x9e3779b9);
-                *lane ^= u64::from(byte)
-                    .wrapping_add((index as u64).rotate_left(lane_index as u32))
-                    ^ salt;
-                *lane = lane.wrapping_mul(PRIME);
-            }
-        }
-        format!(
-            "deepseek-source-{0:016x}{1:016x}{2:016x}{3:016x}",
-            lanes[0], lanes[1], lanes[2], lanes[3]
-        )
+        // 与 network.rs 共享同一来源哈希实现（统一前缀语义，不暴露 URL）。
+        crate::agent_runtime::network::stable_source_id(url)
     }
 
     fn function_request_body(model: &str) -> Value {
@@ -786,7 +766,17 @@ event: {}\ndata: {{\"type\":\"{}\",\"sequence_number\":1}}\n",
         )
         .unwrap();
         assert_ne!(first_long.source_id, second_long.source_id);
-        assert!(first_long.source_id.starts_with("deepseek-source-"));
+        assert!(first_long.source_id.starts_with("source-"));
+        assert!(!first_long.source_id.contains("deepseek"));
+        // 与 network.rs 共享实现：同一 URL 生成完全相同的 source_id。
+        assert_eq!(
+            first.source_id,
+            crate::agent_runtime::network::stable_source_id("https://example.com/a")
+        );
+        assert_eq!(
+            first_long.source_id,
+            crate::agent_runtime::network::stable_source_id(&first_long.url)
+        );
     }
 
     fn load_project_env_for_live_test() {
