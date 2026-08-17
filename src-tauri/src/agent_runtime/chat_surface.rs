@@ -394,6 +394,11 @@ pub(crate) fn conversation_l1_tools_with_provider(
 }
 
 /// 对话面能力策略：允许 L1 外部只读（web_search/fetch_web_page 由模型自主选择）。
+///
+/// 边界（任务 3 评审 #4）：方案 §5.3 要求"用户决定应用是否允许某一类能力"，
+/// 但全局网络权限门（设置页联网开关）尚未实现——当前默认允许 L1。未来接入
+/// 偏好（app_preferences 持久化）后，本函数应按用户偏好回落
+/// `RiskLevel::TrustedLocalReadOnly`（仅 L0 本地只读），不再无条件开放 L1。
 pub(crate) fn conversation_capability() -> CapabilityPolicy {
     CapabilityPolicy {
         allowed_risk: RiskLevel::ExternalReadOnly,
