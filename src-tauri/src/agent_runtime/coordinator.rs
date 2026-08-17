@@ -166,8 +166,8 @@ impl AgentRunCoordinator {
     /// 契约：所有声明性失败（provider 错误、未知工具、schema/策略拒绝、参数
     /// 增量解析失败、工具执行失败、取消、预算/超时）都以 `Ok(outcome)` 加唯一
     /// 终态 AgentEvent 收尾，事件序列满足 `protocol::validate_event_sequence`；
-    /// 只有内部不变量破坏（sink 拒绝事件、executor 返回不属于本次调用的结果、
-    /// 结果未通过协议级校验）才返回 `Err`。
+    /// executor 返回不属于本次调用的结果或结果未通过协议级校验时，同样以
+    /// `RunFailed` 终态收尾并返回 `Ok(outcome)`；只有 sink 拒绝事件才返回 `Err`。
     pub fn run(
         &mut self,
         request: &RunRequest,
