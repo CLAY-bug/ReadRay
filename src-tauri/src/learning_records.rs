@@ -5282,6 +5282,7 @@ INSERT INTO review_card_generation_failures (
         let upgraded = LearningRecordStore::open(&path).unwrap();
         let target_backfill = upgraded.connection.unchecked_transaction().unwrap();
         backfill_learning_targets_v19(&target_backfill).unwrap();
+        backfill_legacy_compatibility_targets_v19(&target_backfill).unwrap();
         rebuild_learning_target_review_states_v19(&target_backfill).unwrap();
         audit_learning_target_aggregation_v19(&target_backfill).unwrap();
         target_backfill.commit().unwrap();
@@ -5303,7 +5304,14 @@ INSERT INTO review_card_generation_failures (
         assert_eq!(page.total, 1);
         assert_eq!(page.records[0].learning_target_text, "legacy target");
         assert_eq!(page.records[0].query_direction, QueryDirection::EnToZh);
-        assert!(upgraded.get(42).unwrap().is_none());
+        // 无可靠英文投影的旧记录按 v19 设计绑定 legacy_compat 目标：Memory 列表排除，
+        // 但兼容路径仍可读取（direction 按 zh_to_en 投影）。
+        let legacy_record = upgraded
+            .get(42)
+            .unwrap()
+            .expect("中文旧记录必须绑定 legacy_compat 目标");
+        assert_eq!(legacy_record.learning_target_text, "旧中文记录");
+        assert_eq!(legacy_record.query_direction, QueryDirection::ZhToEn);
         drop(upgraded);
         fs::remove_dir_all(directory).unwrap();
     }
