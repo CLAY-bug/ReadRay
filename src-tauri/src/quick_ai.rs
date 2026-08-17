@@ -468,9 +468,21 @@ where
         cancellation: &cancellation,
         sink: &mut session_sink,
     };
-    let outcome = coordinator
-        .run(&request, &mut deps)
-        .map_err(|error| error.message)?;
+    let outcome = match coordinator.run(&request, &mut deps) {
+        Ok(outcome) => outcome,
+        Err(error) => {
+            // 持久化/UI sink 失败：run 行会停在中间状态，先落 failed 终态
+            // （尽力而为）再返回错误；pending user 保留，重试不受影响。
+            let now = unix_time_ms()?;
+            let _ = repository.transition(
+                &run_id,
+                AgentRunStatus::Failed,
+                Some("persistence_failed"),
+                now,
+            );
+            return Err(error.message);
+        }
+    };
 
     // 终态：completed 只能在 complete_turn 成功后写入（§16.3）。
     let now = unix_time_ms()?;
@@ -808,6 +820,7 @@ fn role_label(role: ConversationRole) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::agent_runtime::chat_surface::reset_run_id_counter_for_test;
     use crate::agent_runtime::coordinator::AgentEventSink;
     use crate::agent_runtime::fake_gateway::{FakeGateway, FakeScenario};
     use crate::agent_runtime::protocol::{
@@ -1576,6 +1589,69 @@ mod tests {
             .unwrap();
         assert_eq!(reconciled.status, AgentRunStatus::Completed);
         assert!(reconciled.completed_at_unix_ms.is_some());
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn agent_restart_retry_creates_unique_run_after_counter_reset() {
+        let (root, path) = test_database_path();
+        let registry = ToolRegistry::default();
+        let conversation_id = create_conversation(&path);
+        let abort = Arc::new(AtomicBool::new(false));
+
+        // 第一轮失败：run failed 落库，pending user 保留。
+        let mut events = Vec::new();
+        run_agent_at_path(
+            &path,
+            conversation_id,
+            1,
+            "Restart retry",
+            FakeScenario::GatewayNetworkError,
+            &registry,
+            &abort,
+            &mut events,
+        )
+        .unwrap_err();
+        let repository = AgentRunRepository::open(&path).unwrap();
+        let failed_run = repository
+            .latest_run_for_turn(conversation_id, 1)
+            .unwrap()
+            .unwrap();
+        assert_eq!(failed_run.status, AgentRunStatus::Failed);
+
+        // 模拟应用重启：进程内计数器归零（真实重启还会换 pid；时间推进保证唯一）。
+        reset_run_id_counter_for_test();
+        std::thread::sleep(std::time::Duration::from_millis(2));
+
+        // 重试同一轮次：新 run_id 不得与重启前碰撞，retry_of 指向旧 run。
+        let mut retry_events = Vec::new();
+        let completed = run_agent_at_path(
+            &path,
+            conversation_id,
+            1,
+            "Restart retry",
+            FakeScenario::FinalOnly,
+            &registry,
+            &abort,
+            &mut retry_events,
+        )
+        .unwrap();
+        assert_eq!(completed.messages.len(), 2);
+        let repository = AgentRunRepository::open(&path).unwrap();
+        let retry_run = repository
+            .latest_run_for_turn(conversation_id, 1)
+            .unwrap()
+            .unwrap();
+        assert_eq!(retry_run.status, AgentRunStatus::Completed);
+        assert_ne!(
+            retry_run.run_id, failed_run.run_id,
+            "重启后 run_id 不得碰撞"
+        );
+        assert_eq!(
+            retry_run.retry_of_run_id.as_deref(),
+            Some(failed_run.run_id.as_str())
+        );
+        reset_run_id_counter_for_test();
         let _ = fs::remove_dir_all(root);
     }
 

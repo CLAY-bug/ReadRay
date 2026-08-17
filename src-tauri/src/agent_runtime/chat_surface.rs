@@ -225,11 +225,24 @@ pub(crate) fn conversation_l0_tools(app_version: String) -> ToolRegistry {
     registry
 }
 
-/// 生成进程内唯一的 run_id（会话身份 + 单调计数器；重试生成新 run）。
+/// run_id 单调计数器（进程内；重启唯一性由 pid + unix 毫秒成分保证）。
+static RUN_ID_COUNTER: AtomicU64 = AtomicU64::new(0);
+
+/// 生成进程内唯一且跨重启不碰撞的 run_id（会话身份 + pid + unix 毫秒 + 单调
+/// 计数器）。pid 与时间戳保证应用重启后计数器归零也不会与旧 run 冲突。
 pub(crate) fn generate_run_id(conversation_id: i64, expected_user_sequence: i64) -> String {
-    static COUNTER: AtomicU64 = AtomicU64::new(0);
-    let counter = COUNTER.fetch_add(1, Ordering::Relaxed);
-    format!("run-{conversation_id}-{expected_user_sequence}-{counter}")
+    let counter = RUN_ID_COUNTER.fetch_add(1, Ordering::Relaxed);
+    let unix_ms = unix_time_ms().unwrap_or(0);
+    format!(
+        "run-{conversation_id}-{expected_user_sequence}-{}-{unix_ms}-{counter}",
+        std::process::id()
+    )
+}
+
+/// 测试专用：把计数器归零，模拟应用重启后重新开始计数。
+#[cfg(test)]
+pub(crate) fn reset_run_id_counter_for_test() {
+    RUN_ID_COUNTER.store(0, Ordering::Relaxed);
 }
 
 /// Unix 毫秒 → UTC 日历时间（"YYYY-MM-DD HH:MM (UTC)"）。无 chrono 依赖。
@@ -477,6 +490,20 @@ mod tests {
         let second = generate_run_id(1, 3);
         assert_ne!(first, second);
         assert!(first.starts_with("run-1-3-"));
+    }
+
+    #[test]
+    fn generate_run_ids_are_unique_across_process_restart() {
+        // 模拟应用重启：计数器归零后同一轮次再次生成，run_id 不得碰撞
+        // （pid 相同，依靠 unix 毫秒成分区分；推进时间保证确定性）。
+        let first = generate_run_id(1, 3);
+        reset_run_id_counter_for_test();
+        std::thread::sleep(std::time::Duration::from_millis(2));
+        let second = generate_run_id(1, 3);
+        assert_ne!(first, second, "重启后计数器归零也不能碰撞");
+        assert!(first.starts_with("run-1-3-"));
+        assert!(second.starts_with("run-1-3-"));
+        reset_run_id_counter_for_test();
     }
 
     #[test]

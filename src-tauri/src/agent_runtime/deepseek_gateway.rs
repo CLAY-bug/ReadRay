@@ -211,15 +211,18 @@ impl ModelGateway for DeepSeekChatGateway {
                     }
                 }
                 if let Some(raw_usage) = chunk.usage {
-                    let parsed = parse_model_token_usage_value(&raw_usage).map_err(|error| {
-                        agent_error(AgentErrorKind::ProviderProtocolError, error)
-                    })?;
+                    // "存在但格式非法"的 usage 只记日志并跳过，不杀死 run：
+                    // 统计失败不改变业务结果（与既有链路策略一致）。
+                    let Ok(parsed) = parse_model_token_usage_value(&raw_usage) else {
+                        eprintln!("READRAY_AGENT_USAGE_PARSE_FAILED={raw_usage}");
+                        continue;
+                    };
                     let usage = ModelUsage {
                         prompt_tokens: parsed.prompt_tokens,
                         completion_tokens: parsed.completion_tokens,
                         total_tokens: parsed.total_tokens,
                     };
-                    // 使用量尽力记录，统计失败不改变模型结果（与既有链路一致）。
+                    // 使用量尽力记录，统计写入失败不改变模型结果。
                     if let Err(error) = (self.record_usage)(&usage) {
                         eprintln!("READRAY_AGENT_USAGE_RECORD_FAILED={error}");
                     }
@@ -229,7 +232,12 @@ impl ModelGateway for DeepSeekChatGateway {
                     finish_reason = match reason {
                         "stop" => ModelFinishReason::Stop,
                         "tool_calls" => ModelFinishReason::ToolCalls,
-                        "length" => ModelFinishReason::Length,
+                        "length" => {
+                            // 边界：Length 已作为 Completed{Length} 输出，但任务 2
+                            // 协调器会把截断文本按完整回答持久化；截断的继续/UI
+                            // 语义属任务 4，此处只标注不实现。
+                            ModelFinishReason::Length
+                        }
                         other => ModelFinishReason::Provider(other.to_string()),
                     };
                 }
@@ -312,15 +320,18 @@ pub(crate) fn build_chat_request_body(
     messages: &[ProviderMessage],
     tools: &[ToolSchema],
 ) -> Value {
-    json!({
+    let mut body = json!({
         "model": model,
         "messages": messages.iter().map(project_message).collect::<Vec<_>>(),
-        "tools": tools.iter().map(project_tool).collect::<Vec<_>>(),
         "stream": true,
         "stream_options": { "include_usage": true },
         "max_tokens": AGENT_MAX_TOKENS,
         "temperature": AGENT_TEMPERATURE,
-    })
+    });
+    if !tools.is_empty() {
+        body["tools"] = json!(tools.iter().map(project_tool).collect::<Vec<_>>());
+    }
+    body
 }
 
 fn project_message(message: &ProviderMessage) -> Value {
@@ -663,6 +674,29 @@ mod tests {
         let outcome = outcome.expect("取消是正常收尾");
         assert!(outcome.aborted);
         assert_eq!(events.len(), 1, "取消后不再继续输出事件");
+    }
+
+    #[test]
+    fn malformed_usage_does_not_kill_the_run() {
+        let streamer = FakeStreamer::new(vec![
+            Ok(text_chunk("answer")),
+            Ok(finish_chunk(
+                "stop",
+                Some(json!({"prompt_tokens": 1, "completion_tokens": 2})),
+            )),
+        ]);
+        let (outcome, events, recorded_usage) = run_gateway(streamer, None);
+
+        // "存在但格式非法"的 usage（缺 total_tokens）只记日志，不终止 run。
+        let outcome = outcome.expect("usage 解析失败不得终止 run");
+        assert!(!outcome.aborted);
+        assert!(events
+            .iter()
+            .any(|event| matches!(event, ModelEvent::Completed { .. })));
+        assert!(!events
+            .iter()
+            .any(|event| matches!(event, ModelEvent::Usage { .. })));
+        assert!(recorded_usage.lock().unwrap().is_none());
     }
 
     #[test]
