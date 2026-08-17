@@ -266,7 +266,17 @@ impl ConversationStore {
         }
 
         let expected_next_sequence = current_max + 1;
-        if expected_user_sequence != expected_next_sequence {
+        // 尾消息是待回答 user（pending，上一轮失败/中断）时，允许以
+        // current_max+2 开启新轮次：旧 pending 保留在库中可重试，新消息
+        // 进入独立的新轮次（前端失败态直接输入新消息）。重试仍走上方
+        // stored_user 分支复用同一 sequence，幂等语义不变。
+        let tail_is_pending_user = current_max > 0
+            && stored_message_at(&transaction, conversation_id, current_max)?
+                .map(|message| role_from_storage(&message.role) == Ok(ConversationRole::User))
+                .unwrap_or(false);
+        let allowed_successor = expected_user_sequence == expected_next_sequence
+            || (tail_is_pending_user && expected_user_sequence == current_max + 2);
+        if !allowed_successor {
             return Err(format!(
                 "Quick AI 会话版本冲突：期望写入 user sequence={expected_user_sequence}，当前可写入 sequence={expected_next_sequence}。"
             ));
@@ -274,7 +284,9 @@ impl ConversationStore {
         if current_max > 0 {
             let last_message = stored_message_at(&transaction, conversation_id, current_max)?
                 .ok_or_else(|| "Quick AI 会话尾消息无法读取。".to_string())?;
-            if role_from_storage(&last_message.role)? != ConversationRole::Assistant {
+            if role_from_storage(&last_message.role)? != ConversationRole::Assistant
+                && expected_user_sequence != current_max + 2
+            {
                 return Err(format!(
                     "Quick AI 会话仍有待回答消息：user sequence={current_max}。"
                 ));
@@ -964,6 +976,83 @@ pub(crate) mod tests {
     }
 
     #[test]
+    fn failed_pending_user_can_be_retried_then_superseded_by_a_new_turn() {
+        let (root, path) = test_database_path();
+        let mut store = ConversationStore::open_path(&path).unwrap();
+        let conversation = store.create("deepseek-v4-flash").unwrap();
+
+        // 第一轮失败：pending user（seq 1）落库，无 assistant。
+        let PreparedTurn::Pending {
+            user_message_id: first_id,
+            ..
+        } = store
+            .prepare_turn(conversation.id, 1, "First failed question")
+            .unwrap()
+        else {
+            panic!("first prepare must be pending");
+        };
+
+        // 失败态直接重试（同一轮次）：复用同一 user_message_id，语义不变。
+        let PreparedTurn::Pending {
+            user_message_id: retried_id,
+            ..
+        } = store
+            .prepare_turn(conversation.id, 1, "First failed question")
+            .unwrap()
+        else {
+            panic!("retry must reuse the pending user");
+        };
+        assert_eq!(retried_id, first_id);
+
+        // 失败态直接输入新消息：新轮次使用 seq 3（跳过待完成的 assistant 位置 seq 2），
+        // 旧 pending 保留在库中（审计可追溯），不删除。
+        let PreparedTurn::Pending {
+            user_message_id: second_id,
+            ..
+        } = store
+            .prepare_turn(conversation.id, 3, "Second new question")
+            .unwrap()
+        else {
+            panic!("new turn must be pending");
+        };
+        assert_ne!(second_id, first_id);
+
+        // 新轮次的 pending 也可重试（seq 3 复用同一 user_message_id）。
+        let PreparedTurn::Pending {
+            user_message_id: second_retried,
+            ..
+        } = store
+            .prepare_turn(conversation.id, 3, "Second new question")
+            .unwrap()
+        else {
+            panic!("new turn retry must reuse pending");
+        };
+        assert_eq!(second_retried, second_id);
+
+        // 冲突序号仍被拒绝：偶数与跳过尾部的任意序号都不允许。
+        assert!(store
+            .prepare_turn(conversation.id, 2, "Even sequence")
+            .is_err());
+        assert!(store.prepare_turn(conversation.id, 4, "Skip two").is_err());
+
+        // 旧 pending 与新 pending 都保留（两条 user 消息）。
+        let snapshot = store.get_required(conversation.id).unwrap();
+        assert_eq!(snapshot.messages.len(), 2);
+        assert_eq!(snapshot.messages[0].content, "First failed question");
+        assert_eq!(snapshot.messages[1].content, "Second new question");
+
+        // 完成新轮次后恰好补一条 assistant，旧失败轮次不被改动。
+        let completed = store
+            .complete_turn(conversation.id, 3, second_id, "Second answer")
+            .unwrap();
+        assert_eq!(completed.messages.len(), 3);
+        assert_eq!(completed.messages[1].content, "Second new question");
+        assert_eq!(completed.messages[2].content, "Second answer");
+        drop(store);
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
     fn completed_turn_retry_returns_authoritative_snapshot_without_duplicates() {
         let (root, path) = test_database_path();
         let mut store = ConversationStore::open_path(&path).unwrap();
@@ -1004,7 +1093,7 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn stale_or_concurrent_turn_cannot_write_against_old_history() {
+    fn stale_or_concurrent_turn_cannot_overwrite_existing_history() {
         let (root, path) = test_database_path();
         let mut store = ConversationStore::open_path(&path).unwrap();
         let conversation = store
@@ -1023,10 +1112,19 @@ pub(crate) mod tests {
             .prepare_turn(conversation.id, 3, "Concurrent request B")
             .unwrap_err();
         assert!(content_conflict.contains("轮次冲突"));
-        let stale_version = store
-            .prepare_turn(conversation.id, 5, "Skip pending answer")
+        // pending 尾之后以 current_max+2 开启新轮次（失败/中断后用户直接输入
+        // 新消息的语义）：旧 pending 保留、新轮次取代推进。
+        let PreparedTurn::Pending { .. } = store
+            .prepare_turn(conversation.id, 5, "Superseding new turn")
+            .unwrap()
+        else {
+            panic!("pending 尾后的新轮次必须成功");
+        };
+        // 推进后，向旧 sequence 写入不同内容仍被拒绝（stale 保护）。
+        let stale = store
+            .prepare_turn(conversation.id, 3, "Old request after advance")
             .unwrap_err();
-        assert!(stale_version.contains("版本冲突") || stale_version.contains("待回答消息"));
+        assert!(stale.contains("轮次冲突"));
         let wrong_identity = store
             .complete_turn(
                 conversation.id,
@@ -1037,8 +1135,9 @@ pub(crate) mod tests {
             .unwrap_err();
         assert!(wrong_identity.contains("身份不匹配"));
         let loaded = store.get_required(conversation.id).unwrap();
-        assert_eq!(loaded.messages.len(), 3);
+        assert_eq!(loaded.messages.len(), 4);
         assert_eq!(loaded.messages[2].content, "Concurrent request A");
+        assert_eq!(loaded.messages[3].content, "Superseding new turn");
         drop(store);
         let _ = fs::remove_dir_all(root);
     }

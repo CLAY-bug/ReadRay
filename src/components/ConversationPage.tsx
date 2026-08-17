@@ -1210,7 +1210,9 @@ function ConversationPage({
     event.preventDefault();
     const prompt = draft.trim();
     const currentThread = threadRef.current;
-    if (!prompt || !currentThread || generation) {
+    // 只有真正生成中阻塞发送；失败/停止/截断态不锁死 composer——用户直接
+    // 输入新消息即进入新一轮（旧失败轮次按失败保留，pending 语义不变）。
+    if (!prompt || !currentThread || generation?.phase === "generating") {
       inputRef.current?.focus();
       return;
     }
@@ -1680,7 +1682,7 @@ function ConversationPage({
                 className="rr-main-send"
                 type="submit"
                 aria-label="发送"
-                disabled={!draft.trim() || generation !== null}
+                disabled={!draft.trim() || generation?.phase === "generating"}
               >
                 <MainAppIcon name="send-up" />
               </button>

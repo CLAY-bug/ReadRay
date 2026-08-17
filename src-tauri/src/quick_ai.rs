@@ -1748,6 +1748,64 @@ mod tests {
     }
 
     #[test]
+    fn agent_failure_then_new_message_enters_a_new_turn() {
+        let (root, path) = test_database_path();
+        let registry = ToolRegistry::default();
+        let conversation_id = create_conversation(&path);
+        let abort = Arc::new(AtomicBool::new(false));
+
+        // 第一轮失败：run failed，pending user（seq 1）保留。
+        let mut events = Vec::new();
+        run_agent_at_path(
+            &path,
+            conversation_id,
+            1,
+            "First question",
+            FakeScenario::GatewayNetworkError,
+            &registry,
+            &abort,
+            &mut events,
+        )
+        .unwrap_err();
+
+        // 失败后用户直接输入新消息：新轮次使用 seq 3（跳过待完成的 seq 2）。
+        let mut new_events = Vec::new();
+        let completed = run_agent_at_path(
+            &path,
+            conversation_id,
+            3,
+            "Second question",
+            FakeScenario::FinalOnly,
+            &registry,
+            &abort,
+            &mut new_events,
+        )
+        .unwrap();
+        assert_eq!(
+            completed.messages.len(),
+            3,
+            "旧 pending + 新 user + assistant"
+        );
+        assert_eq!(completed.messages[1].content, "Second question");
+        assert_eq!(completed.messages[2].content, "final answer");
+
+        // run 记录：旧轮次 failed 保留（审计），新轮次独立 completed，不是同轮重试。
+        let repository = AgentRunRepository::open(&path).unwrap();
+        let failed = repository
+            .latest_run_for_turn(conversation_id, 1)
+            .unwrap()
+            .unwrap();
+        assert_eq!(failed.status, AgentRunStatus::Failed);
+        let new_run = repository
+            .latest_run_for_turn(conversation_id, 3)
+            .unwrap()
+            .unwrap();
+        assert_eq!(new_run.status, AgentRunStatus::Completed);
+        assert!(new_run.retry_of_run_id.is_none(), "新轮次不是旧轮次的重试");
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
     fn agent_abort_stops_and_keeps_pending_user() {
         let (root, path) = test_database_path();
         let registry = ToolRegistry::default();

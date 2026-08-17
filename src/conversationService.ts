@@ -172,7 +172,12 @@ function expectedUserSequence(request: ConversationGenerationRequest) {
       (maximum, message) => Math.max(maximum, message.sequence ?? 0),
       0,
     );
-  const sequence = previousSequence + 1;
+  // 上一条历史消息仍是 user（上一轮 pending 未完成，失败/中断）时，新消息
+  // 开启新轮次并跳过待完成的 assistant 位置（previousSequence + 2）；
+  // 否则正常连续追加（previousSequence + 1）。两种结果都必须保持奇数。
+  const previousIsPendingUser =
+    request.messages[request.messages.length - 2]?.role === "user";
+  const sequence = previousSequence + (previousIsPendingUser ? 2 : 1);
   if (sequence % 2 === 0) {
     throw new Error("当前对话历史不是可追加用户消息的完整版本。");
   }

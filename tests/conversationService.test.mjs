@@ -1204,3 +1204,115 @@ test("Agent 事件不携带来源或状态时生成不受影响", async () => {
   assert.equal(sourcesCallback, 0);
   assert.equal(toolCallback, 0);
 });
+
+test("失败轮次后发送新消息使用跳过 pending 的新 sequence", async () => {
+  let sentSequence = null;
+  const service = new RepositoryConversationService(
+    withStreaming({
+      create: async () => snapshot(),
+      get: async () => snapshot(),
+      send: async (conversationId, expectedUserSequence, content) => {
+        assert.equal(content, "新问题");
+        sentSequence = expectedUserSequence;
+        return snapshot([
+          message(41, "user", "旧问题", 1),
+          message(43, "user", "新问题", 3),
+          message(44, "assistant", "新回答", 4),
+        ]);
+      },
+    }),
+  );
+
+  await service.generateReply({
+    conversationId: "17",
+    messages: [
+      {
+        id: "quick-ai-message-41",
+        role: "user",
+        content: "旧问题",
+        sequence: 1,
+      },
+      { id: "temporary-user", role: "user", content: "新问题" },
+    ],
+    prompt: "新问题",
+    mode: "append",
+  });
+
+  assert.equal(sentSequence, 3, "新消息应跳过待完成的 assistant 位置");
+});
+
+test("正常对话追加保持连续奇数 sequence", async () => {
+  let sentSequence = null;
+  const service = new RepositoryConversationService(
+    withStreaming({
+      create: async () => snapshot(),
+      get: async () => snapshot(),
+      send: async (conversationId, expectedUserSequence, content) => {
+        sentSequence = expectedUserSequence;
+        return snapshot([
+          message(41, "user", "第一问", 1),
+          message(42, "assistant", "第一答", 2),
+          message(43, "user", "第二问", 3),
+          message(44, "assistant", "第二答", 4),
+        ]);
+      },
+    }),
+  );
+
+  await service.generateReply({
+    conversationId: "17",
+    messages: [
+      {
+        id: "quick-ai-message-41",
+        role: "user",
+        content: "第一问",
+        sequence: 1,
+      },
+      {
+        id: "quick-ai-message-42",
+        role: "assistant",
+        content: "第一答",
+        sequence: 2,
+      },
+      { id: "temporary-user", role: "user", content: "第二问" },
+    ],
+    prompt: "第二问",
+    mode: "append",
+  });
+
+  assert.equal(sentSequence, 3, "正常对话连续追加为下一个奇数");
+});
+
+test("失败轮次后重试仍复用原 sequence 且不重复 user", async () => {
+  let sentSequence = null;
+  const service = new RepositoryConversationService(
+    withStreaming({
+      create: async () => snapshot(),
+      get: async () => snapshot(),
+      send: async (conversationId, expectedUserSequence, content) => {
+        sentSequence = expectedUserSequence;
+        return snapshot([
+          message(41, "user", "旧问题", 1),
+          message(42, "assistant", "重试回答", 2),
+        ]);
+      },
+    }),
+  );
+
+  const reply = await service.generateReply({
+    conversationId: "17",
+    messages: [
+      {
+        id: "quick-ai-message-41",
+        role: "user",
+        content: "旧问题",
+        sequence: 1,
+      },
+    ],
+    prompt: "旧问题",
+    mode: "append",
+  });
+
+  assert.equal(sentSequence, 1, "重试复用同一 pending sequence");
+  assert.equal(reply.status, "complete");
+});
