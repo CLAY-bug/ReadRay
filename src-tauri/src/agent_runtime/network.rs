@@ -653,6 +653,7 @@ fn compress_whitespace(text: &str) -> String {
 // ---------------------------------------------------------------------------
 
 /// 单条搜索结果（标题/URL/摘要）。
+#[derive(Debug)]
 pub(crate) struct SearchResultItem {
     pub title: String,
     pub url: String,
@@ -712,22 +713,32 @@ impl SearchProvider for WikipediaSearchProvider {
                 .map_err(|_| "Wikipedia 搜索响应读取失败。".to_string())
         })
         .map_err(|message| tool_error(AgentErrorKind::ToolExecutionFailed, message))?;
-        Ok(self.parse_response(&body, lang))
+        self.parse_response(&body, lang)
     }
 }
 
 impl WikipediaSearchProvider {
     /// 解析 Wikipedia API 的 query.search JSON 响应（离线可测）。
-    fn parse_response(&self, body: &str, lang: &str) -> Vec<SearchResultItem> {
-        let Ok(value) = serde_json::from_str::<serde_json::Value>(body) else {
-            return Vec::new();
-        };
+    ///
+    /// 区分"无结果"与"解析失败"（问题 4 评审）：JSON 非法或响应缺少
+    /// query.search 列表是解析/协议失败（ToolExecutionFailed），只有真正
+    /// 返回空 search 数组才是"没有找到匹配条目"。
+    fn parse_response(&self, body: &str, lang: &str) -> Result<Vec<SearchResultItem>, AgentError> {
+        let value: serde_json::Value = serde_json::from_str(body).map_err(|error| {
+            tool_error(
+                AgentErrorKind::ToolExecutionFailed,
+                format!("Wikipedia 搜索响应不是合法 JSON：{error}"),
+            )
+        })?;
         let Some(items) = value
             .get("query")
             .and_then(|query| query.get("search"))
             .and_then(serde_json::Value::as_array)
         else {
-            return Vec::new();
+            return Err(tool_error(
+                AgentErrorKind::ToolExecutionFailed,
+                "Wikipedia 搜索响应缺少结果列表（协议或服务错误）。",
+            ));
         };
         let mut results = Vec::with_capacity(items.len());
         for item in items {
@@ -751,7 +762,7 @@ impl WikipediaSearchProvider {
                 snippet,
             });
         }
-        results
+        Ok(results)
     }
 }
 
@@ -1226,13 +1237,15 @@ mod tests {
     #[test]
     fn wikipedia_search_parses_results_and_builds_details() {
         let provider = WikipediaSearchProvider;
-        let items = provider.parse_response(
-            r#"{"query":{"search":[
-                {"title":"Rust (programming language)","snippet":"A <span class=\"searchmatch\">systems</span> language","pageid":1},
-                {"title":"Rust (fungus)","snippet":"A plant disease","pageid":2}
-            ]}}"#,
-            "en",
-        );
+        let items = provider
+            .parse_response(
+                r#"{"query":{"search":[
+                    {"title":"Rust (programming language)","snippet":"A <span class=\"searchmatch\">systems</span> language","pageid":1},
+                    {"title":"Rust (fungus)","snippet":"A plant disease","pageid":2}
+                ]}}"#,
+                "en",
+            )
+            .expect("合法响应必须解析成功");
         assert_eq!(items.len(), 2);
         assert_eq!(
             items[0].url,
@@ -1244,6 +1257,29 @@ mod tests {
         assert_eq!(sources.len(), 2);
         assert_eq!(sources[0].site_name.as_deref(), Some("Wikipedia (en)"));
         assert!(!sources[0].source_id.contains("wikipedia"));
+    }
+
+    #[test]
+    fn wikipedia_parse_failure_is_distinct_from_no_results() {
+        let provider = WikipediaSearchProvider;
+        // JSON 非法 → 解析失败（ToolExecutionFailed），不是"没有匹配条目"。
+        let invalid = provider.parse_response("{not-json", "en").unwrap_err();
+        assert_eq!(invalid.kind, AgentErrorKind::ToolExecutionFailed);
+        assert!(invalid.message.contains("不是合法 JSON"));
+        // 缺少 query.search 列表（服务/协议错误）→ 解析失败。
+        let missing = provider
+            .parse_response(r#"{"error":{"code":"badquery"}}"#, "en")
+            .unwrap_err();
+        assert_eq!(missing.kind, AgentErrorKind::ToolExecutionFailed);
+        assert!(missing.message.contains("缺少结果列表"));
+        // 真正无结果：空 search 数组 → Ok(vec![])，由 format_search_content
+        // 展示"没有找到匹配条目"。
+        let empty = provider
+            .parse_response(r#"{"query":{"search":[]}}"#, "en")
+            .expect("空结果列表是合法无结果");
+        assert!(empty.is_empty());
+        let content = format_search_content(&empty, "en");
+        assert!(content.contains("没有找到匹配条目"));
     }
 
     #[test]
