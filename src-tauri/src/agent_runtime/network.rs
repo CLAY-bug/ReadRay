@@ -370,6 +370,12 @@ impl WebFetcher {
     }
 
     /// 抓取单个 URL：逐跳校验 URL 与解析后的 IP，限制重定向/大小/内容类型。
+    ///
+    /// 错误分类（问题 3 评审）：`NetworkBlocked` 只留给真正的安全拒绝——SSRF
+    /// （私网/回环/保留网段/云 metadata）、userinfo 与凭据 URL、重定向到非
+    /// HTTP(S) 协议；其余运行时失败（DNS 解析失败、传输错误、非 200、缺少
+    /// Location、内容类型拒绝、重定向超限）归 `ToolExecutionFailed`，由模型
+    /// 诚实降级（可恢复，不杀死整个 run）。
     pub(crate) fn fetch(&self, url: &str) -> Result<FetchOutcome, AgentError> {
         let (mut scheme, mut host, mut port) = validate_fetch_url(url).map_err(network_error)?;
         let mut current_url = url.to_string();
@@ -378,7 +384,12 @@ impl WebFetcher {
             let addrs = self
                 .resolver
                 .resolve(&host, effective_port)
-                .map_err(network_error)?;
+                .map_err(|message| {
+                    tool_error(
+                        AgentErrorKind::ToolExecutionFailed,
+                        format!("无法解析抓取目标 {host}：{message}"),
+                    )
+                })?;
             // 独立防御：resolver 返回后再次过滤保留网段（防解析层被绕过）。
             let mut safe_addrs: Vec<SocketAddr> = Vec::new();
             for addr in addrs {
@@ -398,15 +409,24 @@ impl WebFetcher {
                 self.transport
                     .get(&current_url, safe_addrs.first().copied()),
             )
-            .map_err(|message| network_error(format!("{current_url} 抓取失败：{message}")))?;
+            .map_err(|message| {
+                tool_error(
+                    AgentErrorKind::ToolExecutionFailed,
+                    format!("{current_url} 抓取失败：{message}"),
+                )
+            })?;
 
             if (300..400).contains(&response.status) {
                 let Some(location) = response.location.as_deref() else {
-                    return Err(network_error(format!(
-                        "重定向响应缺少 Location：{current_url}。"
-                    )));
+                    return Err(tool_error(
+                        AgentErrorKind::ToolExecutionFailed,
+                        format!("重定向响应缺少 Location：{current_url}。"),
+                    ));
                 };
-                let next = resolve_redirect_url(&current_url, location).map_err(network_error)?;
+                let next = resolve_redirect_url(&current_url, location).map_err(|message| {
+                    // 重定向到非 HTTP(S) 协议属于安全绕过尝试，按安全拒绝处理。
+                    network_error(message)
+                })?;
                 let validated = validate_fetch_url(&next).map_err(network_error)?;
                 scheme = validated.0;
                 host = validated.1;
@@ -416,19 +436,23 @@ impl WebFetcher {
             }
 
             if response.status != 200 {
-                return Err(network_error(format!(
-                    "网页返回 HTTP {}：{current_url}。",
-                    response.status
-                )));
+                return Err(tool_error(
+                    AgentErrorKind::ToolExecutionFailed,
+                    format!("网页返回 HTTP {}：{current_url}。", response.status),
+                ));
             }
             let content_type = response.content_type.clone();
             let Some(media_type) = content_type.as_deref() else {
-                return Err(network_error("网页缺少 Content-Type，已拒绝。".to_string()));
+                return Err(tool_error(
+                    AgentErrorKind::ToolExecutionFailed,
+                    "网页缺少 Content-Type，已拒绝。".to_string(),
+                ));
             };
             if !ALLOWED_CONTENT_TYPES.contains(&media_type.to_ascii_lowercase().as_str()) {
-                return Err(network_error(format!(
-                    "网页内容类型 {media_type} 不是允许的文本类型，已拒绝。"
-                )));
+                return Err(tool_error(
+                    AgentErrorKind::ToolExecutionFailed,
+                    format!("网页内容类型 {media_type} 不是允许的文本类型，已拒绝。"),
+                ));
             }
             let raw = String::from_utf8_lossy(&response.body);
             let (title, text) = if media_type.eq_ignore_ascii_case("text/html")
@@ -453,9 +477,10 @@ impl WebFetcher {
                 text,
             });
         }
-        Err(network_error(format!(
-            "重定向次数超过 {MAX_REDIRECTS} 次，已放弃。"
-        )))
+        Err(tool_error(
+            AgentErrorKind::ToolExecutionFailed,
+            format!("重定向次数超过 {MAX_REDIRECTS} 次，已放弃。"),
+        ))
     }
 }
 
@@ -973,14 +998,93 @@ mod tests {
     }
 
     #[test]
-    fn content_type_whitelist_is_applied_by_fetcher() {
+    fn content_type_rejection_is_runtime_recoverable_not_security_blocked() {
         let fetcher = WebFetcher::with_deps(Box::new(FakeTransport), Box::new(FakeResolver));
-        // 内容类型在 fake 传输里按 URL 区分；断言拒绝非文本类型。
+        // 内容类型在 fake 传输里按 URL 区分；拒绝是运行时失败（模型可诚实降级），
+        // 不是 NetworkBlocked（安全拒绝只留给 SSRF/私网/凭据 URL）。
         let rejected = fetcher
             .fetch("https://evil.example.com/binary.png")
             .unwrap_err();
-        assert_eq!(rejected.kind, AgentErrorKind::NetworkBlocked);
+        assert_eq!(rejected.kind, AgentErrorKind::ToolExecutionFailed);
         assert!(rejected.message.contains("内容类型"));
+    }
+
+    #[test]
+    fn fetch_runtime_failures_are_tool_execution_failed() {
+        // 非 200、传输错误、DNS 失败、重定向超限都归 ToolExecutionFailed（可恢复）。
+        let http_error = with_transport(|url, _| {
+            if url == "https://a.example.com/missing" {
+                Ok(FetchResponse {
+                    status: 404,
+                    location: None,
+                    content_type: Some("text/html".to_string()),
+                    body: Vec::new(),
+                    truncated: false,
+                })
+            } else {
+                Ok(FetchResponse {
+                    status: 200,
+                    location: None,
+                    content_type: Some("text/plain".to_string()),
+                    body: b"ok".to_vec(),
+                    truncated: false,
+                })
+            }
+        });
+        let error = http_error
+            .fetch("https://a.example.com/missing")
+            .unwrap_err();
+        assert_eq!(error.kind, AgentErrorKind::ToolExecutionFailed);
+        assert!(error.message.contains("404"));
+
+        let transport_error = with_transport(|_, _| Err("connection reset".to_string()));
+        let error = transport_error
+            .fetch("https://a.example.com/any")
+            .unwrap_err();
+        assert_eq!(error.kind, AgentErrorKind::ToolExecutionFailed);
+
+        struct FailingResolver;
+        impl DnsResolver for FailingResolver {
+            fn resolve(&self, host: &str, _port: u16) -> Result<Vec<SocketAddr>, String> {
+                Err(format!("no such host {host}"))
+            }
+        }
+        let dns_error = WebFetcher::with_deps(Box::new(FakeTransport), Box::new(FailingResolver));
+        let error = dns_error
+            .fetch("https://no-such-host.example/")
+            .unwrap_err();
+        assert_eq!(error.kind, AgentErrorKind::ToolExecutionFailed);
+        assert!(error.message.contains("无法解析"));
+    }
+
+    #[test]
+    fn security_rejections_stay_network_blocked() {
+        let fetcher = WebFetcher::with_deps(Box::new(FakeTransport), Box::new(FakeResolver));
+        // SSRF/凭据 URL 保持安全拒绝；重定向到非 HTTP(S) 协议同样按安全拒绝。
+        for url in [
+            "http://127.0.0.1/admin",
+            "http://169.254.169.254/latest/meta-data",
+            "http://10.1.2.3/",
+            "https://user:pass@example.com/",
+            "https://example.com/?api_key=secret",
+        ] {
+            let error = fetcher.fetch(url).unwrap_err();
+            assert_eq!(error.kind, AgentErrorKind::NetworkBlocked, "url={url}");
+        }
+        let redirect_to_ftp = with_transport(|_, _| {
+            Ok(FetchResponse {
+                status: 301,
+                location: Some("ftp://example.com/file".to_string()),
+                content_type: None,
+                body: Vec::new(),
+                truncated: false,
+            })
+        });
+        let error = redirect_to_ftp
+            .fetch("https://a.example.com/start")
+            .unwrap_err();
+        assert_eq!(error.kind, AgentErrorKind::NetworkBlocked);
+        assert!(error.message.contains("协议"));
     }
 
     #[test]

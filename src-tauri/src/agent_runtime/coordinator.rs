@@ -1633,6 +1633,75 @@ mod tests {
     }
 
     #[test]
+    fn external_tool_runtime_failure_is_recoverable_while_security_denial_is_fail_fast() {
+        let capability = CapabilityPolicy {
+            allowed_risk: RiskLevel::ExternalReadOnly,
+            enabled_tools: None,
+        };
+        // L1 工具运行时失败（模拟 fetch 非 200/内容类型拒绝）：可恢复，模型
+        // 在下一轮给出诚实降级回答，不杀死 run。
+        let failing_fetch = crate::agent_runtime::tool::ToolDefinition::new(
+            "get_date",
+            "返回日期。",
+            json!({}),
+            RiskLevel::ExternalReadOnly,
+            |_, _, _| {
+                Err(agent_error(
+                    AgentErrorKind::ToolExecutionFailed,
+                    "网页返回 HTTP 404。",
+                ))
+            },
+        )
+        .expect("failing 工具定义必须有效");
+        let (outcome, events, _) = run(
+            "run-test-1",
+            FakeScenario::ToolErrorThenRecover,
+            RunBudget::first_version(),
+            vec![failing_fetch],
+            ToolExecutionOrder::CallOrder,
+            capability.clone(),
+            &Cancellation::new(),
+            steady_clock(),
+        );
+        assert_eq!(outcome.termination, TerminationReason::FinalAnswer);
+        assert_eq!(
+            outcome.final_text.as_deref(),
+            Some("recovered final answer")
+        );
+        assert!(validate_event_sequence(&events, &RunBudget::first_version()).is_ok());
+
+        // 安全拒绝（NetworkBlocked，SSRF/私网/凭据）保持 fail-fast：RunFailed。
+        let blocked = crate::agent_runtime::tool::ToolDefinition::new(
+            "get_date",
+            "返回日期。",
+            json!({}),
+            RiskLevel::ExternalReadOnly,
+            |_, _, _| {
+                Err(agent_error(
+                    AgentErrorKind::NetworkBlocked,
+                    "抓取目标属于私网。",
+                ))
+            },
+        )
+        .expect("blocked 工具定义必须有效");
+        let (outcome, events, _) = run(
+            "run-test-2",
+            FakeScenario::ToolErrorThenRecover,
+            RunBudget::first_version(),
+            vec![blocked],
+            ToolExecutionOrder::CallOrder,
+            capability,
+            &Cancellation::new(),
+            steady_clock(),
+        );
+        assert_eq!(outcome.termination, TerminationReason::NetworkBlocked);
+        assert!(matches!(
+            events.last().map(|event| &event.payload),
+            Some(AgentEventPayload::RunFailed { .. })
+        ));
+    }
+
+    #[test]
     fn reasoning_is_kept_out_of_agent_events() {
         let (_, events, fake) = run(
             "run-test-1",
