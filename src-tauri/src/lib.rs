@@ -8,6 +8,8 @@ use tauri::{
     WindowEvent,
 };
 
+#[cfg(test)]
+mod agent_runtime;
 pub mod conversations;
 pub mod deepseek_client;
 pub mod deepseek_explanation;

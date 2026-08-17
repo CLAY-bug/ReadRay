@@ -89,7 +89,17 @@ core_docs:
       - "执行或验收流式输出、对话页 Markdown 渲染、系统提示词构建任务。"
       - "恢复内置 Agent 升级的上下文或核对已确认决策。"
     notes: "执行顺序已确认：先流式输出 → 再 Markdown 渲染 → 最后专门讨论系统提示词构建。任务 1 流式输出、任务 2 对话页 Markdown 渲染、任务 3 系统提示词构建均已验收通过（2026-08-07）。系统提示词已重构为组合式分节构建（quick_ai_prompt.rs）。已确认决策包括本轮不实现记忆注入、重新生成沿用覆盖式语义。后续任务（记忆注入、重新生成、超 8K 续写）在任务书未决区登记。"
-    risk: "任务书不是阶段计划；本文件不改变 DEVELOPMENT_PLAN 的阶段边界。阶段八已完成，长期学习者记忆、记忆注入和个性化排序属于阶段九。"
+    risk: "任务书不是阶段计划；其中无联网/无工具是 2026-08-07 已完成任务的历史范围，不得用来阻止 AGENT_RUNTIME_UPGRADE_PLAN 的阶段八点五新方向。长期学习者记忆、记忆注入和个性化排序仍属于阶段九。"
+
+  - path: "docs/AGENT_RUNTIME_UPGRADE_PLAN.md"
+    purpose: "阶段八点五共享 Agent Runtime 的完整架构，覆盖主应用聊天、Quick AI overlay、Writing Coach、自动工具决策、安全分级、持久化、任务拆分和验收门禁。"
+    status: "planned"
+    read_when:
+      - "讨论、实现或验收主应用聊天、Quick AI overlay 或 Writing Coach 的 Agent loop、tool call、联网搜索、来源、运行恢复或长上下文。"
+      - "判断 pi Agent Core 与 ReadRay Rust/Tauri/SQLite 的适配边界。"
+      - "准备在阶段九之前启动 Agent Runtime 任务。"
+    notes: "方向已确认但尚未实现；采用 Rust 原生 pi-style 共享 Runtime，不直接嵌入 pi coding-agent，不增加 Node/Python sidecar。主应用聊天与 Quick AI overlay 共享 ChatSurfaceAdapter；Writing Coach 在 Runtime 稳定后通过独立 adapter 接入并保留 writing revision 权威。模型在已授权能力内自主选择低风险只读工具；第一入口只有任务 0 协议与 provider spike。"
+    risk: "不得一次性整包实现，不得开放 Bash、任意文件读写、动态扩展或通用系统权限；不得提前接学习者画像、记忆注入、个性化排序或其他阶段九语义。"
 
   - path: "doc/quick-ai-overlay-upgrade-task.md"
     purpose: "Quick AI 浮层尺寸、外壳、输入密度、会话恢复、返回与历史导航的顺序任务书。"
@@ -1066,6 +1076,38 @@ source_areas:
     notes: "ExplanationCard、Quick AI、写作分析/问答、复习英文制卡和设置页官方余额 GET 共用该传输与 HTTP 错误边界；默认模型仍为 deepseek-v4-flash。ExplanationCard 的 policy 扩展点可在 Provider 响应后、usage 前后执行 requestKey 权威检查，取消不作为模型/schema/网络错误；其他调用保持原行为。四类正式 chat/completions 成功响应先严格校验 prompt/completion/total usage，再尽力写入 SQLite，随后才反序列化业务结构；统计写入失败不改变模型结果。候选 Key 验证使用无统计的显式 Key 边界，余额 GET 也不进入统计。运行时优先使用 Windows 凭据管理器中的 Key；不记录或返回 API key。"
     risk: "这里只放共享传输和 usage 响应边界，不放 ExplanationCard、Quick AI 或写作业务 prompt；不得因统计写入失败改写模型调用结果。"
 
+  - path: "src-tauri/src/agent_runtime/mod.rs"
+    purpose: "阶段八点五任务 0 Agent Runtime 协议试验区的模块装配。"
+    status: "experimental"
+    read_when:
+      - "执行或评审 Agent Runtime 任务 0 的协议、离线重放或 provider spike。"
+    notes: "只装配纯协议模块及测试专用 replay/responses spike；不注册 Tauri command、不接正式会话/写作、不创建 SQLite migration。"
+    risk: "任务 0 评审前不得把本目录装配到正式 Agent loop、工具执行或 UI。"
+
+  - path: "src-tauri/src/agent_runtime/protocol.rs"
+    purpose: "Surface-neutral Agent Runtime 协议草案与纯验证。"
+    status: "experimental"
+    read_when:
+      - "设计或核对 AuthorityRef、AgentSurface、ModelEvent、AgentEvent、ToolCall/Result、预算和错误分类。"
+    notes: "定义 surface/authority 身份、统一事件 envelope、工具结果来源元数据、错误/终止分类、第一版 RunBudget 和只留内存的 provider continuation state；ToolCallCompleted/Failed 方向、tool_name 一致性和 terminal reason/error 矩阵均由协议校验；不驱动模型循环或持久化。"
+    risk: "不得把私有 reasoning、API key 或未裁剪 provider 参数投影为 UI/SQLite 事实；不得在此新增业务 schema。"
+
+  - path: "src-tauri/src/agent_runtime/replay.rs"
+    purpose: "仅测试使用的 deterministic fake-provider 协议重放夹具。"
+    status: "experimental"
+    read_when:
+      - "回归任务 0 的 final-only、tool loop、错误、停止和预算分支。"
+    notes: "只在测试构建编译，覆盖无工具、单/多工具、未知工具、坏参数、tool failure/timeout、model/tool abort 与 budget exceeded；不访问网络、凭据、SQLite 或 Tauri。"
+    risk: "不得把 fake provider 作为生产 fallback 或正式工具注册表。"
+
+  - path: "src-tauri/src/agent_runtime/responses_spike.rs"
+    purpose: "DeepSeek Responses API 的离线事件夹具与默认忽略 live spike。"
+    status: "experimental"
+    read_when:
+      - "核对 Responses API function tool、server-side web_search、流式事件、usage 和来源元数据可观察性。"
+    notes: "复用现有 HTTP client/secret_store 边界，默认 endpoint 为官方 /responses 并支持显式环境覆盖；DeepSeek Responses 按 stateless 处理，只观察 provider response ID，不使用 previous_response_id。live test 必须同时满足 #[ignore] 与 READRAY_RUN_DEEPSEEK_RESPONSES_SPIKE=1，严格校验 event:/data.type、sequence_number 和 response.completed/incomplete/failed 终态，response.failed 拒绝、incomplete 分类为 provider protocol error，错误只报告状态不读取或输出敏感 body，不写用户数据库。离线只观察 web_search action；只有 provider 明确返回 citation/annotation 时才记录来源，source ID 使用不暴露 URL 的确定性 hash。"
+    risk: "Responses API 形状未经显式 live 验证前，不得据此接入正式会话或假定内置 Web Search 已满足来源验收；不得用自造 sources 字段替代官方证据。"
+
   - path: "src-tauri/src/explanation_cache.rs"
     purpose: "ExplanationCard SQLite v18 精确缓存 identity、命中重绑校验、TTL/容量后台维护和 fail-open 边界。"
     status: "active"
@@ -1124,7 +1166,7 @@ source_areas:
       - "调整 Quick AI 对话持久化或继续历史对话。"
       - "实现未来主应用对话历史读取。"
     notes: "复用 v2 会话表、消息自增 ID 与 UNIQUE(conversation_id, sequence)；SQLite v9 为既有会话表增加不可变 origin（overlay/main/legacy）及来源更新时间索引，v10 一次性删除无法可靠追溯且仅用于测试的 legacy 会话并依赖外键级联清理消息；新建必须显式写入 overlay 或 main。仓库支持按来源查询最近/全部有标题会话、按 ID 重命名和级联删除；导出从数据库快照按 sequence 顺序写出完整 user/assistant Markdown。prepare_turn 先独立提交 pending user；complete_turn 只在匹配的 user ID/expected sequence 后补 assistant，完成轮次重试直接返回权威快照，旧版本或并发冲突拒绝写入。"
-    risk: "不要把 Quick AI 消息写入 learning_records；不实现长期记忆、回答重生成、检索增强或第二套会话存储。"
+    risk: "不要把 Quick AI 消息写入 learning_records，也不要建立第二套会话存储。未来 run/step/source 扩展必须按 AGENT_RUNTIME_UPGRADE_PLAN 复用现有 SQLite 权威；长期学习者记忆仍属于阶段九。"
 
   - path: "src-tauri/src/quick_ai.rs"
     purpose: "Quick AI 多轮 DeepSeek 请求、上下文装配和 Tauri commands。"
@@ -1133,7 +1175,7 @@ source_areas:
       - "调整 Quick AI system prompt、上下文窗口或发送流程。"
       - "排查 create/get/send/list_recent/list_all/rename/delete/export Quick AI commands。"
     notes: "独立于 ExplanationCard JSON 协议；create command 要求 overlay/main 创建来源，recent/all commands 可按来源过滤，主窗口不传过滤时读取全部来源。管理和导出 commands 始终携带数据库 conversationId，export 在用户选定路径后重新读取权威快照再写文件。send command 要求已创建的 conversationId 和 expectedUserSequence，先 prepare pending user，再从该 SQLite 快照装配多轮上下文并以 quick_ai 分类调用共享模型边界，成功后 complete assistant；已完成轮次不会再次请求模型或重复统计。"
-    risk: "不接学习记录检索、工具调用、联网搜索、长期记忆或通用 Agent 框架。"
+    risk: "当前实现仍无工具调用和联网搜索；未来只能按 AGENT_RUNTIME_UPGRADE_PLAN 的任务门禁接入 Rust 原生 Runtime，不得直接嵌入通用 Agent 框架或提前接入阶段九长期记忆。"
 
   - path: "src-tauri/src/writing.rs"
     purpose: "阶段五写作 SQLite repository、结构化 DeepSeek 分析/问答和 Tauri commands。"

@@ -1,6 +1,6 @@
 # ReadRay 开发计划
 
-最后更新：2026-08-10
+最后更新：2026-08-16
 
 ## 1. 项目定位
 
@@ -29,8 +29,8 @@ ReadRay 是一个 Windows 优先的本地英语学习 Agent。
 
 1. 优先面向 Windows 原生环境开发。
 2. MVP 必须控制在单人可完成范围内。
-3. 第一版不使用通用 Agent 框架。
-4. 自己实现项目专属的轻量 Agent 业务层。
+3. 第一版不直接引入通用 Agent 框架运行时。
+4. 参考成熟 Agent 的运行协议，在 Rust 中实现项目专属的轻量 Agent Runtime。
 5. 不内置有版权风险的商业词典内容。
 6. 第一版 LLM 供应商使用 DeepSeek。
 7. 本地存储使用 SQLite。
@@ -83,34 +83,21 @@ Python 只用于辅助脚本、评测、数据处理或后续实验。桌面 App
 
 ## 4. 轻量 Agent 设计
 
-MVP 阶段不使用 LangChain、LangGraph、Pi、Agno 或 Pydantic AI。
-
-ReadRay 自己实现一个小型 Agent 业务层：
+ReadRay 不直接嵌入 LangChain、LangGraph、pi coding-agent、Agno 或 Pydantic AI，也不为桌面应用增加 Node/Python Agent sidecar。阶段八点五参考 pi Agent Core 的循环、事件、工具和上下文协议，在现有 Rust/Tauri/SQLite 边界内实现原生 Runtime：
 
 ```text
-ReadRayAgent
-├─ context_builder      构造短期和长期上下文
-├─ intent_classifier    判断 word / phrase / sentence / paragraph / review
-├─ prompt_router        选择提示词模板
-├─ llm_client           调用 DeepSeek
-├─ card_validator       校验结构化输出
-├─ memory_manager       读写 SQLite
-├─ profile_updater      更新学习者画像
-└─ review_planner       生成复盘任务
+AgentRunCoordinator
+├─ ContextAssembler     投影会话、能力、工具事实与长上下文
+├─ ModelGateway         统一 DeepSeek 文本、tool call、usage 与错误事件
+├─ ToolRegistry         注册并按当前能力激活有类型工具
+├─ ToolPolicy           校验权限、参数、预算和网络安全
+├─ AgentEventSink       向前端发布文本、工具、来源和终止事件
+└─ RunRepository        复用 SQLite 保存 run/step/source/compaction
 ```
 
-初始工具能力：
+模型在已经授权的能力集合内自主决定是否使用低风险只读工具；运行时负责最终校验、取消、预算、来源、幂等性和失败恢复。第一版不开放 Bash、任意文件读写、动态代码扩展或通用系统权限。有副作用能力只能作为 ReadRay 领域命令逐项设计。
 
-```text
-get_clipboard_text()
-create_explanation_card()
-save_card()
-search_memory()
-schedule_review()
-export_markdown()
-```
-
-这已经足够支撑 Agent 叙事：系统具备输入感知、任务分类、工具调用、本地记忆和持续学习闭环，而不是简单的一次性 LLM 调用。
+阶段八点五建设共享 Runtime、自动外部只读检索和上下文能力。主应用完整对话与 Quick AI overlay 是首要迁移面；Runtime 稳定后，作文中的 Writing Coach 通过独立 surface adapter 接入并继续保留 `writing.rs`、文章 revision、完成版本和请求身份权威。ExplanationCard 与 Review 的确定性结构化生成不因共享 Runtime 自动迁移。长期学习者记忆、熟练状态和个性化工具仍属于阶段九。详细方案见 `docs/AGENT_RUNTIME_UPGRADE_PLAN.md`。
 
 ## 5. 数据来源与版权策略
 
@@ -296,6 +283,25 @@ ReadRay/
 
 阶段八已经完成独立 code review、自动验证和真实 Tauri/SQLite/DeepSeek 与视觉交互人工验收。本阶段实现 learning record 一记录一目标、可持续分页的当日 Feed、主应用启动及学习记录更新后的首屏后台预热、学习事件中完整英文语境直用、缺失语境时按需后台生成、30 天有效且以 3/256 为软容量并保护 Feed 引用的持久化卡片、第四轮起三卡轮换、SQLite v14 安全清理、v15 target 一致性审计与 v16 中间版质量反馈表兼容迁移、持久化制卡失败退避、pending/失败条目不丢失、整轮完成后才创建同目标下一语境、内容自适应 editorial 卡片与 3D 翻转、提示/揭晓、remembered/forgotten、调度、任意生效 attempt 撤销、SQLite 权威对账、真实来源，以及与学习结果分离、按具体卡片语境隔离的即时质量反馈；同一卡片未发送意图采用最后选择，不同卡片全部串行保存，已发送请求冻结完整幂等输入并在直接成功或权威确认的模糊成功后统一收口。应用安全退出等待全部质量反馈预读、写回和对账，未解决失败会阻止退出。写作、Quick AI、长期学习者记忆、主动表达和 Markdown 复盘不属于阶段八；基于长期记忆的推荐式优先级属于阶段九。
 
+### 阶段八点五：Agent Runtime 升级（已规划，尚未实现）
+
+目标：
+
+建立供主应用完整对话、Quick AI overlay 和 Writing Coach 复用的 Agent Runtime，把现有一次流式模型请求升级为具备自主工具选择、循环执行、来源、取消、恢复和安全策略的现代 Agent，同时保持各业务现有 SQLite、revision、幂等重试、凭据与迟到结果边界。
+
+验收标准：
+
+- 支持多轮“模型 -> 工具 -> 模型”循环，并有明确预算和终止条件。
+- 模型自主判断是否使用已授权的低风险只读工具，无需用户逐次选择是否联网。
+- 实时公共信息能够自动检索、展示结构化来源，失败时不冒充已核实结论。
+- 工具调用有 schema、active allowlist、权限分级、超时、取消和确定性结果顺序。
+- 重试、重启和 IPC 丢失不会重复 user、assistant、tool result 或副作用。
+- 不开放 Bash、任意文件读写、动态扩展或其他通用高风险权限。
+- 长上下文可追溯压缩与阶段九学习者记忆严格分离。
+- 主应用对话与 Quick AI overlay 共享同一对话适配器；Writing Coach 通过独立适配器复用同一内核，且不绕过 `writing.rs` 或直接覆盖草稿。
+
+完整任务拆分、架构、安全与验收门禁见 `docs/AGENT_RUNTIME_UPGRADE_PLAN.md`。第一入口仅为任务 0 协议与 provider spike；任务 0 评审前不新增 Agent migration、不改正式对话或写作 UI，也不向用户真实会话开放 Web Search。
+
 ### 阶段九：个性化与效果评估
 
 目标：
@@ -331,6 +337,8 @@ ReadRay/
 本计划按阶段推进，不按周或固定日期推进。个人开发过程中可能遇到环境、框架、实现和调试问题，阶段完成以验收标准为准，不以时间为准。
 
 阶段一到阶段八已经完成。主应用的“今天”“复习”“记忆”、完整对话、写作、会话管理和设置均已接入真实 Tauri/SQLite 数据，写作分析、问答与复习英文制卡复用正式 DeepSeek 客户端；托盘、关闭与安全退出、开机启动、单实例、全局快捷键和复习完整流程均已完成真实 Windows 验收。
+
+阶段八点五的完整方案已于 2026-08-16 建立，尚未进入实现。当前唯一入口是 `docs/AGENT_RUNTIME_UPGRADE_PLAN.md` 的任务 0；后续任务必须逐项实现、验证、审查并停点验收。
 
 阶段九继续暂缓进入。阶段九前、不扩展阶段范围的学习目标聚合基础任务已于 2026-08-14 完成自动验证、独立审查和真实 Tauri/SQLite 人工验收：
 
@@ -380,6 +388,10 @@ ReadRay/
 
 应对：设置页只暴露已经实现并可验证的配置，并将密钥、快捷键、托盘、单实例和关闭策略作为同一桌面生命周期阶段验收。
 
+风险：Agent 自主工具调用放大模型错误或外部 prompt injection。
+
+应对：只向模型暴露当前 active allowlist；低风险只读工具也必须经过 Rust 最终校验、运行预算、来源与网络策略，有副作用能力使用领域命令和确认机制，禁止 Bash、任意文件读写和动态代码扩展。
+
 ## 10. 当前决策摘要
 
 ```text
@@ -389,9 +401,9 @@ ReadRay/
 原生层：Rust
 数据库：SQLite
 LLM：DeepSeek OpenAI-compatible API
-Agent 框架：不用
-Agent 层：自己实现轻量业务层
+Agent 框架：不直接引入通用 Runtime
+Agent 层：Rust 原生 pi-style 轻量 Agent Runtime
 Python：只用于脚本，不作为运行时
 项目流程：极简文档，不使用任务层级
-当前顺序：学习目标聚合基础任务（已完成） -> 阶段九暂停，等待用户方向 -> 发布
+当前顺序：阶段八点五 Agent Runtime（已规划，任务 0 待执行） -> 阶段九继续暂停 -> 发布
 ```
