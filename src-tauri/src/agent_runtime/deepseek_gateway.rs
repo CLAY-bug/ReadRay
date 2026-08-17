@@ -344,25 +344,27 @@ fn project_message(message: &ProviderMessage) -> Value {
             content,
             tool_calls,
         } => {
-            let projected_calls = tool_calls
-                .iter()
-                .map(|call| {
-                    json!({
-                        "id": call.id,
-                        "type": "function",
-                        "function": {
-                            "name": call.name,
-                            "arguments": serde_json::to_string(&call.arguments)
-                                .unwrap_or_default(),
-                        }
+            // 空 tool_calls 必须省略该键：DeepSeek 拒绝 `tool_calls: []`
+            // （要求长度 ≥1）。历史 assistant 消息没有工具调用即空数组。
+            let mut projected = json!({ "role": "assistant", "content": content });
+            if !tool_calls.is_empty() {
+                let projected_calls = tool_calls
+                    .iter()
+                    .map(|call| {
+                        json!({
+                            "id": call.id,
+                            "type": "function",
+                            "function": {
+                                "name": call.name,
+                                "arguments": serde_json::to_string(&call.arguments)
+                                    .unwrap_or_default(),
+                            }
+                        })
                     })
-                })
-                .collect::<Vec<_>>();
-            json!({
-                "role": "assistant",
-                "content": content,
-                "tool_calls": projected_calls,
-            })
+                    .collect::<Vec<_>>();
+                projected["tool_calls"] = json!(projected_calls);
+            }
+            projected
         }
         ProviderMessage::Tool { result } => json!({
             "role": "tool",
@@ -453,6 +455,24 @@ mod tests {
         assert_eq!(
             body["tools"][0]["function"]["parameters"],
             json!({"type": "object"})
+        );
+    }
+
+    #[test]
+    fn empty_tool_calls_omits_the_key_from_assistant_projection() {
+        // 历史 assistant 消息无工具调用：投影必须省略 tool_calls 键，
+        // 不能输出 `tool_calls: []`（DeepSeek 400：要求数组长度 ≥1）。
+        let messages = vec![ProviderMessage::Assistant {
+            content: "previous answer".into(),
+            tool_calls: Vec::new(),
+        }];
+        let body = build_chat_request_body("deepseek-v4-flash", &messages, &[]);
+        let assistant = &body["messages"][0];
+        assert_eq!(assistant["role"], "assistant");
+        assert_eq!(assistant["content"], "previous answer");
+        assert!(
+            assistant.get("tool_calls").is_none(),
+            "空 tool_calls 不得投影为 tool_calls 键：{assistant}"
         );
     }
 
