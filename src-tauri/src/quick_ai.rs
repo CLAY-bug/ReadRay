@@ -315,8 +315,9 @@ pub fn open_agent_source(app: AppHandle, url: String) -> Result<(), String> {
 /// Agent 正式链路：prepare_turn → AgentRun → complete_turn（AGENT_RUNTIME_UPGRADE_PLAN §19 任务 2）。
 /// 旧非 Agent 路径（send_quick_ai_message / send_quick_ai_message_streaming）保留为
 /// 受控回退；前端统一事件 envelope 展示不属于本任务，标注延后。
-/// replace_message_id 为 Some 时走重新生成（任务 4）：复用同一 user 轮次与
-/// retry_of_run_id，新 assistant 追加后把旧 assistant 标记为被替代（不物理覆盖）。
+/// replace_message_id 为 Some 时走"编辑并重新生成"（任务 4 修复轮）：content 是
+/// 编辑后的问题，新问题行替代旧问题行（方案 B，无新 migration）、新回答替代
+/// 旧回答（复用 v21 superseded_by_id，不物理覆盖），run 复用该轮 user 身份。
 #[tauri::command]
 pub async fn send_quick_ai_message_agent(
     app: AppHandle,
@@ -522,13 +523,15 @@ where
     let facts = runtime_facts(app_version);
     let capability = conversation_capability();
     let active_tools = registry.active_tools(&capability);
-    // 重新生成：模型上下文只到该轮 user（旧回答不进入模型上下文），相当于
-    // 一次"对该问题重新作答"的 pending 轮次；普通追加使用完整可见快照。
-    let transcript_snapshot = if replace_message_id.is_some() {
+    // 编辑并重新生成（任务 4 修复轮）：模型上下文 = 历史（排除该轮旧问题行与
+    // 旧回答）+ 编辑后的 pending 问题行，相当于一次"按编辑后的问题重新作答"；
+    // 普通追加使用完整可见快照。
+    let transcript_snapshot = if let Some(target_id) = replace_message_id {
         let mut history = pending_snapshot.clone();
-        history
-            .messages
-            .retain(|message| message.sequence <= expected_user_sequence);
+        history.messages.retain(|message| {
+            message.id != target_id
+                && !(message.sequence == expected_user_sequence && message.id != user_message_id)
+        });
         history
     } else {
         pending_snapshot.clone()
@@ -949,6 +952,7 @@ mod tests {
     use crate::agent_runtime::chat_surface::reset_run_id_counter_for_test;
     use crate::agent_runtime::coordinator::AgentEventSink;
     use crate::agent_runtime::fake_gateway::{FakeGateway, FakeScenario};
+    use crate::agent_runtime::gateway::ProviderMessage;
     use crate::agent_runtime::protocol::{
         validate_event_sequence, AgentEvent, ToolCall, ToolProvenance, ToolResult,
     };
@@ -2150,28 +2154,29 @@ mod tests {
         let _ = fs::remove_dir_all(root);
     }
 
-    // ---- 任务 4：重新生成、来源随回答落库、截断诚实提示 ----
+    // ---- 任务 4：编辑并重新生成、来源随回答落库、截断诚实提示 ----
 
     #[test]
-    fn agent_regeneration_reuses_user_turn_and_marks_old_answer_superseded() {
+    fn agent_edit_regeneration_reuses_turn_and_marks_old_question_and_answer() {
         let (root, path) = test_database_path();
         let registry = ToolRegistry::default();
         let abort = Arc::new(AtomicBool::new(false));
         let conversation_id = create_conversation(&path);
 
-        // 第一轮经 Agent 链路完成（产生 completed run 与旧回答）。
+        // 第一轮经 Agent 链路完成（产生 completed run 与旧问/旧答）。
         let mut first_events = Vec::new();
         let first = run_agent_at_path(
             &path,
             conversation_id,
             1,
-            "重生成问题",
+            "原问题",
             FakeScenario::FinalOnly,
             &registry,
             &abort,
             &mut first_events,
         )
         .unwrap();
+        let old_question = first.messages[0].id;
         let old_assistant = first.messages[1].id;
         let first_answer = first.messages[1].content.clone();
         let first_run = AgentRunRepository::open(&path)
@@ -2180,13 +2185,14 @@ mod tests {
             .unwrap()
             .unwrap();
 
-        // 重新生成：复用同一 user 轮次，新 run 的 retry_of 指向旧 run。
+        // 编辑并重新生成：内容为编辑后的问题，run 复用该轮 user 身份
+        // （retry_of 指向旧 run）。
         let mut events = Vec::new();
         let regenerated = run_agent_at_path_with_replace(
             &path,
             conversation_id,
             1,
-            "重生成问题",
+            "编辑后的问题",
             FakeScenario::FinalOnly,
             &registry,
             &abort,
@@ -2194,13 +2200,17 @@ mod tests {
             Some(old_assistant),
         )
         .unwrap();
-        assert_eq!(regenerated.messages.len(), 2, "可见快照只保留当前回答");
-        assert_eq!(regenerated.messages[0].content, "重生成问题");
+        assert_eq!(
+            regenerated.messages.len(),
+            2,
+            "可见快照只保留当前问题与回答"
+        );
+        assert_eq!(regenerated.messages[0].content, "编辑后的问题");
         assert_eq!(regenerated.messages[1].content, "final answer");
         assert_ne!(regenerated.messages[1].id, old_assistant);
         assert!(
             validate_event_sequence(&events, &RunBudget::first_version()).is_ok(),
-            "重新生成 run 的事件序列必须合法"
+            "编辑 run 的事件序列必须合法"
         );
 
         let repository = AgentRunRepository::open(&path).unwrap();
@@ -2212,11 +2222,24 @@ mod tests {
         assert_eq!(
             new_run.retry_of_run_id.as_deref(),
             Some(first_run.run_id.as_str()),
-            "重新生成 run 的 retry_of 必须指向该轮旧 run"
+            "编辑 run 的 retry_of 必须指向该轮旧 run"
         );
 
-        // 旧回答物理保留、标记被替代（可审计）。
+        // 旧问题+旧回答物理保留、标记被替代（可审计）。
         let connection = crate::learning_records::open_database(&path).unwrap();
+        let (old_user_content, old_user_superseded_by): (String, Option<i64>) = connection
+            .query_row(
+                "SELECT content, superseded_by_id FROM quick_ai_messages WHERE id = ?1",
+                [old_question],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(old_user_content, "原问题", "旧问题不得被物理覆盖");
+        assert_eq!(
+            old_user_superseded_by,
+            Some(regenerated.messages[0].id),
+            "旧问题行必须指向编辑后的问题行"
+        );
         let (old_content, superseded_by): (String, Option<i64>) = connection
             .query_row(
                 "SELECT content, superseded_by_id FROM quick_ai_messages WHERE id = ?1",
@@ -2235,6 +2258,69 @@ mod tests {
     }
 
     #[test]
+    fn agent_edit_run_transcript_excludes_old_question_and_answer() {
+        let (root, path) = test_database_path();
+        let registry = ToolRegistry::default();
+        let abort = Arc::new(AtomicBool::new(false));
+        let conversation_id = {
+            let mut store = ConversationStore::open_path(&path).unwrap();
+            store
+                .create_with_exchange("deepseek-v4-flash", "原问题", "旧回答")
+                .unwrap()
+                .id
+        };
+        let old_assistant = ConversationStore::open_path(&path)
+            .unwrap()
+            .get_required(conversation_id)
+            .unwrap()
+            .messages[1]
+            .id;
+
+        let mut gateway = FakeGateway::new(FakeScenario::FinalOnly);
+        let mut events = Vec::new();
+        let mut sink = VecSink {
+            events: &mut events,
+        };
+        run_agent_session_core(
+            || ConversationStore::open_path(&path),
+            &path,
+            "0.1.0-test",
+            conversation_id,
+            1,
+            "编辑后的问题",
+            &abort,
+            &mut gateway,
+            &mut sink,
+            &registry,
+            Some(old_assistant),
+        )
+        .unwrap();
+
+        // 模型上下文 = [system, 编辑后的问题]：旧问题与旧回答都不进入上下文。
+        let rendered: Vec<(String, String)> = gateway.requests[0]
+            .messages
+            .iter()
+            .map(|message| match message {
+                ProviderMessage::System { content } => ("system".into(), content.clone()),
+                ProviderMessage::User { content } => ("user".into(), content.clone()),
+                ProviderMessage::Assistant { content, .. } => ("assistant".into(), content.clone()),
+                ProviderMessage::Tool { .. } => ("tool".into(), String::new()),
+            })
+            .collect();
+        assert_eq!(rendered.len(), 2);
+        assert_eq!(rendered[0].0, "system");
+        assert_eq!(rendered[1].0, "user");
+        assert_eq!(rendered[1].1, "编辑后的问题");
+        assert!(
+            !rendered
+                .iter()
+                .any(|(_, content)| content.contains("原问题") || content.contains("旧回答")),
+            "旧问题与旧回答不得进入编辑 run 的模型上下文"
+        );
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
     fn agent_regeneration_of_already_replaced_answer_returns_current_snapshot() {
         let (root, path) = test_database_path();
         let registry = ToolRegistry::default();
@@ -2243,7 +2329,7 @@ mod tests {
         let conversation_id = {
             let mut store = ConversationStore::open_path(&path).unwrap();
             store
-                .create_with_exchange("deepseek-v4-flash", "再次重生成", "旧回答")
+                .create_with_exchange("deepseek-v4-flash", "原问题", "旧回答")
                 .unwrap()
                 .id
         };
@@ -2258,7 +2344,7 @@ mod tests {
             &path,
             conversation_id,
             1,
-            "再次重生成",
+            "编辑后的问题",
             FakeScenario::FinalOnly,
             &registry,
             &abort,
@@ -2267,13 +2353,13 @@ mod tests {
         )
         .unwrap();
 
-        // 对同一旧目标再次重新生成：目标已被替代 → 幂等返回当前快照，不新建 run。
+        // 对同一旧目标再次编辑：目标已被替代 → 幂等返回当前快照，不新建 run。
         let mut repeated_events = Vec::new();
         let repeated = run_agent_at_path_with_replace(
             &path,
             conversation_id,
             1,
-            "再次重生成",
+            "编辑后的问题",
             FakeScenario::FinalOnly,
             &registry,
             &abort,
@@ -2282,6 +2368,7 @@ mod tests {
         )
         .unwrap();
         assert_eq!(repeated.messages.len(), 2);
+        assert_eq!(repeated.messages[0].content, "编辑后的问题");
         assert_eq!(repeated.messages[1].content, "final answer");
         assert!(
             repeated_events.is_empty(),
@@ -2321,7 +2408,7 @@ mod tests {
             &path,
             conversation_id,
             1,
-            "搜索问题",
+            "修改后的搜索问题",
             FakeScenario::SingleToolThenFinal,
             &registry,
             &abort,
@@ -2333,7 +2420,7 @@ mod tests {
         let sources = new_assistant
             .sources
             .as_ref()
-            .expect("重新生成的新回答必须携带来源");
+            .expect("编辑并重新生成的新回答必须携带来源");
         assert_eq!(sources.len(), 1);
         assert_eq!(sources[0].source_id, "source-web-1");
         assert_eq!(

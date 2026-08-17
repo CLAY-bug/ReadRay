@@ -279,12 +279,12 @@
 
 ### 阶段八点五任务 4（日常使用交互，已实现待复审）
 
-- **SQLite v21（集中一次）**：`quick_ai_messages` 追加 `superseded_by_id`（重新生成替代链）、`sources_json`（来源随 assistant 落库）、`truncated`（finish_reason=length 截断标志）三列；带新库约束测试与 v20→v21 旧库升级数据保留测试（沿用项目"回滚测试"模式）。
-- **重新生成**：`send_quick_ai_message_agent` 新增 `replace_message_id`；`ConversationStore::prepare_regeneration/complete_regeneration` 复用同一 user 轮次（conversation_id + expected_user_sequence + user_message_id 不变），新 run `retry_of_run_id` 指向该轮最近 run；新 assistant 以"当前最大序号的下一个偶数"插入，旧 assistant 标记被替代（不物理覆盖、可审计）；可见快照/导出统一过滤被替代行，只显示当前答案；目标已被替代的重复请求幂等返回权威快照。模型上下文只到该轮 user（旧回答不进上下文）。前端 `canRegenerate` 置真，模糊成功语义（目标仍当前 → pending 可重试；已被替代 → 成功收尾）。
+- **SQLite v21（集中一次）**：`quick_ai_messages` 追加 `superseded_by_id`（替代链）、`sources_json`（来源随 assistant 落库）、`truncated`（finish_reason=length 截断标志）三列；带新库约束测试与 v20→v21 旧库升级数据保留测试（沿用项目"回滚测试"模式）。
+- **编辑并重新生成（2026-08-18 设计变更修复轮，用户确认方案 B）**：交互为"最后一条用户输入下方的 hover 小按钮 → 行内编辑 → 发送 → 新回答替代旧回答"，仅最后一条输入展示入口；菜单内"重新生成回答"入口与 `canRegenerate` 死代码已移除。编辑后的问题以新消息行替代旧问题行（方案 B：复用 v21 `superseded_by_id`，被替代者记录指向替代者，与 v21 方向一致，**无新 migration**），新回答替代旧回答；旧问题+旧回答均保留在库可审计；可见快照与导出只取未替代消息；序列保持 user 奇/assistant 偶。`prepare_regeneration` 插入编辑后 pending 问题行（下一个奇数），`complete_regeneration` 在同一事务写新答（下一个偶数）+ 标记旧问/旧答被替代；失败时旧问+旧答仍可见、编辑 pending 行保留可重试（重试复用同一行，内容不一致拒绝）；run 复用该轮 user 身份（retry_of_run_id 指向该轮最近 run）；模型上下文排除旧问+旧答、以编辑后问题为尾。
 - **错误呈现友好化**：失败分支技术细节进 `eprintln!("READRAY_AGENT_RUN_FAILED=…")`，UI 只显示友好文案（"暂时无法回答，请重试"/"回答已停止…"/"回答未完成…"）；`project_ui_event` 的 RunFailed 不再透出技术原文；前端 failed 气泡与打开失败路径同规则。
 - **来源持久化回看**：SourceCollectingSink 按 source_id 去重累积 SourcesUpdated，随 complete 事务写入 assistant 行 `sources_json`；快照返回 `sources`（camelCase），损坏 blob 记日志降级不阻断加载；重启与历史对话来源卡片直接回看，不从 agent_sources 审计表重建。
 - **截断诚实提示**：coordinator 捕获最终轮 `ModelFinishReason::Length` → `RunOutcome.truncated`（protocol.rs 冻结协议未改）；回答照常持久化 + truncated 标志，前端消息显示"回答可能不完整"轻微提示，删除"继续生成"按钮；预算截断保持 pending 可重试。
-- **验证**：Rust lib 385/0（新增 13 项）、前端 conversation 37/37 与其他套件全绿（overlay 20/review 50/writing 30/settings 57/startup 3）、`pnpm build`/cargo fmt/check --all-targets/`git diff --check` 全通过；浏览器预览实测"更多操作 → 重新生成回答"启用并原地替换、来源卡片完成态渲染、无控制台错误。未运行 live 测试；真实 Tauri/DeepSeek 人工验收（真实重新生成、截断提示、重启回看来源）留待停点。
+- **验证**：Rust lib 387/0（新增 15 项）、前端 conversation 38/38 与其他套件全绿（overlay 20/review 50/writing 30/settings 57/startup 3）、`pnpm build`/cargo fmt/check --all-targets/`git diff --check` 全通过；浏览器预览实测最后一条输入 hover 编辑按钮 → 行内编辑 → 发送后回答原地替换、菜单仅剩导出/删除、无控制台错误。未运行 live 测试；真实 Tauri/DeepSeek 人工验收（编辑并重新生成真实回答、截断提示、重启回看来源）留待停点。
 
 ## 下一步
 
@@ -294,7 +294,7 @@ ReadRay Agent Runtime 的完整阶段八点五方案已于 2026-08-16 写入 `do
 
 任务 1（Rust Agent Kernel）与任务 2（通用对话接入与 SQLite run/step 恢复）已分别于 2026-08-17 完成实现并通过调度者独立评审（各含一轮修复复审）。任务 1 交付无持久化副作用的最小循环内核：`coordinator.rs`（AgentRunCoordinator，run() 契约：声明失败一律以 `Ok(outcome)`+唯一终态事件收尾、仅 sink 拒绝返回 Err；运行期工具失败可恢复、授权/schema 失败 fail-fast）、`context.rs`、`gateway.rs`、`tool.rs`+`tool_schema.rs`、`fake_gateway.rs`（仅测试）；事件序列逐项通过 `validate_event_sequence`。任务 2 新增 SQLite v20（`agent_runs`/`agent_steps`/`agent_sources`，CHECK 约束：authority 身份完整性、status 枚举、completed↔completed_at；run 状态迁移由 repository 校验，终态冻结）、`chat_surface.rs`（ChatSurfaceAdapter 复用 `prepare_turn/complete_turn` 幂等边界，含模糊成功对账）、`deepseek_gateway.rs`（chat/completions 真实 gateway，`ChatCompletionStreamer` 注入可离线验证；Responses API 因 400 未确认不作为依据）、`run_repository.rs`（PersistingSink 只推进中间状态，终态由调用方在业务写入成功后落库）与 `send_quick_ai_message_agent` 命令（spawn_blocking 同步内核 + 既有 QuickAiStreamEvent 协议映射）。恢复语义按 §17：最终 assistant 已落库则重试返回权威快照并对账 run 终态；仅 pending user 则创建 `retry_of_run_id` 新 run；run_id 含 pid+unix_ms+计数器保证重启不碰撞；持久化/UI sink 失败先落 `failed(persistence_failed)` 再返回错误。任务 2 验收全部达成（重试不重复 user/assistant/tool result、停止/崩溃/重启后 pending user 可恢复、completed 与最终 assistant 严格一致、迁移/回滚/旧库审计有测试）。
 
-任务 3（自动联网纵切）已于 2026-08-17 完成实现、验证、浏览器预览、评审修复轮（空 tool_calls 400、composer 锁死、fetch 失败杀死 run、Wikipedia 解析/UA、schema type、ToolRunning 自环、联网诚实回答等全部修复并通过复审）与真实 Tauri 人工验收（多轮追问不再 400、失败后直接发新消息、联网来源卡片、"能联网吗"据实回答），**正式收口**。Provider 决策：live spike 证实 DeepSeek 内置 web_search 不存在（Responses 与 chat/completions 均 HTTP 400，chat/completions 明确 `unknown variant 'web_search', expected 'function'`），按 §14.1 换受控 provider——本机无搜索 key，采用 Wikipedia API 无 key provider + 完整受控 fetch_web_page（`agent_runtime/network.rs`：SearchProvider 可替换 trait、SSRF/DNS rebinding/重定向/大小/内容类型/隐私防护）。L1 工具注册（web_search/fetch_web_page，ExternalReadOnly）、对话 capability 提升、coordinator 把工具 `details.sources` 投影为 SourcesUpdated、PersistingSink 来源落库关联 tool_call_id；前端正式对话切到 `send_quick_ai_message_agent`，来源卡片（AgentSourceList.tsx）与"正在搜索/正在读取/正在整理"状态经 `sources_updated`/`tool_state` 事件展示，来源打开走受控 `open_agent_source`。任务 4（日常使用交互）已实现并通过自动验证，待调度者复审与真实 Tauri 人工验收：重新生成（SQLite v21 替代链 + retry_of_run_id + 快照/导出一致性）、错误呈现友好化（READRAY_AGENT_* 日志 + 友好文案）、来源随 assistant 落库回看、截断诚实提示（finish_reason=length 照常持久化 + "回答可能不完整"，不做继续生成）。Writing Coach 必须在通用对话 Runtime、自动联网和长上下文完成各自验收后按任务 6 接入。阶段九继续暂停，学习者画像、长期记忆、记忆注入和个性化工具不属于阶段八点五。
+任务 3（自动联网纵切）已于 2026-08-17 完成实现、验证、浏览器预览、评审修复轮（空 tool_calls 400、composer 锁死、fetch 失败杀死 run、Wikipedia 解析/UA、schema type、ToolRunning 自环、联网诚实回答等全部修复并通过复审）与真实 Tauri 人工验收（多轮追问不再 400、失败后直接发新消息、联网来源卡片、"能联网吗"据实回答），**正式收口**。Provider 决策：live spike 证实 DeepSeek 内置 web_search 不存在（Responses 与 chat/completions 均 HTTP 400，chat/completions 明确 `unknown variant 'web_search', expected 'function'`），按 §14.1 换受控 provider——本机无搜索 key，采用 Wikipedia API 无 key provider + 完整受控 fetch_web_page（`agent_runtime/network.rs`：SearchProvider 可替换 trait、SSRF/DNS rebinding/重定向/大小/内容类型/隐私防护）。L1 工具注册（web_search/fetch_web_page，ExternalReadOnly）、对话 capability 提升、coordinator 把工具 `details.sources` 投影为 SourcesUpdated、PersistingSink 来源落库关联 tool_call_id；前端正式对话切到 `send_quick_ai_message_agent`，来源卡片（AgentSourceList.tsx）与"正在搜索/正在读取/正在整理"状态经 `sources_updated`/`tool_state` 事件展示，来源打开走受控 `open_agent_source`。任务 4（日常使用交互）已实现并通过自动验证，待调度者复审与真实 Tauri 人工验收：编辑并重新生成（2026-08-18 设计变更修复轮——hover 入口 + 行内编辑，方案 B 新问题行替代旧问题行，复用 v21 无新 migration）、错误呈现友好化（READRAY_AGENT_* 日志 + 友好文案）、来源随 assistant 落库回看、截断诚实提示（finish_reason=length 照常持久化 + "回答可能不完整"，不做继续生成）。Writing Coach 必须在通用对话 Runtime、自动联网和长上下文完成各自验收后按任务 6 接入。阶段九继续暂停，学习者画像、长期记忆、记忆注入和个性化工具不属于阶段八点五。
 
 阶段八与阶段九前的“学习目标聚合”均已完成独立审核、自动验证和用户真实 Tauri/SQLite 人工验收。真实数据库已成功登记 v19，迁移保护性审计、历史兼容身份、Memory 去重/查询次数/历史出现、Review 同目标去重与搜索相关度均已通过实际使用确认；本任务正式收口。阶段九继续暂停，不得在用户明确前扩展到画像、记忆注入、个性化排序、效果评估或语义聚类。
 
@@ -306,7 +306,7 @@ Quick AI 浮层升级任务 7、主窗口静态品牌启动层、WebView 默认�
 
 侧栏窄窗自动收放与 resize 逐帧布局修复（2026-08-16）在首轮真实 Tauri 视频中仍有明显黑/白色带，已追加透明合成、主题同色原生/WebView 底板和窗口级 120ms settle。自动验证已通过，正等待第二轮真实 Tauri 拖拽手感人工验收；验收标准是允许 Codex 参考视频级别的一两帧内容追赶，但不再出现强烈高对比闪动。
 
-- 当前实现仍维持”不声称能访问本地学习记录/长期记忆”的诚实边界；联网能力已按 `docs/AGENT_RUNTIME_UPGRADE_PLAN.md` 任务 3 开放给真实对话会话（Wikipedia 受控搜索 + 受控网页抓取，覆盖范围以工具描述为准，模型不得把覆盖不到的内容冒充已核实事实）；`docs/AGENT_UPGRADE.md` 中无网络/无工具是已完成旧任务的历史范围。”重新生成”已按任务 4 正式开放（覆盖式语义：不物理覆盖旧回答，旧行标记被替代可审计；导出显示当前答案）。
+- 当前实现仍维持”不声称能访问本地学习记录/长期记忆”的诚实边界；联网能力已按 `docs/AGENT_RUNTIME_UPGRADE_PLAN.md` 任务 3 开放给真实对话会话（Wikipedia 受控搜索 + 受控网页抓取，覆盖范围以工具描述为准，模型不得把覆盖不到的内容冒充已核实事实）；`docs/AGENT_UPGRADE.md` 中无网络/无工具是已完成旧任务的历史范围。”编辑并重新生成”已按任务 4 正式开放（最后一条输入 hover 入口 + 行内编辑；方案 B：编辑后的问题以新消息行替代旧问题行、新回答替代旧回答，旧问+旧答保留可审计；导出显示当前答案）。
 - 新环境仍可复制 `.env.example` 为 `.env` 填写开发期 `DEEPSEEK_API_KEY`；用户在设置页保存或清除后，以 Windows 安全存储中的持久化决定为准。真实 `.env` 不提交。
 
 ## 当前已知限制与后续边界
@@ -320,9 +320,9 @@ Quick AI 浮层升级任务 7、主窗口静态品牌启动层、WebView 默认�
 - **解释体验限制**：查询类型依赖本地启发式规则，缩写、很短的多句文本或缺少句末标点的长句可能落入相邻类型；优先用真实样本调整，不为分类再增加一次 LLM 请求。
 - **解释体验限制**：CaptureInput 和 ExplanationCard 当前上限为 4096 字符，长段落还受模型 JSON 稳定性与浮窗最大高度约束，不代表整页翻译能力。
 - **阶段八与 v19 聚合边界**：原始 `learning_records` 继续作为追加式真实查询事件完整保留；正式聚合只合并 queryType 相同且英文学习目标在大小写、首尾空白和连续空白规范化后精确一致的记录，不做语义、相近词、同义词或词形聚类。聚合目标详情可追溯全部真实 occurrence、原始来源、上下文和时间；Review 可在后续轮次轮换该目标的不同真实英文语境，但不伪造历史出现。长期学习者记忆、记忆注入与个性化 Feed 排序仍属于阶段九，不得由当前复习状态或质量反馈冒充。
-- **Agent 后续边界**：Quick AI 已支持流式输出、停止/重试、白名单 Markdown 渲染、组合式系统提示词、重新生成（覆盖式 + 替代链审计）与截断诚实提示；阶段八点五任务 0/1/2/3 已通过评审，任务 3 已正式收口（Wikipedia 受控搜索 + 受控网页抓取 + 来源卡片 + 失败后可直接发新消息；集中在 `agent-runtime` 分支，任务 1-6 全部完成后再一次性合入 main）。任务 4 日常使用交互已实现并通过自动验证，待调度者复审与真实 Tauri 验收。记忆注入属于阶段九；截断继续/超 8K 续写和长上下文按任务 5 处理，不因文档建立自动并入正式能力。
+- **Agent 后续边界**：Quick AI 已支持流式输出、停止/重试、白名单 Markdown 渲染、组合式系统提示词、编辑并重新生成（hover 入口 + 行内编辑，方案 B 替代链审计）与截断诚实提示；阶段八点五任务 0/1/2/3 已通过评审，任务 3 已正式收口（Wikipedia 受控搜索 + 受控网页抓取 + 来源卡片 + 失败后可直接发新消息；集中在 `agent-runtime` 分支，任务 1-6 全部完成后再一次性合入 main）。任务 4 日常使用交互已实现并通过自动验证（含 2026-08-18 编辑并重新生成设计变更修复轮），待调度者复审与真实 Tauri 验收。记忆注入属于阶段九；截断继续/超 8K 续写和长上下文按任务 5 处理，不因文档建立自动并入正式能力。
 - **主题后续边界**：Flexoki 与 Codex 主题已作为随包内置主题接入；当前不包含外部主题 adapter、社区商店、在线下载或自动更新。新增 adapter 仍必须转换到 ReadRayThemeV1 并通过同一安全校验，不能放宽任意 CSS、字体、图片或网络资源边界。
-- **对话后续边界**：阶段六的查看全部、重命名、删除和原生导出已经完成；回答重生成已按任务 4 开放（覆盖式语义 + 替代链审计），记忆引用聚合仍属更后续能力，当前 UI 继续诚实禁用。
+- **对话后续边界**：阶段六的查看全部、重命名、删除和原生导出已经完成；"编辑并重新生成"已按任务 4 开放（最后一条输入 hover 入口 + 行内编辑，方案 B 替代链审计），记忆引用聚合仍属更后续能力，当前 UI 继续诚实禁用。
 - **阶段七范围**：三批设置功能与桌面生命周期已经通过复审和真实 Tauri 人工验收，阶段七已完成；阶段八新增实现不得回改其已验收行为。
 - **Windows 缩放视觉边界**：透明无边框主窗口在 Windows WebView2 持续拖动期间仍可能有一两帧内容面追赶，这是当前接受的平台边界；应用以主题同色的原生窗口/WebView 底板掩盖迟帧区域，并在缩放会话中延后响应式状态切换。第二轮真实 Tauri 验收前不得写成已解决；若仍有强烈黑/白色带，优先核对背景同步权限与实际窗口/WebView 底色，不要把它误判为数据刷新问题或继续扩大业务 CSS 重构。
 

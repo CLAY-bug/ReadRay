@@ -5,7 +5,6 @@ import type {
   ConversationAssistantMessage,
   ConversationOperationIdentity,
   ConversationInline,
-  ConversationMessage,
   ConversationMemoryCitation,
   ConversationRequest,
   ConversationService,
@@ -80,11 +79,37 @@ function InlineContent({ content }: { content: ConversationInline[] }) {
   });
 }
 
-function UserMessage({ message }: { message: ConversationUserMessage }) {
+function UserMessage({
+  message,
+  editable,
+  editing,
+  sendShortcut,
+  onEdit,
+  onSubmitEdit,
+  onCancelEdit,
+}: {
+  message: ConversationUserMessage;
+  editable: boolean;
+  editing: boolean;
+  sendShortcut: SendShortcut;
+  onEdit: (message: ConversationUserMessage) => void;
+  onSubmitEdit: (message: ConversationUserMessage, content: string) => void;
+  onCancelEdit: () => void;
+}) {
   const copyRef = useRef<HTMLDivElement>(null);
+  const editRef = useRef<HTMLTextAreaElement>(null);
   const [isOverflowing, setIsOverflowing] = useState(false);
   const [expanded, setExpanded] = useState(false);
+  const [editDraft, setEditDraft] = useState("");
   const copyId = useId();
+
+  useAutoResizeTextarea(editRef, editDraft);
+
+  useEffect(() => {
+    if (editing) {
+      setEditDraft(message.content);
+    }
+  }, [editing, message.content]);
 
   useLayoutEffect(() => {
     const copy = copyRef.current;
@@ -117,6 +142,61 @@ function UserMessage({ message }: { message: ConversationUserMessage }) {
       window.clearTimeout(measureTimer);
     };
   }, [message.content]);
+
+  if (editing) {
+    return (
+      <article className="rr-conversation-message is-user">
+        <form
+          className="rr-conversation-user-edit"
+          onSubmit={(event) => {
+            event.preventDefault();
+            const content = editDraft.trim();
+            if (!content) {
+              return;
+            }
+            onSubmitEdit(message, content);
+          }}
+        >
+          <textarea
+            ref={editRef}
+            rows={1}
+            autoFocus
+            value={editDraft}
+            aria-label="编辑问题"
+            placeholder="编辑你的问题…"
+            onChange={(event) => setEditDraft(event.target.value)}
+            onKeyDown={(event) => {
+              if (
+                shouldSendMultilineMessage(
+                  {
+                    key: event.key,
+                    shiftKey: event.shiftKey,
+                    ctrlKey: event.ctrlKey,
+                    isComposing: event.nativeEvent.isComposing,
+                  },
+                  sendShortcut,
+                )
+              ) {
+                event.preventDefault();
+                event.currentTarget.form?.requestSubmit();
+              } else if (event.key === "Escape" && !event.nativeEvent.isComposing) {
+                event.preventDefault();
+                onCancelEdit();
+              }
+            }}
+          />
+          <div className="rr-conversation-user-edit-actions">
+            <button type="submit" disabled={!editDraft.trim()}>
+              发送
+            </button>
+            <button type="button" onClick={onCancelEdit}>
+              取消
+            </button>
+          </div>
+        </form>
+      </article>
+    );
+  }
 
   const lineHeight = copyRef.current
     ? Number.parseFloat(getComputedStyle(copyRef.current).lineHeight) || 26
@@ -154,6 +234,29 @@ function UserMessage({ message }: { message: ConversationUserMessage }) {
       </div>
       {message.meta ? (
         <div className="rr-conversation-user-meta">{message.meta}</div>
+      ) : null}
+      {editable ? (
+        <button
+          className="rr-conversation-user-edit-button"
+          type="button"
+          aria-label="编辑问题并重新生成"
+          title="编辑问题并重新生成"
+          onClick={() => onEdit(message)}
+        >
+          <svg
+            width="13"
+            height="13"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="1.9"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+            aria-hidden="true"
+          >
+            <path d="M17 3a2.85 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z" />
+          </svg>
+        </button>
       ) : null}
     </article>
   );
@@ -484,6 +587,7 @@ function ConversationPage({
   const [lastExportedMessageCount, setLastExportedMessageCount] = useState(0);
   const [menuOpen, setMenuOpen] = useState(false);
   const [renameDraft, setRenameDraft] = useState<string | null>(null);
+  const [editingUserMessageId, setEditingUserMessageId] = useState<string | null>(null);
   const [deleteConfirmationOpen, setDeleteConfirmationOpen] = useState(false);
   const [managementBusy, setManagementBusy] = useState<
     "rename" | "delete" | null
@@ -897,6 +1001,7 @@ function ConversationPage({
     setLastExportedMessageCount(0);
     setMenuOpen(false);
     setRenameDraft(null);
+    setEditingUserMessageId(null);
     setDeleteConfirmationOpen(false);
     setManagementBusy(null);
     setManagementError("");
@@ -1222,50 +1327,51 @@ function ConversationPage({
     void requestReply(nextThread, prompt, userMessage.id, "append");
   };
 
-  const regenerate = () => {
-    if (!service.capabilities.canRegenerate) {
-      setMenuOpen(false);
-      notify("真实 Quick AI 暂不支持重新生成回答");
-      return;
-    }
-    const currentThread = threadRef.current;
-    if (!currentThread) {
-      setMenuOpen(false);
-      return;
-    }
-
-    const assistantIndex = currentThread.messages.length - 1;
-    if (
-      assistantIndex < 0 ||
-      currentThread.messages[assistantIndex].role !== "assistant"
-    ) {
-      setMenuOpen(false);
-      notify("当前对话还没有可重新生成的回答");
-      return;
-    }
-
-    let userMessage: ConversationUserMessage | null = null;
-    for (let index = assistantIndex - 1; index >= 0; index -= 1) {
-      const message: ConversationMessage = currentThread.messages[index];
-      if (message.role === "user") {
-        userMessage = message;
-        break;
+  const openUserMessageEdit = useCallback(
+    (userMessage: ConversationUserMessage) => {
+      if (generation || editingUserMessageId) {
+        return;
       }
-    }
-    if (!userMessage) {
       setMenuOpen(false);
-      notify("未找到这一轮回答对应的问题");
-      return;
-    }
+      setEditingUserMessageId(userMessage.id);
+    },
+    [editingUserMessageId, generation],
+  );
 
-    void requestReply(
-      currentThread,
-      userMessage.content,
-      userMessage.id,
-      "regenerate",
-      currentThread.messages[assistantIndex].id,
-    );
-  };
+  const cancelUserMessageEdit = useCallback(() => {
+    setEditingUserMessageId(null);
+  }, []);
+
+  const submitUserMessageEdit = useCallback(
+    (userMessage: ConversationUserMessage, content: string) => {
+      const currentThread = threadRef.current;
+      if (!currentThread || generation) {
+        return;
+      }
+      const userIndex = currentThread.messages.findIndex(
+        (message) => message.id === userMessage.id,
+      );
+      const assistant = currentThread.messages
+        .slice(userIndex + 1)
+        .find((message) => message.role === "assistant");
+      if (!assistant) {
+        setEditingUserMessageId(null);
+        notify("未找到这一轮回答对应的问题");
+        return;
+      }
+      setEditingUserMessageId(null);
+      // 编辑并重新生成（任务 4 修复轮）：携带编辑后的问题与该轮旧回答目标；
+      // 新问题行替代旧问题行、新回答替代旧回答（方案 B，后端落库）。
+      void requestReply(
+        currentThread,
+        content,
+        userMessage.id,
+        "regenerate",
+        assistant.id,
+      );
+    },
+    [generation, notify, requestReply],
+  );
 
   const exportConversation = async () => {
     const currentThread = threadRef.current;
@@ -1455,12 +1561,33 @@ function ConversationPage({
     [service],
   );
 
+  // 编辑并重新生成（任务 4 修复轮）：仅最后一条用户输入展示入口——线程以
+  // assistant 结尾且其前一条是 user；生成中与编辑中不展示。
+  const lastMessage = thread?.messages[thread.messages.length - 1];
+  const previousMessage = thread?.messages[thread.messages.length - 2];
+  const editableUserMessageId =
+    !generation &&
+    !editingUserMessageId &&
+    lastMessage?.role === "assistant" &&
+    previousMessage?.role === "user"
+      ? previousMessage.id
+      : null;
+
   const messageContent: ReactNode = (
     <>
       {thread?.messages.length ? (
         thread.messages.map((message) =>
           message.role === "user" ? (
-            <UserMessage message={message} key={message.id} />
+            <UserMessage
+              message={message}
+              key={message.id}
+              editable={message.id === editableUserMessageId}
+              editing={message.id === editingUserMessageId}
+              sendShortcut={sendShortcut}
+              onEdit={openUserMessageEdit}
+              onSubmitEdit={submitUserMessageEdit}
+              onCancelEdit={cancelUserMessageEdit}
+            />
           ) : (
             <AssistantMessage
               message={message}
@@ -1559,23 +1686,6 @@ function ConversationPage({
             </button>
             {menuOpen ? (
               <div className="rr-conversation-more-menu" role="menu">
-                <button
-                  className="rr-conversation-menu-item"
-                  type="button"
-                  role="menuitem"
-                  disabled={
-                    generation !== null ||
-                    !service.capabilities.canRegenerate
-                  }
-                  title={
-                    service.capabilities.canRegenerate
-                      ? undefined
-                      : "真实 Quick AI 暂不支持重新生成"
-                  }
-                  onClick={regenerate}
-                >
-                  重新生成回答
-                </button>
                 <button
                   className="rr-conversation-menu-item"
                   type="button"

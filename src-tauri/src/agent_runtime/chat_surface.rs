@@ -731,12 +731,12 @@ mod tests {
     }
 
     #[test]
-    fn regeneration_through_adapter_replaces_the_visible_answer() {
+    fn regeneration_through_adapter_replaces_edited_question_and_answer() {
         let (root, path) = test_database_path();
         let mut surface = adapter(&path);
         let conversation_id = ConversationStore::open_path(&path)
             .unwrap()
-            .create_with_exchange("deepseek-v4-flash", "重生成问题", "旧回答")
+            .create_with_exchange("deepseek-v4-flash", "原问题", "旧回答")
             .unwrap()
             .id;
         let old_assistant = ConversationStore::open_path(&path)
@@ -749,10 +749,10 @@ mod tests {
         let ChatPreparedTurn::Pending {
             user_message_id, ..
         } = surface
-            .prepare_regeneration(conversation_id, 1, "重生成问题", old_assistant)
+            .prepare_regeneration(conversation_id, 1, "编辑后的问题", old_assistant)
             .unwrap()
         else {
-            panic!("重新生成必须返回 pending 准备结果");
+            panic!("编辑必须返回 pending 准备结果");
         };
         let regenerated = surface
             .complete_regeneration(
@@ -766,12 +766,13 @@ mod tests {
             )
             .unwrap();
         assert_eq!(regenerated.messages.len(), 2);
+        assert_eq!(regenerated.messages[0].content, "编辑后的问题");
         assert_eq!(regenerated.messages[1].content, "新回答");
         assert_ne!(regenerated.messages[1].id, old_assistant);
 
-        // 同一旧目标再次准备：目标已被替代 → 幂等返回 Completed（不新建 run）。
+        // 同一旧目标再次编辑：目标已被替代 → 幂等返回 Completed（不新建 run）。
         let ChatPreparedTurn::Completed { .. } = surface
-            .prepare_regeneration(conversation_id, 1, "重生成问题", old_assistant)
+            .prepare_regeneration(conversation_id, 1, "编辑后的问题", old_assistant)
             .unwrap()
         else {
             panic!("已被替代的目标必须返回 Completed");

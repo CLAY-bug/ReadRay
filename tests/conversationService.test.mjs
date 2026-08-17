@@ -816,10 +816,11 @@ test("缺失会话明确失败，重新生成必须携带目标回答", async ()
   );
 });
 
-test("重新生成复用同一 user 轮次并携带目标回答 ID", async () => {
+test("编辑并重新生成复用该轮身份并携带编辑内容与目标回答 ID", async () => {
   const sent = [];
+  // 编辑提交后的可见快照：旧问题行已被过滤，只剩编辑后的问题与新回答。
   const regenerated = snapshot([
-    message(41, "user", "重生成问题", 1),
+    message(45, "user", "编辑后的问题", 3),
     message(43, "assistant", "重新生成的新回答", 4),
   ]);
   const service = new RepositoryConversationService(
@@ -835,15 +836,16 @@ test("重新生成复用同一 user 轮次并携带目标回答 ID", async () =>
 
   const reply = await service.generateReply({
     conversationId: "17",
+    // 编辑发送：thread 中移除旧回答后，尾 user（该轮身份）保留原 sequence。
     messages: [
       {
         id: "quick-ai-message-41",
         role: "user",
-        content: "重生成问题",
+        content: "原问题",
         sequence: 1,
       },
     ],
-    prompt: "重生成问题",
+    prompt: "编辑后的问题",
     mode: "regenerate",
     replaceAssistantMessageId: "quick-ai-message-42",
   });
@@ -852,30 +854,33 @@ test("重新生成复用同一 user 轮次并携带目标回答 ID", async () =>
     {
       conversationId: 17,
       expectedUserSequence: 1,
-      content: "重生成问题",
+      content: "编辑后的问题",
       replaceMessageId: 42,
     },
   ]);
   assert.equal(reply.status, "complete");
-  // 重新生成后的 sequence 有间隙：当前回答不是 userSequence+1，而是该 user
-  // 之后最后一条 assistant（旧回答已被 Rust 快照过滤）。
+  // 当前回答 = 可见快照中最后一条 assistant（旧问/旧答已被 Rust 快照过滤）。
   assert.equal(reply.assistantMessageId, "quick-ai-message-43");
   assert.equal(reply.persistedThread.messages.length, 2);
+  assert.equal(reply.persistedThread.messages[0].content, "编辑后的问题");
+  assert.equal(reply.persistedThread.messages[0].sequence, 3);
   assert.equal(reply.persistedThread.messages[1].markdown, "重新生成的新回答");
   assert.equal(reply.persistedThread.messages[1].sequence, 4);
 });
 
-test("重新生成未提交时保持失败可重试（目标仍是当前回答）", async () => {
+test("编辑未提交时保持失败可重试（目标旧回答仍是当前回答）", async () => {
+  // 编辑失败后的可见快照：编辑 pending 问题行已落库，旧问+旧答仍可见。
   const unchanged = snapshot([
-    message(41, "user", "重生成问题", 1),
+    message(41, "user", "原问题", 1),
     message(42, "assistant", "旧回答", 2),
+    message(45, "user", "编辑后的问题", 3),
   ]);
   const service = new RepositoryConversationService(
     withStreaming({
       create: async () => snapshot(),
       get: async () => unchanged,
       send: async () => {
-        throw new Error("重新生成请求失败");
+        throw new Error("编辑请求失败");
       },
     }),
   );
@@ -886,24 +891,26 @@ test("重新生成未提交时保持失败可重试（目标仍是当前回答�
       {
         id: "quick-ai-message-41",
         role: "user",
-        content: "重生成问题",
+        content: "原问题",
         sequence: 1,
       },
     ],
-    prompt: "重生成问题",
+    prompt: "编辑后的问题",
     mode: "regenerate",
     replaceAssistantMessageId: "quick-ai-message-42",
   });
 
-  // 目标回答仍是当前回答 → 重新生成未提交：返回 pending，可重试。
+  // 目标旧回答仍是当前回答 → 编辑未提交：返回 pending（含编辑 pending 行），可重试。
   assert.equal(reply.status, "pending");
   assert.equal(reply.errorMessage, "暂时无法回答，请重试。");
+  assert.equal(reply.persistedThread.messages.length, 3);
   assert.equal(reply.persistedThread.messages[1].markdown, "旧回答");
+  assert.equal(reply.persistedThread.messages[2].content, "编辑后的问题");
 });
 
-test("重新生成模糊成功：恢复快照中目标已被替代时按成功收尾", async () => {
+test("编辑模糊成功：恢复快照中目标已被替代时按成功收尾", async () => {
   const regenerated = snapshot([
-    message(41, "user", "重生成问题", 1),
+    message(45, "user", "编辑后的问题", 3),
     message(43, "assistant", "已提交的新回答", 4),
   ]);
   const service = new RepositoryConversationService(
@@ -922,19 +929,38 @@ test("重新生成模糊成功：恢复快照中目标已被替代时按成功�
       {
         id: "quick-ai-message-41",
         role: "user",
-        content: "重生成问题",
+        content: "原问题",
         sequence: 1,
       },
     ],
-    prompt: "重生成问题",
+    prompt: "编辑后的问题",
     mode: "regenerate",
     replaceAssistantMessageId: "quick-ai-message-42",
   });
 
-  // 当前回答已是新回答（旧目标被替代）→ 重新生成已提交，直接使用权威快照。
+  // 当前回答已是新回答（旧目标被替代）→ 编辑已提交，直接使用权威快照。
   assert.equal(reply.status, "complete");
   assert.equal(reply.assistantMessageId, "quick-ai-message-43");
   assert.equal(reply.persistedThread.messages[1].markdown, "已提交的新回答");
+});
+
+test("最后一条用户输入下方提供编辑并重新生成入口，菜单不再提供重新生成", async () => {
+  const page = await readFile("src/components/ConversationPage.tsx", "utf8");
+  const styles = await readFile("src/styles/conversation-page.css", "utf8");
+
+  // hover 编辑入口与行内编辑表单存在。
+  assert.match(page, /rr-conversation-user-edit-button/);
+  assert.match(page, /aria-label="编辑问题并重新生成"/);
+  assert.match(page, /rr-conversation-user-edit"/);
+  assert.match(page, /aria-label="编辑问题"/);
+  // 仅最后一条输入展示：线程以 assistant 结尾且其前一条是 user。
+  assert.match(page, /editableUserMessageId/);
+  assert.match(page, /lastMessage\?\.role === "assistant"/);
+  // 菜单内不再有"重新生成回答"入口与 canRegenerate 死代码。
+  assert.doesNotMatch(page, /重新生成回答/);
+  assert.doesNotMatch(page, /canRegenerate/);
+  assert.match(styles, /\.rr-conversation-user-edit-button \{/);
+  assert.match(styles, /\.rr-conversation-user-edit \{/);
 });
 
 test("全部会话、重命名和删除只使用数据库 ID 并在成功后刷新", async () => {
@@ -1281,7 +1307,7 @@ test("stopGeneration 通过 abort 命令请求后端停止", async () => {
   assert.equal(abortConversationId, 17);
 });
 
-test("正式 service 能力为流式可停止、可重新生成且导出可用", async () => {
+test("正式 service 能力为流式可停止且导出可用", async () => {
   const service = new RepositoryConversationService(
     withStreaming({
       create: async () => snapshot(),
@@ -1292,7 +1318,6 @@ test("正式 service 能力为流式可停止、可重新生成且导出可用",
 
   assert.equal(service.capabilities.delivery, "streaming");
   assert.equal(service.capabilities.canStop, true);
-  assert.equal(service.capabilities.canRegenerate, true);
   assert.equal(service.capabilities.canExport, true);
 });
 

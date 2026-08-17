@@ -387,7 +387,6 @@ export class FixtureConversationService implements ConversationService {
   readonly capabilities = {
     delivery: "chunked-preview",
     canStop: true,
-    canRegenerate: true,
     canExport: true,
   } as const;
   private nextConversationId = 1;

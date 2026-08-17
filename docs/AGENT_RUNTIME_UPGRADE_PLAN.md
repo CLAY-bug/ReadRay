@@ -917,11 +917,11 @@ Runtime 与网络纵切稳定后，再开放：
 
 ### 任务 4：日常使用交互
 
-目标：让日常使用交互完整自洽——重新生成可用、错误呈现友好、回答来源可回看。面向普通英语学习者，不展示技术内部细节。
+目标：让日常使用交互完整自洽——"编辑并重新生成"可用、错误呈现友好、回答来源可回看。面向普通英语学习者，不展示技术内部细节。
 
 工作内容：
 
-- 重新生成的覆盖式正式实现（§18.4）：不物理覆盖原始回答——原 assistant 行保留可审计，设计替代关系；导出一致性（导出显示当前答案）。实现前先定替代关系与落库方案（如需新表，集中 migration + 回滚测试）。
+- **编辑并重新生成（§18.4，2026-08-17 用户设计确认，替代原"同题重新生成"）**：交互为"最后一条用户输入下方的 hover 小按钮 → 行内编辑该问题 → 发送 → 新回答替代旧回答"；仅对最后一条输入展示。语义：编辑后的问题**以新消息行替代旧问题行**（`superseded_by_id` 指向旧问题，方案 B——复用 v21 通用消息字段，**无新 migration**），新回答替代旧回答（不物理覆盖，旧问题+旧回答均保留在库可审计）；可见快照与导出只取未替代消息；序列保持 user 奇/assistant 偶。同题"重新生成"入口**移除**（输入不变的重掷对概率性 Agent 无价值）；"撤销找回旧回答"本轮不做（方案 B 数据基础保留，未来可选）。menu 内原入口与相关死代码一并清理。
 - 错误呈现友好化：UI 永不展示技术错误原文（错误进 Rust 日志，沿用 `READRAY_AGENT_*` 模式）；整轮失败时页面只显示友好文案（"暂时无法回答，请重试"），pending 轮次语义不变。
 - 来源持久化回看：来源数据随 assistant 消息落库（数据小、最小路径），重启与历史对话中来源卡片仍可回看；不从 run/step 审计表重建。
 - 截断诚实提示：`finish_reason=length` 时回答照常持久化并给出"回答可能不完整"的轻微提示；"继续生成"功能推迟到任务 5 长上下文之后（本任务不做）。
@@ -934,19 +934,25 @@ Runtime 与网络纵切稳定后，再开放：
 
 验收：
 
-- 重新生成不破坏原始用户轮次和导出一致性；旧回答不物理覆盖、可审计。
+- 编辑并重新生成：仅最后一条输入展示入口；编辑后的问题以新消息行替代旧问题行（方案 B，无新 migration），新回答替代旧回答；旧问题+旧回答均保留在库可审计；可见快照与导出只取未替代消息；序列保持 user 奇/assistant 偶；同题"重新生成"入口已移除。
 - 页面卸载、切换会话和窗口隐藏后事件身份仍正确；运行中输入不丢失、不污染其他会话。
 - UI 不出现技术错误原文；失败只展示友好文案，原始错误可在日志中找到。
 - 来源随回答持久化，重启与历史回看可用。
 
+#### 设计变更记录（2026-08-17 用户确认，修复轮依据）
+
+- 原"同题重新生成"改为"**编辑并重新生成**"：交互为最后一条用户输入下方的 hover 小按钮 → 行内编辑 → 发送 → 新回答替代旧回答。理由：输入不变的重掷对概率性 Agent 无价值；用户需要的是改问题再要答案。
+- 编辑后的问题采用**方案 B**：新问题行 `superseded_by_id` 指向旧问题行（复用 v21 通用消息字段，无新 migration）；与回答替代机制一致，原始问题措辞保留可审计。
+- 移除菜单内"重新生成回答"入口及相关死代码；"撤销找回旧回答"本轮不做（数据基础保留，未来可选）。
+
 #### 实施/评审记录（任务 4，2026-08-17）
 
-- **替代关系与落库（SQLite v21，集中一次）**：`quick_ai_messages` 一次追加三列——`superseded_by_id`（重新生成替代链，旧行保留可审计）、`sources_json`（来源随 assistant 消息落库，不从 run/step 审计表重建）、`truncated`（finish_reason=length 诚实截断标志）。重新生成复用同一 user 轮次（conversation_id + expected_user_sequence + user_message_id 不变），新 run 的 `retry_of_run_id` 指向该轮最近一次 run（含已完成的旧 run）；新 assistant 以"当前最大序号的下一个偶数"插入（保持 user 奇/assistant 偶交替），旧 assistant 行标记被替代。可见快照与导出统一过滤 `superseded_by_id IS NULL`，只显示当前答案；目标已被替代的重复请求幂等返回当前权威快照。migration 带新库约束测试与 v20→v21 旧库升级数据保留测试。
-- **重新生成链路**：`send_quick_ai_message_agent` 新增 `replace_message_id` 参数；`ChatSurfaceAdapter::prepare_regeneration/complete_regeneration` 走独立幂等边界（目标必须是该轮当前、未被替代且为会话尾的 assistant）；模型上下文只到该轮 user（旧回答不进入模型上下文），相当于对同一问题的全新作答。前端 `canRegenerate` 置真，`generateReply` 支持 mode=regenerate + replaceAssistantMessageId；模糊成功语义：恢复快照中目标仍为当前回答 → pending 可重试，已被替代 → 按成功收尾返回权威快照。
+- **替代关系与落库（SQLite v21，集中一次）**：`quick_ai_messages` 一次追加三列——`superseded_by_id`（替代链，旧行保留可审计）、`sources_json`（来源随 assistant 消息落库，不从 run/step 审计表重建）、`truncated`（finish_reason=length 诚实截断标志）。migration 带新库约束测试与 v20→v21 旧库升级数据保留测试。
+- **编辑并重新生成（2026-08-18 设计变更修复轮，替代原"同题重新生成"）**：交互为"最后一条用户输入下方的 hover 小按钮 → 行内编辑该问题 → 发送 → 新回答替代旧回答"，仅最后一条输入展示入口。方案 B：编辑后的问题**以新消息行替代旧问题行**——新问题行在 prepare 事务中以"当前最大序号的下一个奇数"插入（pending 可重试、崩溃安全），旧问题行与旧回答的"被替代"标记统一在 complete 事务中写入（失败时旧问+旧答仍可见）；替代方向与 v21 一致（**被替代者记录 `superseded_by_id` 指向替代者**，可见快照过滤 `superseded_by_id IS NULL` 自然只取未替代消息，无新 migration、protocol.rs 未动）。新回答取新问题行的下一个偶数，序列保持 user 奇/assistant 偶；run 复用该轮 user 身份（同一 expected_user_sequence，新 run 的 `retry_of_run_id` 指向该轮最近 run）；模型上下文 = 历史（排除该轮旧问题行与旧回答）+ 编辑后的 pending 问题行。幂等：目标必须是该轮当前、未被替代的旧回答；该轮已有编辑 pending 行时重试复用同一行（内容不一致拒绝，避免错改其他轮次 pending 行）；目标已被替代的重复请求幂等返回当前权威快照；编辑内容非空校验。菜单内"重新生成回答"入口与 `canRegenerate` 死代码已移除。
 - **错误呈现友好化**：UI 永不展示技术错误原文——`run_agent_session_core` 各失败分支把终止原因与技术消息写入 `eprintln!("READRAY_AGENT_RUN_FAILED=…")`，只返回友好文案（停止/未完成/暂时无法回答）；`project_ui_event` 的 RunFailed 只投影"暂时无法回答，请重试。"；前端 failed 气泡与打开失败路径同样只显示友好文案，技术细节进 console。
 - **截断诚实提示**：coordinator 捕获最终回答轮的 `ModelFinishReason::Length` → `RunOutcome.truncated`（仅改 coordinator.rs，未动 protocol.rs 冻结协议）；回答照常持久化并携带 truncated 标志，前端消息显示"回答可能不完整"轻微提示（重启后仍可回看），移除"继续生成"按钮；预算截断（RunBudgetExceeded）保持不落答案、pending 可重试，文案改为友好版"回答未完成"。
 - **来源持久化回看**：运行期经 SourceCollectingSink 从 SourcesUpdated 事件按 source_id 去重累积，随 complete/complete_regeneration 事务写入 assistant 行 `sources_json`；快照 `get()` 解析并返回 `sources`（camelCase 与前端 AgentSource 同构），损坏 blob 只记日志降级为无来源，不阻断会话加载；重启与历史对话来源卡片直接可回看。
-- **验证**：Rust lib 385/0（基线 372 + 新增 13：migration v21、重新生成端到端/幂等/来源随新回答落库、截断标志持久化、快照过滤/导出一致性、sequence 交替）；前端 conversation 37/37（新增重新生成参数传递、未提交 pending、模糊成功、来源/截断映射）、overlay 20/review 50/writing 30/settings 57/startup 3 全绿；`pnpm build`、cargo fmt/check --all-targets、git diff --check 全通过；浏览器预览（vite preview + fixture）实测"更多操作 → 重新生成回答"启用并原地替换回答、来源卡片完成态渲染无控制台错误。未运行 live 测试；真实 Tauri/DeepSeek 人工验收（重新生成真实回答、截断提示、重启回看来源）留待停点。
+- **验证**：Rust lib 387/0（基线 372 + 新增 15：migration v21、编辑端到端/幂等/transcript 排除旧问旧答/来源随新回答落库/截断标志持久化/快照过滤与导出一致性/序列交替/pending 编辑行重试复用）；前端 conversation 38/38（编辑参数传递、未提交 pending、模糊成功、hover 入口与菜单移除静态断言、来源/截断映射）、overlay 20/review 50/writing 30/settings 57/startup 3 全绿；`pnpm build`、cargo fmt/check --all-targets、git diff --check 全通过；浏览器预览（vite preview + fixture）实测最后一条输入 hover 编辑按钮 → 行内编辑 → 发送后回答原地替换、菜单仅剩导出/删除、无控制台错误。未运行 live 测试；真实 Tauri/DeepSeek 人工验收（编辑并重新生成真实回答、截断提示、重启回看来源）留待停点。
 
 ### 任务 5：长上下文与 compaction
 

@@ -239,7 +239,6 @@ export type ConversationExportResult =
 export type ConversationServiceCapabilities = {
   delivery: "complete" | "chunked-preview" | "streaming";
   canStop: boolean;
-  canRegenerate: boolean;
   canExport: boolean;
 };
 

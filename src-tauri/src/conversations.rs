@@ -129,8 +129,9 @@ pub(crate) enum PreparedTurn {
     },
 }
 
-/// 重新生成准备结果（任务 4）：Ready 可执行新 run；AlreadyCurrent 表示目标回答
-/// 已被更新的重新生成替代（幂等，不新建 run，直接返回当前权威快照）。
+/// 编辑并重新生成准备结果（任务 4 修复轮）：Ready 可执行新 run（user_message_id
+/// 是编辑后的 pending 问题行）；AlreadyCurrent 表示目标旧回答已被更新的重新生成
+/// 替代（幂等，不新建 run，直接返回当前权威快照）。
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum RegenerationTurn {
     Ready {
@@ -430,9 +431,13 @@ impl ConversationStore {
         self.get_required(conversation_id)
     }
 
-    /// 重新生成准备（任务 4）：校验该轮 user 与目标 assistant 后返回 Ready；
-    /// 目标已被更新的重新生成替代时返回 AlreadyCurrent（幂等，直接返回权威快照）。
-    /// 只允许重新生成会话中最后一条（未被替代的）assistant。
+    /// 编辑并重新生成准备（任务 4 修复轮）：`user_content` 是**编辑后的问题**。
+    /// 校验该轮旧问题行与目标旧回答后，插入一条新的 pending 用户行（编辑后的
+    /// 内容，sequence 取当前最大序号的下一个奇数，保持 user 奇 / assistant 偶）；
+    /// 旧问题行与旧回答的"被替代"标记统一在 complete 事务中写入（失败时旧问+
+    /// 旧答仍可见可重试）。该轮已有编辑 pending 行（失败后重试）且内容一致时
+    /// 复用该行；目标已被更新的重新生成替代时返回 AlreadyCurrent（幂等）。
+    /// 只允许编辑会话中最后一条回答对应的最后一条输入。
     pub(crate) fn prepare_regeneration(
         &mut self,
         conversation_id: i64,
@@ -441,55 +446,94 @@ impl ConversationStore {
         target_message_id: i64,
     ) -> Result<RegenerationTurn, String> {
         validate_user_sequence(expected_user_sequence)?;
+        validate_message("用户消息", user_content)?;
         let normalized_content = user_content.trim();
         let transaction = self
             .connection
             .transaction()
-            .map_err(|error| format!("Quick AI 重新生成事务无法开始：{error}"))?;
-        let stored_user = stored_message_at(&transaction, conversation_id, expected_user_sequence)?
+            .map_err(|error| format!("Quick AI 编辑并重新生成事务无法开始：{error}"))?;
+        let old_user = stored_message_at(&transaction, conversation_id, expected_user_sequence)?
             .ok_or_else(|| {
                 format!(
-                    "Quick AI 待重新生成的用户消息不存在：conversation_id={conversation_id}, sequence={expected_user_sequence}。"
+                    "Quick AI 待编辑的用户消息不存在：conversation_id={conversation_id}, sequence={expected_user_sequence}。"
                 )
             })?;
-        if role_from_storage(&stored_user.role)? != ConversationRole::User {
-            return Err("Quick AI 重新生成目标不是用户消息。".to_string());
-        }
-        if stored_user.content != normalized_content {
-            return Err("Quick AI 重新生成的用户消息内容不匹配。".to_string());
+        if role_from_storage(&old_user.role)? != ConversationRole::User {
+            return Err("Quick AI 编辑目标不是用户消息。".to_string());
         }
 
         let target = stored_message_by_id(&transaction, conversation_id, target_message_id)?
-            .ok_or_else(|| format!("Quick AI 重新生成目标回答不存在：id={target_message_id}。"))?;
+            .ok_or_else(|| format!("Quick AI 编辑目标回答不存在：id={target_message_id}。"))?;
         if role_from_storage(&target.role)? != ConversationRole::Assistant {
-            return Err("Quick AI 重新生成目标不是助手消息。".to_string());
+            return Err("Quick AI 编辑目标不是助手消息。".to_string());
         }
         if target.sequence <= expected_user_sequence {
-            return Err("Quick AI 重新生成目标不属于该轮回答。".to_string());
+            return Err("Quick AI 编辑目标不属于该轮回答。".to_string());
         }
-        // 已被替代的目标优先幂等返回（重复请求/迟到重试不报"非尾"错误）；
-        // 未替代但非尾的目标才是真正的非法请求。
+        // 已被替代的目标优先幂等返回（重复请求/迟到重试不报错）。
         if target.superseded_by_id.is_some() {
             drop(transaction);
             return Ok(RegenerationTurn::AlreadyCurrent {
                 snapshot: self.get_required(conversation_id)?,
             });
         }
+
         let current_max = max_sequence(&transaction, conversation_id)?.unwrap_or(0);
-        if target.sequence != current_max {
-            return Err("Quick AI 只能重新生成会话中最后一条回答。".to_string());
+        let tail = stored_message_at(&transaction, conversation_id, current_max)?
+            .ok_or_else(|| "Quick AI 会话尾消息无法读取。".to_string())?;
+        let has_pending_edit = tail.id != old_user.id
+            && tail.sequence == target.sequence + 1
+            && role_from_storage(&tail.role)? == ConversationRole::User
+            && tail.superseded_by_id.is_none();
+        if has_pending_edit {
+            // 该轮已有编辑 pending 行（失败后重试）：内容一致才复用，避免把
+            // 其他轮次的 pending 用户行误当作本次编辑。
+            if tail.content != normalized_content {
+                return Err("Quick AI 编辑内容与待完成的问题不一致。".to_string());
+            }
+            drop(transaction);
+            return Ok(RegenerationTurn::Ready {
+                snapshot: self.get_required(conversation_id)?,
+                user_message_id: tail.id,
+                target_message_id,
+            });
         }
-        drop(transaction);
+
+        // 首次编辑：目标旧回答必须是会话尾；旧问题行不得已被替代。
+        if target.sequence != current_max {
+            return Err("Quick AI 只能编辑会话中最后一条回答对应的问题。".to_string());
+        }
+        if old_user.superseded_by_id.is_some() {
+            return Err("Quick AI 该轮问题已被更新的编辑替代。".to_string());
+        }
+        let new_sequence = current_max + 1;
+        insert_message(
+            &transaction,
+            conversation_id,
+            ConversationRole::User,
+            normalized_content,
+            new_sequence,
+            unix_time_ms()?,
+            None,
+            false,
+        )?;
+        let new_user_id = transaction.last_insert_rowid();
+        transaction
+            .commit()
+            .map_err(|error| format!("Quick AI 编辑后的问题事务无法提交：{error}"))?;
+
         Ok(RegenerationTurn::Ready {
             snapshot: self.get_required(conversation_id)?,
-            user_message_id: stored_user.id,
+            user_message_id: new_user_id,
             target_message_id,
         })
     }
 
-    /// 重新生成完成（任务 4）：插入新 assistant（sequence 取当前最大序号的下一个
-    /// 偶数，保持 user 奇 / assistant 偶交替），再把旧 assistant 标记为被替代；
-    /// 旧行不物理删除（可审计），可见快照与导出只取未被替代的当前回答。
+    /// 编辑并重新生成完成（任务 4 修复轮）：插入新 assistant（sequence 取编辑后
+    /// 问题行的下一个偶数），并**在同一事务中**把旧问题行标记为被新问题行替代
+    /// （方案 B：复用 v21 的 superseded_by_id，方向与 v21 一致——被替代者记录
+    /// 指向替代者，快照过滤 `superseded_by_id IS NULL` 自然只取未替代消息）与
+    /// 旧回答标记为被新回答替代。旧问题+旧回答均不物理删除（可审计）。
     pub(crate) fn complete_regeneration(
         &mut self,
         conversation_id: i64,
@@ -506,37 +550,47 @@ impl ConversationStore {
         let transaction = self
             .connection
             .transaction()
-            .map_err(|error| format!("Quick AI 重新生成回答事务无法开始：{error}"))?;
-        let stored_user = stored_message_at(
+            .map_err(|error| format!("Quick AI 编辑并重新生成回答事务无法开始：{error}"))?;
+        let old_user = stored_message_at(
             &transaction,
             conversation_id,
             expected_user_sequence,
         )?
         .ok_or_else(|| {
             format!(
-                "Quick AI 待重新生成的用户消息不存在：conversation_id={conversation_id}, sequence={expected_user_sequence}。"
+                "Quick AI 待编辑的用户消息不存在：conversation_id={conversation_id}, sequence={expected_user_sequence}。"
             )
         })?;
-        if stored_user.id != user_message_id
-            || role_from_storage(&stored_user.role)? != ConversationRole::User
+        if role_from_storage(&old_user.role)? != ConversationRole::User {
+            return Err("Quick AI 编辑目标不是用户消息。".to_string());
+        }
+        if old_user.superseded_by_id.is_some() {
+            return Err("Quick AI 该轮问题已被更新的编辑替代。".to_string());
+        }
+        let new_user = stored_message_by_id(&transaction, conversation_id, user_message_id)?
+            .ok_or_else(|| format!("Quick AI 编辑后的用户消息不存在：id={user_message_id}。"))?;
+        if role_from_storage(&new_user.role)? != ConversationRole::User
+            || new_user.id == old_user.id
+            || new_user.sequence <= old_user.sequence
+            || new_user.superseded_by_id.is_some()
         {
-            return Err("Quick AI 待重新生成用户消息身份不匹配。".to_string());
+            return Err("Quick AI 编辑后的用户消息身份不匹配。".to_string());
         }
         let target = stored_message_by_id(&transaction, conversation_id, target_message_id)?
-            .ok_or_else(|| format!("Quick AI 重新生成目标回答不存在：id={target_message_id}。"))?;
+            .ok_or_else(|| format!("Quick AI 编辑目标回答不存在：id={target_message_id}。"))?;
         if role_from_storage(&target.role)? != ConversationRole::Assistant
-            || target.sequence <= expected_user_sequence
+            || target.superseded_by_id.is_some()
+            || target.sequence <= old_user.sequence
+            || target.sequence >= new_user.sequence
         {
-            return Err("Quick AI 重新生成目标不是该轮助手消息。".to_string());
+            return Err("Quick AI 编辑目标不是该轮旧回答。".to_string());
         }
-        if target.superseded_by_id.is_some() {
-            return Err("Quick AI 重新生成目标已被更新的回答替代。".to_string());
-        }
+        // 编辑 pending 行必须是会话尾（当前最大序号）。
         let current_max = max_sequence(&transaction, conversation_id)?.unwrap_or(0);
-        if target.sequence != current_max {
-            return Err("Quick AI 只能重新生成会话中最后一条回答。".to_string());
+        if current_max != new_user.sequence {
+            return Err("Quick AI 只能编辑会话中最后一条回答对应的问题。".to_string());
         }
-        let new_sequence = current_max + 1 + i64::from(current_max % 2 == 0);
+        let new_sequence = new_user.sequence + 1;
         insert_message(
             &transaction,
             conversation_id,
@@ -555,9 +609,20 @@ impl ConversationStore {
                  WHERE id = ?2 AND superseded_by_id IS NULL",
                 params![new_message_id, target_message_id],
             )
-            .map_err(|error| format!("Quick AI 重新生成替代标记失败：{error}"))?;
+            .map_err(|error| format!("Quick AI 编辑替代旧回答标记失败：{error}"))?;
         if superseded != 1 {
-            return Err("Quick AI 重新生成目标已被更新的回答替代。".to_string());
+            return Err("Quick AI 编辑目标已被更新的回答替代。".to_string());
+        }
+        let superseded_user = transaction
+            .execute(
+                "UPDATE quick_ai_messages
+                 SET superseded_by_id = ?1
+                 WHERE id = ?2 AND superseded_by_id IS NULL",
+                params![new_user.id, old_user.id],
+            )
+            .map_err(|error| format!("Quick AI 编辑替代旧问题标记失败：{error}"))?;
+        if superseded_user != 1 {
+            return Err("Quick AI 该轮问题已被更新的编辑替代。".to_string());
         }
         transaction
             .execute(
@@ -569,7 +634,7 @@ impl ConversationStore {
             .map_err(|error| format!("Quick AI 对话更新时间失败：{error}"))?;
         transaction
             .commit()
-            .map_err(|error| format!("Quick AI 重新生成回答事务无法提交：{error}"))?;
+            .map_err(|error| format!("Quick AI 编辑并重新生成回答事务无法提交：{error}"))?;
 
         self.get_required(conversation_id)
     }
@@ -1701,7 +1766,7 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn regeneration_replaces_visible_answer_and_keeps_old_row_for_audit() {
+    fn regeneration_replaces_edited_question_and_answer_keeping_old_rows_for_audit() {
         let (root, path) = test_database_path();
         let mut store = ConversationStore::open_path(&path).unwrap();
         let conversation = store
@@ -1709,17 +1774,26 @@ pub(crate) mod tests {
             .unwrap();
         let old_assistant = conversation.messages[1].id;
 
+        // 编辑并重新生成：内容是编辑后的问题（与旧问题不同）。
         let RegenerationTurn::Ready {
             user_message_id,
             target_message_id,
             ..
         } = store
-            .prepare_regeneration(conversation.id, 1, "原问题", old_assistant)
+            .prepare_regeneration(conversation.id, 1, "编辑后的问题", old_assistant)
             .unwrap()
         else {
-            panic!("首次重新生成必须 Ready");
+            panic!("首次编辑必须 Ready");
         };
         assert_eq!(target_message_id, old_assistant);
+
+        // 编辑 pending：新问题行已落库，旧问题+旧回答仍可见（未标记替代）。
+        let pending = store.get_required(conversation.id).unwrap();
+        assert_eq!(pending.messages.len(), 3);
+        assert_eq!(pending.messages[0].content, "原问题");
+        assert_eq!(pending.messages[1].content, "旧回答");
+        assert_eq!(pending.messages[2].content, "编辑后的问题");
+        assert_eq!(pending.messages[2].sequence, 3, "新问题行取下个奇数");
 
         let regenerated = store
             .complete_regeneration(
@@ -1732,11 +1806,12 @@ pub(crate) mod tests {
                 false,
             )
             .unwrap();
-        // 可见快照只保留当前回答：旧回答被过滤，新回答在新 sequence（下一个偶数）。
+        // 可见快照只保留当前：编辑后的问题 + 新回答（旧问/旧答被过滤）。
         assert_eq!(regenerated.messages.len(), 2);
-        assert_eq!(regenerated.messages[0].content, "原问题");
+        assert_eq!(regenerated.messages[0].content, "编辑后的问题");
         assert_eq!(regenerated.messages[1].content, "新回答");
-        assert_eq!(regenerated.messages[1].sequence, 4);
+        assert_eq!(regenerated.messages[0].sequence, 3);
+        assert_eq!(regenerated.messages[1].sequence, 4, "新回答取下个偶数");
         assert_eq!(
             regenerated.messages[1].sources.as_ref().unwrap()[0].source_id,
             "source-1"
@@ -1744,6 +1819,19 @@ pub(crate) mod tests {
 
         // 旧行物理保留、标记被替代（可审计），内容不被覆盖。
         let connection = open_database(&path).unwrap();
+        let (old_user_content, old_user_superseded_by): (String, Option<i64>) = connection
+            .query_row(
+                "SELECT content, superseded_by_id FROM quick_ai_messages WHERE id = ?1",
+                [conversation.messages[0].id],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(old_user_content, "原问题", "旧问题不得被物理覆盖");
+        assert_eq!(
+            old_user_superseded_by,
+            Some(user_message_id),
+            "旧问题行必须指向编辑后的问题行"
+        );
         let (old_content, superseded_by): (String, Option<i64>) = connection
             .query_row(
                 "SELECT content, superseded_by_id FROM quick_ai_messages WHERE id = ?1",
@@ -1753,7 +1841,6 @@ pub(crate) mod tests {
             .unwrap();
         assert_eq!(old_content, "旧回答", "旧回答不得被物理覆盖");
         let superseded_by = superseded_by.expect("旧回答必须标记被替代");
-        assert_ne!(superseded_by, old_assistant);
         let new_content: String = connection
             .query_row(
                 "SELECT content FROM quick_ai_messages WHERE id = ?1",
@@ -1764,21 +1851,88 @@ pub(crate) mod tests {
         assert_eq!(new_content, "新回答");
         drop(connection);
 
-        // 再次对同一旧目标重新生成：AlreadyCurrent 幂等返回当前权威快照。
+        // 再次对同一旧目标编辑：AlreadyCurrent 幂等返回当前权威快照。
         let RegenerationTurn::AlreadyCurrent { snapshot } = store
-            .prepare_regeneration(conversation.id, 1, "原问题", old_assistant)
+            .prepare_regeneration(conversation.id, 1, "编辑后的问题", old_assistant)
             .unwrap()
         else {
             panic!("已被替代的目标必须返回 AlreadyCurrent");
         };
         assert_eq!(snapshot.messages.len(), 2);
+        assert_eq!(snapshot.messages[0].content, "编辑后的问题");
         assert_eq!(snapshot.messages[1].content, "新回答");
         drop(store);
         let _ = fs::remove_dir_all(root);
     }
 
     #[test]
-    fn regeneration_export_shows_current_answer_only() {
+    fn regeneration_pending_edit_survives_failure_and_retry_reuses_the_row() {
+        let (root, path) = test_database_path();
+        let mut store = ConversationStore::open_path(&path).unwrap();
+        let conversation = store
+            .create_with_exchange("deepseek-v4-flash", "原问题", "旧回答")
+            .unwrap();
+        let old_assistant = conversation.messages[1].id;
+
+        let RegenerationTurn::Ready {
+            user_message_id: first_edit,
+            ..
+        } = store
+            .prepare_regeneration(conversation.id, 1, "编辑后的问题", old_assistant)
+            .unwrap()
+        else {
+            panic!("首次编辑必须 Ready");
+        };
+
+        // 模拟模型失败（不 complete）：编辑 pending 行保留，旧问+旧答仍可见。
+        let pending = store.get_required(conversation.id).unwrap();
+        assert_eq!(pending.messages.len(), 3);
+
+        // 重试（相同编辑内容）：复用同一 pending 行，不重复插入。
+        let RegenerationTurn::Ready {
+            user_message_id: retried,
+            ..
+        } = store
+            .prepare_regeneration(conversation.id, 1, "编辑后的问题", old_assistant)
+            .unwrap()
+        else {
+            panic!("重试必须 Ready");
+        };
+        assert_eq!(retried, first_edit, "重试必须复用同一编辑 pending 行");
+
+        // 编辑内容变化（第二次编辑同一 pending 行）：拒绝，避免错改其他轮次行。
+        let mismatch = store
+            .prepare_regeneration(conversation.id, 1, "再次修改的问题", old_assistant)
+            .unwrap_err();
+        assert!(mismatch.contains("不一致"));
+
+        // 空编辑内容被拒绝。
+        let empty = store
+            .prepare_regeneration(conversation.id, 1, "   ", old_assistant)
+            .unwrap_err();
+        assert!(empty.contains("不能为空"));
+
+        // 完成编辑后恰好一条新答，旧问+旧答均被标记替代。
+        let completed = store
+            .complete_regeneration(
+                conversation.id,
+                1,
+                first_edit,
+                old_assistant,
+                "编辑后的回答",
+                None,
+                false,
+            )
+            .unwrap();
+        assert_eq!(completed.messages.len(), 2);
+        assert_eq!(completed.messages[0].content, "编辑后的问题");
+        assert_eq!(completed.messages[1].content, "编辑后的回答");
+        drop(store);
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn regeneration_export_shows_current_question_and_answer_only() {
         let (root, path) = test_database_path();
         let mut store = ConversationStore::open_path(&path).unwrap();
         let conversation = store
@@ -1788,10 +1942,10 @@ pub(crate) mod tests {
         let RegenerationTurn::Ready {
             user_message_id, ..
         } = store
-            .prepare_regeneration(conversation.id, 1, "导出问题", old_assistant)
+            .prepare_regeneration(conversation.id, 1, "修改后的问题", old_assistant)
             .unwrap()
         else {
-            panic!("首次重新生成必须 Ready");
+            panic!("首次编辑必须 Ready");
         };
         let regenerated = store
             .complete_regeneration(
@@ -1807,9 +1961,14 @@ pub(crate) mod tests {
         let export_path = root.join("regenerated.md");
         export_snapshot_to_path(&regenerated, &export_path).unwrap();
         let content = fs::read_to_string(&export_path).unwrap();
-        assert!(content.contains("导出问题"));
+        assert!(content.contains("修改后的问题"));
         assert!(content.contains("当前回答"));
+        // 旧问题只允许出现在导出标题（会话名来自首条消息），正文不得包含旧问题。
+        assert_eq!(content.matches("导出问题").count(), 1);
+        assert!(content.contains("## 用户\n\n修改后的问题"));
+        assert!(!content.contains("## 用户\n\n导出问题"));
         assert!(!content.contains("旧回答"), "导出必须只显示当前答案");
+        assert_eq!(content.matches("## 用户").count(), 1);
         assert_eq!(content.matches("## ReadRay").count(), 1);
         drop(store);
         let _ = fs::remove_dir_all(root);
@@ -1826,10 +1985,10 @@ pub(crate) mod tests {
         let RegenerationTurn::Ready {
             user_message_id, ..
         } = store
-            .prepare_regeneration(conversation.id, 1, "第一问", old_assistant)
+            .prepare_regeneration(conversation.id, 1, "修改后的问题", old_assistant)
             .unwrap()
         else {
-            panic!("首次重新生成必须 Ready");
+            panic!("首次编辑必须 Ready");
         };
         let regenerated = store
             .complete_regeneration(
@@ -1844,13 +2003,13 @@ pub(crate) mod tests {
             .unwrap();
         assert_eq!(regenerated.messages.last().unwrap().sequence, 4);
 
-        // 重新生成后追加新轮次：user sequence 仍为奇数、assistant 为下一个偶数。
+        // 编辑后追加新轮次：user sequence 仍为奇数、assistant 为下一个偶数。
         let PreparedTurn::Pending {
             user_message_id: next_user,
             ..
         } = store.prepare_turn(conversation.id, 5, "第二问").unwrap()
         else {
-            panic!("重新生成后的新轮次必须 pending");
+            panic!("编辑后的新轮次必须 pending");
         };
         let completed = store
             .complete_turn(conversation.id, 5, next_user, "第二答", None, false)
@@ -1861,8 +2020,8 @@ pub(crate) mod tests {
                 .iter()
                 .map(|message| message.sequence)
                 .collect::<Vec<_>>(),
-            vec![1, 4, 5, 6],
-            "可见序列：[user(1), 重新回答(4), 第二问(5), 第二答(6)]"
+            vec![3, 4, 5, 6],
+            "可见序列：[修改后的问题(3), 重新回答(4), 第二问(5), 第二答(6)]"
         );
         drop(store);
         let _ = fs::remove_dir_all(root);
@@ -1886,28 +2045,28 @@ pub(crate) mod tests {
             .complete_turn(conversation.id, 3, user_message_id, "第二答", None, false)
             .unwrap();
 
-        // 只允许重新生成会话中最后一条回答：第一轮的回答不是尾。
+        // 只允许编辑会话中最后一条回答对应的问题：第一轮的回答不是尾。
         let not_tail = store
-            .prepare_regeneration(conversation.id, 1, "第一问", first_assistant)
+            .prepare_regeneration(conversation.id, 1, "改第一问", first_assistant)
             .unwrap_err();
         assert!(not_tail.contains("最后一条"));
 
-        // 用户消息内容不匹配、不存在的目标、非 assistant 目标都被拒绝。
-        let mismatch = store
-            .prepare_regeneration(conversation.id, 1, "改过的问题", first_assistant)
-            .unwrap_err();
-        assert!(mismatch.contains("内容不匹配"));
+        // 不存在的目标、非 assistant 目标、属于其他轮次的目标都被拒绝。
         let missing = store
-            .prepare_regeneration(conversation.id, 3, "第二问", 999_999)
+            .prepare_regeneration(conversation.id, 3, "改第二问", 999_999)
             .unwrap_err();
         assert!(missing.contains("不存在"));
         let not_assistant = store
-            .prepare_regeneration(conversation.id, 3, "第二问", {
+            .prepare_regeneration(conversation.id, 3, "改第二问", {
                 let loaded = store.get_required(conversation.id).unwrap();
                 loaded.messages[2].id
             })
             .unwrap_err();
         assert!(not_assistant.contains("不是助手消息"));
+        let wrong_turn = store
+            .prepare_regeneration(conversation.id, 3, "改第二问", first_assistant)
+            .unwrap_err();
+        assert!(wrong_turn.contains("不属于该轮回答"));
 
         // 完成时目标已被替代：拒绝（避免两个"当前回答"并存）。
         let last_assistant = {
@@ -1918,7 +2077,7 @@ pub(crate) mod tests {
             user_message_id: regen_user,
             ..
         } = store
-            .prepare_regeneration(conversation.id, 3, "第二问", last_assistant)
+            .prepare_regeneration(conversation.id, 3, "修改后的第二问", last_assistant)
             .unwrap()
         else {
             panic!("尾回答必须 Ready");
@@ -1947,7 +2106,7 @@ pub(crate) mod tests {
                 false,
             )
             .unwrap_err();
-        assert!(second_attempt.contains("已被更新的回答替代"));
+        assert!(second_attempt.contains("已被更新的编辑替代"));
         let loaded = store.get_required(conversation.id).unwrap();
         assert_eq!(loaded.messages.last().unwrap().id, raced_assistant);
         assert_eq!(loaded.messages.last().unwrap().content, "并发替代");

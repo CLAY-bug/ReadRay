@@ -317,6 +317,117 @@ button.rr-conversation-title:not(:disabled) {
   opacity: 1;
 }
 
+/* 编辑并重新生成（任务 4 修复轮）：最后一条用户输入下方的 hover 小按钮 */
+.rr-conversation-user-edit-button {
+  position: absolute;
+  right: 0;
+  bottom: -30px;
+  display: inline-flex;
+  min-width: 26px;
+  height: 26px;
+  align-items: center;
+  justify-content: center;
+  border-radius: 6px;
+  padding: 0 6px;
+  color: var(--rr-main-muted);
+  cursor: pointer;
+  opacity: 0;
+  pointer-events: none;
+  transition:
+    opacity 150ms ease,
+    color 150ms ease,
+    background 150ms ease;
+  z-index: 1;
+}
+
+/* 与 assistant 复制按钮相同的透明衔接区：从消息滑向按钮不丢失悬停 */
+.rr-conversation-message.is-user:has(.rr-conversation-user-edit-button)::after {
+  content: "";
+  position: absolute;
+  right: 0;
+  bottom: -38px;
+  left: 0;
+  height: 38px;
+  background: transparent;
+  z-index: 0;
+}
+
+.rr-conversation-message.is-user:hover .rr-conversation-user-edit-button,
+.rr-conversation-message.is-user:focus-within .rr-conversation-user-edit-button,
+.rr-conversation-user-edit-button:hover,
+.rr-conversation-user-edit-button:focus-visible {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.rr-conversation-user-edit-button:hover,
+.rr-conversation-user-edit-button:focus-visible {
+  outline: 0;
+  color: var(--rr-main-fg);
+  background: var(--rr-main-border-soft);
+}
+
+/* 行内编辑表单：与用户气泡同侧（右对齐）并复用 composer 的输入样式 */
+.rr-conversation-user-edit {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  max-width: 80%;
+  margin-left: auto;
+}
+
+.rr-conversation-user-edit textarea {
+  width: 100%;
+  border: 1px solid var(--rr-main-border-soft);
+  border-radius: 8px;
+  padding: 6px 11px;
+  background: var(--rr-main-surface-warm);
+  color: var(--rr-main-fg);
+  font-family: var(--rr-main-font-body);
+  font-size: calc(14px * var(--rr-ui-font-scale));
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+  resize: none;
+  outline: 0;
+}
+
+.rr-conversation-user-edit textarea:focus {
+  border-color: color-mix(
+    in oklab,
+    var(--rr-main-accent),
+    var(--rr-main-border) 68%
+  );
+}
+
+.rr-conversation-user-edit-actions {
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
+}
+
+.rr-conversation-user-edit-actions button {
+  min-height: 30px;
+  border: 1px solid var(--rr-main-border);
+  border-radius: 8px;
+  padding: 0 11px;
+  color: var(--rr-main-fg-secondary);
+  background: var(--rr-main-surface-warm);
+  cursor: pointer;
+  font-size: calc(12px * var(--rr-ui-font-scale));
+  font-weight: 620;
+}
+
+.rr-conversation-user-edit-actions button:hover:not(:disabled),
+.rr-conversation-user-edit-actions button:focus-visible:not(:disabled) {
+  outline: 0;
+  color: var(--rr-main-fg);
+}
+
+.rr-conversation-user-edit-actions button:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
 .rr-conversation-assistant-copy {
   color: var(--rr-main-fg);
   font-family: var(--rr-main-font-body);

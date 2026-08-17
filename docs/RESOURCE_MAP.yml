@@ -408,7 +408,7 @@ source_areas:
       - "调整完整对话页布局、消息展示或设计稿交互。"
       - "接入真实 Quick AI 历史、发送、导出或记忆引用。"
     notes: "复用 MainAppShell、MainSidebar 和全局标题栏；页面只消费 ConversationService。当前标题单击原地编辑，Enter 保存、Esc 或失焦安全取消；正式 Tauri 重命名、删除和导出同时绑定 mounted、request key 与数据库 ID，迟到结果只有仍对应当前页面请求时才更新；父级回调还会复核实时页面和会话身份。删除当前会话后安全进入新会话；空白会话不开放导出，取消导出不提示成功。加载到以 user 结尾的会话时恢复明确的 pending 重试态；非 Tauri fixture 继续演示分片、停止、重生成和浏览器下载。窗口缩放触发的用户消息溢出测量与滚动区观察都按 120ms settle 更新（滚动监听保持即时），避免拖拽期间逐帧强制布局。"
-    risk: "不得在页面组件直接调用 Tauri、SQLite 或 DeepSeek；记忆引用等真实后端不支持的能力必须保持禁用或无数据状态；重新生成只允许针对最后一条 assistant 回答（任务 4 已正式开放）。"
+    risk: "不得在页面组件直接调用 Tauri、SQLite 或 DeepSeek；记忆引用等真实后端不支持的能力必须保持禁用或无数据状态；编辑并重新生成入口只对最后一条用户输入展示（任务 4 已正式开放）。"
 
   - path: "src/components/ConversationHistoryPage.tsx"
     purpose: "主应用“全部对话”的真实历史列表与加载状态页。"
@@ -459,7 +459,7 @@ source_areas:
     read_when:
       - "调整真实会话加载、续聊、管理、导出、失败重试或页面消息映射。"
       - "排查正式能力降级和最近对话刷新。"
-    notes: "以 Rust 返回的 ConversationSnapshot 和数据库会话 ID 为权威；全部历史、重命名、删除和原生导出均只提交目标 ID，导出不使用页面 messages 重建内容。用 conversationId + expectedUserSequence 标识轮次，不靠 prompt 文本猜测完成状态。发送失败时读取数据库恢复 completed 或 pending；若 IPC 与读取都失败，页面仍保留同一 expected sequence，下一次重试由后端幂等返回。任务 4：支持 mode=regenerate + replaceAssistantMessageId（解析 quick-ai-message-{id}）；当前回答定位为该 user 之后最后一条 assistant（重新生成后 sequence 有间隙）；截断状态以落库 truncated 标志为准，模糊成功时目标仍为当前回答则保持 pending 可重试。"
+    notes: "以 Rust 返回的 ConversationSnapshot 和数据库会话 ID 为权威；全部历史、重命名、删除和原生导出均只提交目标 ID，导出不使用页面 messages 重建内容。用 conversationId + expectedUserSequence 标识轮次，不靠 prompt 文本猜测完成状态。发送失败时读取数据库恢复 completed 或 pending；若 IPC 与读取都失败，页面仍保留同一 expected sequence，下一次重试由后端幂等返回。任务 4：支持 mode=regenerate + replaceAssistantMessageId（解析 quick-ai-message-{id}，prompt 为编辑后的问题，尾 user 提供该轮身份）；编辑后的当前回答 = 可见快照中最后一条 assistant；截断状态以落库 truncated 标志为准，模糊成功时目标旧答仍为当前回答则保持 pending 可重试。"
     risk: "不得使用前端 messages 重建后端历史；多轮上下文只由现有 Quick AI/SQLite 事实提供。"
 
   - path: "tests/conversationService.test.mjs"
@@ -1174,7 +1174,7 @@ source_areas:
     read_when:
       - "调整 Quick AI 对话持久化或继续历史对话。"
       - "实现未来主应用对话历史读取。"
-    notes: "复用 v2 会话表、消息自增 ID 与 UNIQUE(conversation_id, sequence)；SQLite v9 为既有会话表增加不可变 origin（overlay/main/legacy）及来源更新时间索引，v10 一次性删除无法可靠追溯且仅用于测试的 legacy 会话并依赖外键级联清理消息；新建必须显式写入 overlay 或 main。v21 为消息表一次追加 superseded_by_id（重新生成替代链，任务 4）、sources_json（来源随 assistant 落库）与 truncated（截断标志）三列，可见快照/导出统一过滤被替代行。仓库支持按来源查询最近/全部有标题会话、按 ID 重命名和级联删除；导出从数据库快照按 sequence 顺序写出完整 user/assistant Markdown（只含当前答案）。prepare_turn 先独立提交 pending user；complete_turn 只在匹配的 user ID/expected sequence 后补 assistant，完成轮次重试直接返回权威快照，旧版本或并发冲突拒绝写入。prepare_regeneration/complete_regeneration 复用同一 user 轮次、以新 sequence 插入新 assistant 并把旧行标记被替代（不物理覆盖）。"
+    notes: "复用 v2 会话表、消息自增 ID 与 UNIQUE(conversation_id, sequence)；SQLite v9 为既有会话表增加不可变 origin（overlay/main/legacy）及来源更新时间索引，v10 一次性删除无法可靠追溯且仅用于测试的 legacy 会话并依赖外键级联清理消息；新建必须显式写入 overlay 或 main。v21 为消息表一次追加 superseded_by_id（替代链，任务 4）、sources_json（来源随 assistant 落库）与 truncated（截断标志）三列，可见快照/导出统一过滤被替代行。仓库支持按来源查询最近/全部有标题会话、按 ID 重命名和级联删除；导出从数据库快照按 sequence 顺序写出完整 user/assistant Markdown（只含当前消息）。prepare_turn 先独立提交 pending user；complete_turn 只在匹配的 user ID/expected sequence 后补 assistant，完成轮次重试直接返回权威快照，旧版本或并发冲突拒绝写入。编辑并重新生成（2026-08-18 方案 B）：prepare_regeneration 插入编辑后 pending 问题行（下一个奇数，失败可重试复用同一行），complete_regeneration 在同一事务写新答（下一个偶数）并标记旧问题行/旧回答被替代（被替代者记录指向替代者，不物理覆盖）。"
     risk: "不要把 Quick AI 消息写入 learning_records，也不要建立第二套会话存储。未来 run/step/source 扩展必须按 AGENT_RUNTIME_UPGRADE_PLAN 复用现有 SQLite 权威；长期学习者记忆仍属于阶段九。"
 
   - path: "src-tauri/src/quick_ai.rs"
@@ -1183,7 +1183,7 @@ source_areas:
     read_when:
       - "调整 Quick AI system prompt、上下文窗口或发送流程。"
       - "排查 create/get/send/list_recent/list_all/rename/delete/export Quick AI commands。"
-    notes: "独立于 ExplanationCard JSON 协议；create command 要求 overlay/main 创建来源，recent/all commands 可按来源过滤，主窗口不传过滤时读取全部来源。管理和导出 commands 始终携带数据库 conversationId，export 在用户选定路径后重新读取权威快照再写文件。send command 要求已创建的 conversationId 和 expectedUserSequence，先 prepare pending user，再从该 SQLite 快照装配多轮上下文并以 quick_ai 分类调用共享模型边界，成功后 complete assistant；已完成轮次不会再次请求模型或重复统计。任务 2/3：send_quick_ai_message_agent 走 Agent Runtime（spawn_blocking 同步内核 + DeepSeekChatGateway + conversation_l1_tools + PersistingSink/SessionSink），前端正式对话已切换到该命令；QuickAiStreamEvent 扩展 sources_updated/tool_state 事件（来源卡片与工具状态）；open_agent_source 对来源 URL 做 HTTP(S)/凭据/保留网段校验后交受控 opener。任务 4：命令新增 replace_message_id 走重新生成（复用同一 user 轮次与 retry_of_run_id，旧 assistant 标记被替代）；失败分支技术细节进 READRAY_AGENT_RUN_FAILED 日志、UI 只返回友好文案；运行期来源经 SourceCollectingSink 累积随 complete 落库；finish_reason=length 的回答照常持久化并携带截断标志。旧 send_quick_ai_message / send_quick_ai_message_streaming 保留为受控回退。"
+    notes: "独立于 ExplanationCard JSON 协议；create command 要求 overlay/main 创建来源，recent/all commands 可按来源过滤，主窗口不传过滤时读取全部来源。管理和导出 commands 始终携带数据库 conversationId，export 在用户选定路径后重新读取权威快照再写文件。send command 要求已创建的 conversationId 和 expectedUserSequence，先 prepare pending user，再从该 SQLite 快照装配多轮上下文并以 quick_ai 分类调用共享模型边界，成功后 complete assistant；已完成轮次不会再次请求模型或重复统计。任务 2/3：send_quick_ai_message_agent 走 Agent Runtime（spawn_blocking 同步内核 + DeepSeekChatGateway + conversation_l1_tools + PersistingSink/SessionSink），前端正式对话已切换到该命令；QuickAiStreamEvent 扩展 sources_updated/tool_state 事件（来源卡片与工具状态）；open_agent_source 对来源 URL 做 HTTP(S)/凭据/保留网段校验后交受控 opener。任务 4：命令新增 replace_message_id 走“编辑并重新生成”（2026-08-18 方案 B：编辑后问题行替代旧问题行、新答替代旧答，run 复用该轮 user 身份；模型上下文排除旧问+旧答）；失败分支技术细节进 READRAY_AGENT_RUN_FAILED 日志、UI 只返回友好文案；运行期来源经 SourceCollectingSink 累积随 complete 落库；finish_reason=length 的回答照常持久化并携带截断标志。旧 send_quick_ai_message / send_quick_ai_message_streaming 保留为受控回退。"
     risk: "不得把私有 reasoning、API key 或未裁剪工具参数投影到前端协议；来源打开必须经过网络校验，不得拼接 Shell 命令。"
 
   - path: "src-tauri/src/writing.rs"
