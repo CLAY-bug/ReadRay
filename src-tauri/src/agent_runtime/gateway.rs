@@ -35,6 +35,9 @@ pub(crate) enum ProviderMessage {
 pub(crate) struct ModelRequest {
     pub messages: Vec<ProviderMessage>,
     pub tools: Vec<ToolSchema>,
+    /// 供真实 provider 实施重试/预算策略；当前 DeepSeek gateway 只读
+    /// deadline 与 cancellation。
+    #[allow(dead_code)]
     pub budget: RunBudget,
     pub deadline_unix_ms: u64,
     pub cancellation: Cancellation,
@@ -57,5 +60,7 @@ pub(crate) trait ModelGateway {
     ) -> Result<ModelTurnOutcome, AgentError>;
 
     /// 只留内存的 provider continuation 状态；私有 reasoning 永不进入 AgentEvent。
+    /// 当前生产链路不读取（测试断言 reasoning 不泄漏时使用）。
+    #[allow(dead_code)]
     fn continuation(&self) -> &ProviderContinuationState;
 }

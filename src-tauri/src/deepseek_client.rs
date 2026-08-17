@@ -93,7 +93,7 @@ impl ChatCompletionRequestError {
     }
 }
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub(crate) struct StreamChunk {
     pub delta: String,
     pub finish_reason: Option<String>,
@@ -101,6 +101,24 @@ pub(crate) struct StreamChunk {
     /// 推理模型（deepseek-v4-flash）的 `delta.reasoning_content`，仅捕获供
     /// 调用方验证丢弃，绝不转发给 UI。
     pub reasoning: Option<String>,
+    /// OpenAI 格式的 `delta.tool_calls` 增量（按 index 归属；id/name 只在首个
+    /// 分片出现，arguments 为跨分片拼接的 JSON 片段）。
+    pub tool_calls: Option<Vec<StreamChunkToolCallDelta>>,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+pub(crate) struct StreamChunkToolCallDelta {
+    #[serde(default)]
+    pub index: usize,
+    pub id: Option<String>,
+    #[serde(default)]
+    pub function: Option<StreamChunkToolCallFunction>,
+}
+
+#[derive(Clone, Debug, Default, Deserialize)]
+pub(crate) struct StreamChunkToolCallFunction {
+    pub name: Option<String>,
+    pub arguments: Option<String>,
 }
 
 pub(crate) async fn stream_chat_completion_events(
@@ -156,6 +174,8 @@ struct StreamChunkDelta {
     /// deepseek-v4-flash 推理过程增量；解析后只由调用方捕获验证、丢弃。
     #[serde(default)]
     reasoning_content: Option<String>,
+    #[serde(default)]
+    tool_calls: Option<Vec<StreamChunkToolCallDelta>>,
 }
 
 fn parse_sse_stream(
@@ -275,9 +295,18 @@ fn parse_sse_line(operation: &str, line: &str) -> Result<Option<StreamChunk>, St
         .and_then(|choice| choice.delta.reasoning_content.clone())
         .unwrap_or_default();
     let reasoning = (!reasoning.is_empty()).then_some(reasoning);
+    let tool_calls = choice
+        .as_ref()
+        .and_then(|choice| choice.delta.tool_calls.clone())
+        .filter(|calls| !calls.is_empty());
     let finish_reason = choice.and_then(|choice| choice.finish_reason);
     let usage = chunk.usage.filter(|usage| !usage.is_null());
-    if delta.is_empty() && reasoning.is_none() && finish_reason.is_none() && usage.is_none() {
+    if delta.is_empty()
+        && reasoning.is_none()
+        && tool_calls.is_none()
+        && finish_reason.is_none()
+        && usage.is_none()
+    {
         return Ok(None);
     }
     Ok(Some(StreamChunk {
@@ -285,6 +314,7 @@ fn parse_sse_line(operation: &str, line: &str) -> Result<Option<StreamChunk>, St
         finish_reason,
         usage,
         reasoning,
+        tool_calls,
     }))
 }
 
@@ -778,6 +808,58 @@ mod tests {
         .expect("reasoning-only line must yield a chunk");
         assert_eq!(reasoning_only.delta, "");
         assert_eq!(reasoning_only.reasoning.as_deref(), Some("thinking only"));
+    }
+
+    #[test]
+    fn parses_tool_call_argument_deltas_across_chunks() {
+        // 首个分片带 id/name，后续分片只带 arguments 增量。
+        let first = parse_sse_line(
+            "测试模型调用",
+            r#"data: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call_1","type":"function","function":{"name":"get_date","arguments":""}}]},"finish_reason":null}]}"#,
+        )
+        .unwrap()
+        .expect("tool call 首分片必须产出 chunk");
+        let tool_calls = first.tool_calls.as_ref().unwrap();
+        assert_eq!(tool_calls.len(), 1);
+        assert_eq!(tool_calls[0].index, 0);
+        assert_eq!(tool_calls[0].id.as_deref(), Some("call_1"));
+        let function = tool_calls[0].function.as_ref().unwrap();
+        assert_eq!(function.name.as_deref(), Some("get_date"));
+        assert_eq!(function.arguments.as_deref(), Some(""));
+
+        let second = parse_sse_line(
+            "测试模型调用",
+            r#"data: {"choices":[{"delta":{"tool_calls":[{"index":0,"function":{"arguments":"{\"timezone\":\"Asia"}}]},"finish_reason":null}]}"#,
+        )
+        .unwrap()
+        .expect("tool call 参数增量必须产出 chunk");
+        let second_calls = second.tool_calls.as_ref().unwrap();
+        assert_eq!(second_calls[0].id, None);
+        let second_function = second_calls[0].function.as_ref().unwrap();
+        assert_eq!(second_function.name, None);
+        assert_eq!(
+            second_function.arguments.as_deref(),
+            Some("{\"timezone\":\"Asia")
+        );
+
+        // 空 arguments 分片也会产出（tool_calls 存在即产出，不能丢弃）。
+        let empty_arguments = parse_sse_line(
+            "测试模型调用",
+            r#"data: {"choices":[{"delta":{"tool_calls":[{"index":0,"function":{"arguments":""}}]},"finish_reason":null}]}"#,
+        )
+        .unwrap()
+        .expect("空 arguments 增量也必须产出 chunk");
+        assert!(empty_arguments.tool_calls.is_some());
+        assert!(empty_arguments.delta.is_empty());
+
+        // 纯文本 chunk 不含 tool_calls。
+        let text_chunk = parse_sse_line(
+            "测试模型调用",
+            r#"data: {"choices":[{"delta":{"content":"ok"},"finish_reason":null}]}"#,
+        )
+        .unwrap()
+        .unwrap();
+        assert!(text_chunk.tool_calls.is_none());
     }
 
     #[test]

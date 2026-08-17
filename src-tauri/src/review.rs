@@ -3585,7 +3585,8 @@ mod tests {
                 row.get(0)
             })
             .unwrap();
-        assert_eq!(registered_versions, 17);
+        // v1-20 全量注册后删除 v16/v17，模拟"登记 1-15 + 中间版 feedback"的旧库。
+        assert_eq!(registered_versions, 18);
         drop(store);
 
         let mut upgraded = ReviewStore::open(&path).unwrap();
@@ -3670,7 +3671,7 @@ mod tests {
             )
             .unwrap();
 
-        assert_eq!(version, 19);
+        assert_eq!(version, 20);
         assert_eq!(context_column_count, 1);
         assert!(
             quality_feedback_unique_indexes(&upgraded.connection).contains(&vec![

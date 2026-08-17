@@ -1,3 +1,21 @@
+use crate::agent_runtime::chat_surface::{
+    conversation_l0_tools, generate_run_id, runtime_facts, ChatPreparedTurn, ChatSurfaceAdapter,
+};
+use crate::agent_runtime::context::ContextAssembler;
+use crate::agent_runtime::coordinator::{
+    AgentDeps, AgentEventSink, AgentRunCoordinator, Cancellation, RunRequest, SystemTimeSource,
+    ToolExecutionOrder,
+};
+use crate::agent_runtime::deepseek_gateway::DeepSeekChatGateway;
+use crate::agent_runtime::gateway::ModelGateway;
+use crate::agent_runtime::protocol::{
+    AgentError, AgentErrorKind, AgentEvent, AgentEventPayload, AgentSurface, RunBudget,
+    TerminationReason,
+};
+use crate::agent_runtime::run_repository::{
+    AgentRunRepository, AgentRunStatus, NewRun, PersistingSink,
+};
+use crate::agent_runtime::tool::{CapabilityPolicy, ToolPolicy, ToolRegistry};
 use crate::conversations::{
     export_snapshot_to_path, ConversationExportSummary, ConversationMessage, ConversationOrigin,
     ConversationRole, ConversationSnapshot, ConversationStore, PreparedTurn,
@@ -7,10 +25,12 @@ use crate::deepseek_client::{
     configured_model, parse_model_token_usage_value, post_tracked_chat_completion,
     stream_chat_completion_events,
 };
+use crate::learning_records::{database_path_for_app, unix_time_ms};
 use crate::model_usage::{record_for_app, ModelUsageCategory};
 use futures_util::StreamExt;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
+use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
 use std::{future::Future, path::PathBuf};
@@ -265,6 +285,261 @@ pub fn abort_quick_ai_streaming(conversation_id: i64) -> Result<(), String> {
     }
     request_abort_streaming(conversation_id);
     Ok(())
+}
+
+/// Agent 正式链路：prepare_turn → AgentRun → complete_turn（AGENT_RUNTIME_UPGRADE_PLAN §19 任务 2）。
+/// 旧非 Agent 路径（send_quick_ai_message / send_quick_ai_message_streaming）保留为
+/// 受控回退；前端统一事件 envelope 展示不属于本任务，标注延后。
+#[tauri::command]
+pub async fn send_quick_ai_message_agent(
+    app: AppHandle,
+    conversation_id: i64,
+    expected_user_sequence: i64,
+    content: String,
+    channel: Channel<QuickAiStreamEvent>,
+) -> Result<ConversationSnapshot, String> {
+    let sender = QuickAiStreamSender { channel };
+    let abort_flag = abort_flag_for(conversation_id);
+    let database_path = database_path_for_app(&app)?;
+    let app_version = app.package_info().version.to_string();
+    let model = configured_model();
+    tauri::async_runtime::spawn_blocking(move || {
+        // 同步内核在 blocking 线程运行；真实 gateway 内部 block_on HTTP SSE 流。
+        let mut gateway = DeepSeekChatGateway::new(model, Some(&app));
+        let registry = conversation_l0_tools(app_version.clone());
+        let mut ui = AgentUiSink { sender: &sender };
+        run_agent_session_core(
+            || ConversationStore::open_for_app(&app),
+            &database_path,
+            &app_version,
+            conversation_id,
+            expected_user_sequence,
+            &content,
+            &abort_flag,
+            &mut gateway,
+            &mut ui,
+            &registry,
+        )
+    })
+    .await
+    .map_err(|error| format!("Agent 会话任务执行失败：{error}"))?
+}
+
+/// 把内核 AgentEvent 映射为既有 QuickAiStreamEvent 协议（前端协议切换延后）。
+struct AgentUiSink<'a> {
+    sender: &'a QuickAiStreamSender,
+}
+
+impl AgentEventSink for AgentUiSink<'_> {
+    fn emit(&mut self, event: AgentEvent) -> Result<(), AgentError> {
+        match &event.payload {
+            AgentEventPayload::AssistantTextDelta { text } => {
+                if !self
+                    .sender
+                    .send(QuickAiStreamEvent::Delta { text: text.clone() })
+                {
+                    return Err(agent_stream_error("Agent 流式事件无法送达。"));
+                }
+            }
+            AgentEventPayload::RunCompleted { .. } => {
+                self.sender.send(QuickAiStreamEvent::Done);
+            }
+            AgentEventPayload::RunStopped { .. } => {
+                self.sender.send(QuickAiStreamEvent::Stopped);
+            }
+            AgentEventPayload::RunTruncated { .. } => {
+                self.sender.send(QuickAiStreamEvent::Truncated);
+            }
+            AgentEventPayload::RunFailed { error } => {
+                self.sender.send(QuickAiStreamEvent::Error {
+                    message: error.message.clone(),
+                });
+            }
+            // 工具事件与来源展示属于后续前端协议任务，当前不发送。
+            _ => {}
+        }
+        Ok(())
+    }
+}
+
+/// 持久化 + UI 的组合 sink：持久化失败时快速失败（不伪装成功），不再发送 UI 事件。
+struct SessionSink<'a, 'b> {
+    persisting: &'a mut PersistingSink<'b>,
+    ui: &'a mut dyn AgentEventSink,
+}
+
+impl AgentEventSink for SessionSink<'_, '_> {
+    fn emit(&mut self, event: AgentEvent) -> Result<(), AgentError> {
+        self.persisting.emit(event.clone())?;
+        self.ui.emit(event)
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn run_agent_session_core<F>(
+    mut open_store: F,
+    database_path: &Path,
+    app_version: &str,
+    conversation_id: i64,
+    expected_user_sequence: i64,
+    content: &str,
+    abort_flag: &std::sync::Arc<AtomicBool>,
+    gateway: &mut dyn ModelGateway,
+    on_agent_event: &mut dyn AgentEventSink,
+    registry: &ToolRegistry,
+) -> Result<ConversationSnapshot, String>
+where
+    F: FnMut() -> Result<ConversationStore, String>,
+{
+    validate_user_message(content)?;
+    let store = open_store()?;
+    let snapshot = store.get_required(conversation_id)?;
+    let surface_kind = match snapshot.origin {
+        ConversationOrigin::Overlay => AgentSurface::QuickAiOverlay,
+        ConversationOrigin::Main => AgentSurface::MainConversation,
+        ConversationOrigin::Legacy => {
+            return Err("无法为 legacy 会话创建 Agent run。".to_string());
+        }
+    };
+    let mut surface = ChatSurfaceAdapter::open(surface_kind, store)?;
+    let mut repository = AgentRunRepository::open(database_path)?;
+
+    // 幂等边界：assistant 已落库则直接返回权威快照（并对账 run 终态）。
+    let prepared = surface.prepare(
+        conversation_id,
+        expected_user_sequence,
+        content,
+        &mut repository,
+    )?;
+    let (pending_snapshot, user_message_id) = match prepared {
+        ChatPreparedTurn::Completed { snapshot } => return Ok(snapshot),
+        ChatPreparedTurn::Pending {
+            snapshot,
+            user_message_id,
+        } => (snapshot, user_message_id),
+    };
+
+    // 恢复语义（§17）：仅 pending user 时创建新 run，retry_of 指向该轮最近一次
+    // run（prepare 返回 Pending 时它必然未完成，completed 对应已落库 assistant）。
+    let run_id = generate_run_id(conversation_id, expected_user_sequence);
+    let retry_of_run_id = repository
+        .latest_run_for_turn(conversation_id, expected_user_sequence)?
+        .map(|run| run.run_id);
+    repository.create_run(&NewRun {
+        run_id: run_id.clone(),
+        surface: surface_kind,
+        conversation_id,
+        expected_user_sequence,
+        user_message_id,
+        retry_of_run_id,
+        provider: "deepseek".to_string(),
+        model: pending_snapshot.model.clone(),
+        started_at_unix_ms: unix_time_ms()?,
+    })?;
+
+    let authority =
+        surface.authority_ref(conversation_id, expected_user_sequence, user_message_id)?;
+    let facts = runtime_facts(app_version);
+    let capability = CapabilityPolicy::default();
+    let active_tools = registry.active_tools(&capability);
+    let transcript = surface.transcript(&pending_snapshot, &facts, &active_tools);
+
+    let cancellation = Cancellation::from_shared(abort_flag.clone());
+    let mut persisting = PersistingSink::new(&run_id, &mut repository);
+    let mut session_sink = SessionSink {
+        persisting: &mut persisting,
+        ui: on_agent_event,
+    };
+    let mut coordinator =
+        AgentRunCoordinator::new(run_id.clone(), authority, RunBudget::first_version())?;
+    let request = RunRequest {
+        user_prompt: content.to_string(),
+        runtime_facts: facts,
+        capability,
+        tool_execution_order: ToolExecutionOrder::CallOrder,
+        initial_messages: Some(transcript),
+    };
+    let mut deps = AgentDeps {
+        gateway,
+        registry,
+        policy: &ToolPolicy,
+        assembler: &ContextAssembler::default(),
+        time: &SystemTimeSource,
+        cancellation: &cancellation,
+        sink: &mut session_sink,
+    };
+    let outcome = coordinator
+        .run(&request, &mut deps)
+        .map_err(|error| error.message)?;
+
+    // 终态：completed 只能在 complete_turn 成功后写入（§16.3）。
+    let now = unix_time_ms()?;
+    match outcome.termination {
+        TerminationReason::FinalAnswer => {
+            let final_text = outcome.final_text.unwrap_or_default();
+            let completed = surface.complete(
+                conversation_id,
+                expected_user_sequence,
+                user_message_id,
+                &final_text,
+            )?;
+            repository.transition(&run_id, AgentRunStatus::Completed, None, now)?;
+            Ok(completed)
+        }
+        TerminationReason::UserAborted => {
+            repository.transition(&run_id, AgentRunStatus::Stopped, Some("user_aborted"), now)?;
+            Err("回答已停止，已保留你的问题，可以直接重试。".to_string())
+        }
+        TerminationReason::RunBudgetExceeded => {
+            repository.transition(
+                &run_id,
+                AgentRunStatus::Truncated,
+                Some("run_budget_exceeded"),
+                now,
+            )?;
+            Err("回答已截断：达到预算上限，已保留你的问题，可以直接重试。".to_string())
+        }
+        other => {
+            repository.transition(
+                &run_id,
+                AgentRunStatus::Failed,
+                Some(termination_reason_to_storage(&other)),
+                now,
+            )?;
+            let message = outcome
+                .error
+                .map(|error| error.message)
+                .unwrap_or_else(|| "Agent run 失败。".to_string());
+            Err(message)
+        }
+    }
+}
+
+fn termination_reason_to_storage(reason: &TerminationReason) -> &'static str {
+    match reason {
+        TerminationReason::FinalAnswer => "final_answer",
+        TerminationReason::UserAborted => "user_aborted",
+        TerminationReason::ProviderTimeout => "provider_timeout",
+        TerminationReason::ProviderNetwork => "provider_network",
+        TerminationReason::ProviderRateLimited => "provider_rate_limited",
+        TerminationReason::ProviderAuthFailed => "provider_auth_failed",
+        TerminationReason::ProviderProtocolError => "provider_protocol_error",
+        TerminationReason::ContextOverflow => "context_overflow",
+        TerminationReason::UnknownTool => "unknown_tool",
+        TerminationReason::ToolSchemaInvalid => "tool_schema_invalid",
+        TerminationReason::ToolPolicyDenied => "tool_policy_denied",
+        TerminationReason::ToolTimeout => "tool_timeout",
+        TerminationReason::ToolExecutionFailed => "tool_execution_failed",
+        TerminationReason::NetworkBlocked => "network_blocked",
+        TerminationReason::ContentExtractFailed => "content_extract_failed",
+        TerminationReason::PersistenceFailed => "persistence_failed",
+        TerminationReason::RunBudgetExceeded => "run_budget_exceeded",
+    }
+}
+
+fn agent_stream_error(message: impl Into<String>) -> AgentError {
+    AgentError::new(AgentErrorKind::PersistenceFailed, message)
+        .expect("fixed stream error message must be valid")
 }
 
 async fn stream_quick_ai_reply(
@@ -533,9 +808,18 @@ fn role_label(role: ConversationRole) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::agent_runtime::coordinator::AgentEventSink;
+    use crate::agent_runtime::fake_gateway::{FakeGateway, FakeScenario};
+    use crate::agent_runtime::protocol::{
+        validate_event_sequence, AgentEvent, ToolProvenance, ToolResult,
+    };
+    use crate::agent_runtime::run_repository::{AgentRunRepository, AgentRunStatus};
+    use crate::agent_runtime::tool::{RiskLevel, ToolDefinition, ToolRegistry};
     use crate::conversations::tests::test_database_path;
     use std::fs;
     use std::path::{Path, PathBuf};
+    use std::sync::atomic::AtomicBool;
+    use std::sync::Arc;
 
     fn message(role: ConversationRole, content: &str, sequence: i64) -> ConversationMessage {
         ConversationMessage {
@@ -950,6 +1234,408 @@ mod tests {
                 || content.contains("unable"),
             "回答不应假装读过用户的本地学习记录"
         );
+        let _ = fs::remove_dir_all(root);
+    }
+
+    // ---- 任务 2：Agent 正式链路端到端测试（fake gateway + 真实 SQLite）----
+
+    struct VecSink<'a> {
+        events: &'a mut Vec<AgentEvent>,
+    }
+
+    impl AgentEventSink for VecSink<'_> {
+        fn emit(&mut self, event: AgentEvent) -> Result<(), AgentError> {
+            self.events.push(event);
+            Ok(())
+        }
+    }
+
+    fn date_tool() -> ToolDefinition {
+        ToolDefinition::new(
+            "get_date",
+            "返回当前本地日期。",
+            json!({}),
+            RiskLevel::TrustedLocalReadOnly,
+            |call, started, _| {
+                Ok(ToolResult::success(
+                    call,
+                    "2026-08-17",
+                    ToolProvenance::LocalFact,
+                    started,
+                    started + 1,
+                ))
+            },
+        )
+        .expect("date 工具定义必须有效")
+    }
+
+    fn run_agent_at_path(
+        path: &Path,
+        conversation_id: i64,
+        expected_user_sequence: i64,
+        content: &str,
+        scenario: FakeScenario,
+        registry: &ToolRegistry,
+        abort_flag: &Arc<AtomicBool>,
+        events: &mut Vec<AgentEvent>,
+    ) -> Result<ConversationSnapshot, String> {
+        let mut gateway = FakeGateway::new(scenario);
+        let mut sink = VecSink { events };
+        run_agent_session_core(
+            || ConversationStore::open_path(path),
+            path,
+            "0.1.0-test",
+            conversation_id,
+            expected_user_sequence,
+            content,
+            abort_flag,
+            &mut gateway,
+            &mut sink,
+            registry,
+        )
+    }
+
+    fn create_conversation(path: &Path) -> i64 {
+        ConversationStore::open_path(path)
+            .unwrap()
+            .create("deepseek-v4-flash")
+            .unwrap()
+            .id
+    }
+
+    #[test]
+    fn agent_session_completes_turn_and_retry_returns_authoritative_snapshot() {
+        let (root, path) = test_database_path();
+        let registry = ToolRegistry::default();
+        let conversation_id = create_conversation(&path);
+        let abort = Arc::new(AtomicBool::new(false));
+
+        let mut events = Vec::new();
+        let snapshot = run_agent_at_path(
+            &path,
+            conversation_id,
+            1,
+            "Agent turn",
+            FakeScenario::FinalOnly,
+            &registry,
+            &abort,
+            &mut events,
+        )
+        .unwrap();
+        assert_eq!(snapshot.messages.len(), 2);
+        assert_eq!(snapshot.messages[1].content, "final answer");
+        assert!(
+            validate_event_sequence(&events, &RunBudget::first_version()).is_ok(),
+            "Agent 链路事件序列必须合法"
+        );
+
+        let repository = AgentRunRepository::open(&path).unwrap();
+        let run = repository
+            .latest_run_for_turn(conversation_id, 1)
+            .unwrap()
+            .unwrap();
+        assert_eq!(run.status, AgentRunStatus::Completed);
+        assert!(run.retry_of_run_id.is_none());
+
+        // 重试已完成轮次：直接返回权威快照，不重复 user/assistant，不新建 run。
+        let mut retry_events = Vec::new();
+        let retried = run_agent_at_path(
+            &path,
+            conversation_id,
+            1,
+            "Agent turn",
+            FakeScenario::FinalOnly,
+            &registry,
+            &abort,
+            &mut retry_events,
+        )
+        .unwrap();
+        assert_eq!(retried.messages.len(), 2);
+        assert_eq!(retried.messages[1].content, "final answer");
+        assert!(retry_events.is_empty(), "已完成轮次不得产生 run 事件");
+        let repository = AgentRunRepository::open(&path).unwrap();
+        let run_count: i64 = repository
+            .latest_run_for_turn(conversation_id, 1)
+            .map(|run| run.map(|_| 1_i64).unwrap_or(0))
+            .unwrap();
+        assert_eq!(run_count, 1);
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn agent_session_records_tool_steps_and_final_answer() {
+        let (root, path) = test_database_path();
+        let mut registry = ToolRegistry::new();
+        registry.register(date_tool()).unwrap();
+        let conversation_id = create_conversation(&path);
+        let abort = Arc::new(AtomicBool::new(false));
+
+        let mut events = Vec::new();
+        let snapshot = run_agent_at_path(
+            &path,
+            conversation_id,
+            1,
+            "Use the date tool",
+            FakeScenario::SingleToolThenFinal,
+            &registry,
+            &abort,
+            &mut events,
+        )
+        .unwrap();
+        assert_eq!(snapshot.messages.len(), 2);
+        assert_eq!(snapshot.messages[1].content, "final after tools");
+        assert!(validate_event_sequence(&events, &RunBudget::first_version()).is_ok());
+
+        let repository = AgentRunRepository::open(&path).unwrap();
+        let run = repository
+            .latest_run_for_turn(conversation_id, 1)
+            .unwrap()
+            .unwrap();
+        assert_eq!(run.status, AgentRunStatus::Completed);
+        let steps: Vec<(String, String, Option<String>)> = {
+            let connection = crate::learning_records::open_database(&path).unwrap();
+            let mut statement = connection
+                .prepare(
+                    "SELECT kind, status, tool_call_id FROM agent_steps
+                     WHERE run_id = ?1 ORDER BY step_sequence",
+                )
+                .unwrap();
+            statement
+                .query_map([&run.run_id], |row| {
+                    Ok((row.get(0)?, row.get(1)?, row.get(2)?))
+                })
+                .unwrap()
+                .map(Result::unwrap)
+                .collect()
+        };
+        assert!(steps.iter().any(|(kind, _, _)| kind == "tool_call_started"));
+        assert!(steps
+            .iter()
+            .any(|(kind, status, _)| kind == "tool_call_completed" && status == "ok"));
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn agent_failure_keeps_pending_and_retry_creates_retry_run() {
+        let (root, path) = test_database_path();
+        let registry = ToolRegistry::default();
+        let conversation_id = create_conversation(&path);
+        let abort = Arc::new(AtomicBool::new(false));
+
+        let mut events = Vec::new();
+        let first_error = run_agent_at_path(
+            &path,
+            conversation_id,
+            1,
+            "Retry after failure",
+            FakeScenario::GatewayNetworkError,
+            &registry,
+            &abort,
+            &mut events,
+        )
+        .unwrap_err();
+        assert!(first_error.contains("fake provider"));
+
+        // pending user 保留，run 标记 failed。
+        let snapshot = ConversationStore::open_path(&path)
+            .unwrap()
+            .get_required(conversation_id)
+            .unwrap();
+        assert_eq!(snapshot.messages.len(), 1);
+        let repository = AgentRunRepository::open(&path).unwrap();
+        let failed_run = repository
+            .latest_run_for_turn(conversation_id, 1)
+            .unwrap()
+            .unwrap();
+        assert_eq!(failed_run.status, AgentRunStatus::Failed);
+        assert_eq!(
+            failed_run.termination_reason.as_deref(),
+            Some("provider_network")
+        );
+
+        // 重试：新 run 的 retry_of_run_id 指向失败 run，最终完成。
+        let mut retry_events = Vec::new();
+        let completed = run_agent_at_path(
+            &path,
+            conversation_id,
+            1,
+            "Retry after failure",
+            FakeScenario::FinalOnly,
+            &registry,
+            &abort,
+            &mut retry_events,
+        )
+        .unwrap();
+        assert_eq!(completed.messages.len(), 2);
+        let repository = AgentRunRepository::open(&path).unwrap();
+        let retry_run = repository
+            .latest_run_for_turn(conversation_id, 1)
+            .unwrap()
+            .unwrap();
+        assert_eq!(retry_run.status, AgentRunStatus::Completed);
+        assert_eq!(
+            retry_run.retry_of_run_id.as_deref(),
+            Some(failed_run.run_id.as_str())
+        );
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn agent_abort_stops_and_keeps_pending_user() {
+        let (root, path) = test_database_path();
+        let registry = ToolRegistry::default();
+        let conversation_id = create_conversation(&path);
+        let abort = Arc::new(AtomicBool::new(false));
+
+        let mut events = Vec::new();
+        let error = run_agent_at_path(
+            &path,
+            conversation_id,
+            1,
+            "Stop me",
+            FakeScenario::AbortDuringModel,
+            &registry,
+            &abort,
+            &mut events,
+        )
+        .unwrap_err();
+        assert!(error.contains("停止"));
+
+        let snapshot = ConversationStore::open_path(&path)
+            .unwrap()
+            .get_required(conversation_id)
+            .unwrap();
+        assert_eq!(snapshot.messages.len(), 1, "停止后保留 pending user");
+        let repository = AgentRunRepository::open(&path).unwrap();
+        let run = repository
+            .latest_run_for_turn(conversation_id, 1)
+            .unwrap()
+            .unwrap();
+        assert_eq!(run.status, AgentRunStatus::Stopped);
+        assert_eq!(run.termination_reason.as_deref(), Some("user_aborted"));
+        assert!(run.completed_at_unix_ms.is_none());
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn agent_fuzzy_success_reconciles_completed_run() {
+        let (root, path) = test_database_path();
+        let registry = ToolRegistry::default();
+        let conversation_id = create_conversation(&path);
+        let abort = Arc::new(AtomicBool::new(false));
+
+        let mut events = Vec::new();
+        run_agent_at_path(
+            &path,
+            conversation_id,
+            1,
+            "Fuzzy success",
+            FakeScenario::FinalOnly,
+            &registry,
+            &abort,
+            &mut events,
+        )
+        .unwrap();
+        let repository = AgentRunRepository::open(&path).unwrap();
+        let run = repository
+            .latest_run_for_turn(conversation_id, 1)
+            .unwrap()
+            .unwrap();
+        assert_eq!(run.status, AgentRunStatus::Completed);
+
+        // 模拟 complete_turn 已提交但 run 终态未写（crash 于 transition 前）。
+        let connection = crate::learning_records::open_database(&path).unwrap();
+        connection
+            .execute(
+                "UPDATE agent_runs
+                 SET status = 'synthesizing', completed_at_unix_ms = NULL
+                 WHERE run_id = ?1",
+                [&run.run_id],
+            )
+            .unwrap();
+        drop(connection);
+
+        // 重试：prepare 命中 Completed → 对账把 run 同步回 completed，不重复写入。
+        let mut retry_events = Vec::new();
+        let retried = run_agent_at_path(
+            &path,
+            conversation_id,
+            1,
+            "Fuzzy success",
+            FakeScenario::FinalOnly,
+            &registry,
+            &abort,
+            &mut retry_events,
+        )
+        .unwrap();
+        assert_eq!(retried.messages.len(), 2);
+        let repository = AgentRunRepository::open(&path).unwrap();
+        let reconciled = repository
+            .latest_run_for_turn(conversation_id, 1)
+            .unwrap()
+            .unwrap();
+        assert_eq!(reconciled.status, AgentRunStatus::Completed);
+        assert!(reconciled.completed_at_unix_ms.is_some());
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn agent_persistence_failure_does_not_fake_success() {
+        let (root, path) = test_database_path();
+        let registry = ToolRegistry::default();
+        let conversation_id = create_conversation(&path);
+        let abort = Arc::new(AtomicBool::new(false));
+
+        let connection = crate::learning_records::open_database(&path).unwrap();
+        connection
+            .execute_batch(
+                "CREATE TRIGGER fail_agent_step_insert
+                 BEFORE INSERT ON agent_steps
+                 BEGIN
+                   SELECT RAISE(ABORT, 'simulated step persistence failure');
+                 END;",
+            )
+            .unwrap();
+        drop(connection);
+
+        let mut events = Vec::new();
+        let error = run_agent_at_path(
+            &path,
+            conversation_id,
+            1,
+            "Must not fake success",
+            FakeScenario::FinalOnly,
+            &registry,
+            &abort,
+            &mut events,
+        )
+        .unwrap_err();
+        assert!(error.contains("simulated step persistence failure"));
+
+        // assistant 未落库：pending user 保留，允许修复后重试。
+        let snapshot = ConversationStore::open_path(&path)
+            .unwrap()
+            .get_required(conversation_id)
+            .unwrap();
+        assert_eq!(snapshot.messages.len(), 1);
+        let connection = crate::learning_records::open_database(&path).unwrap();
+        connection
+            .execute_batch("DROP TRIGGER fail_agent_step_insert;")
+            .unwrap();
+        drop(connection);
+        let mut retry_events = Vec::new();
+        let completed = run_agent_at_path(
+            &path,
+            conversation_id,
+            1,
+            "Must not fake success",
+            FakeScenario::FinalOnly,
+            &registry,
+            &abort,
+            &mut retry_events,
+        )
+        .unwrap();
+        assert_eq!(completed.messages.len(), 2);
         let _ = fs::remove_dir_all(root);
     }
 }

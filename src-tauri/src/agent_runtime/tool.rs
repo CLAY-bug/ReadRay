@@ -15,7 +15,11 @@ use std::collections::{BTreeMap, BTreeSet};
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub(crate) enum RiskLevel {
     TrustedLocalReadOnly,
+    /// 外部只读（任务 3 网络工具启用；当前仅测试验证策略拒绝路径）。
+    #[allow(dead_code)]
     ExternalReadOnly,
+    /// ReadRay 领域写入（阶段九前不启用；当前仅测试覆盖等级边界）。
+    #[allow(dead_code)]
     DomainWrite,
 }
 

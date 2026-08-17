@@ -11,7 +11,7 @@
 //! call.validate 失败）保持 fail-fast，直接 RunFailed 终止。
 
 use crate::agent_runtime::context::{ContextAssembler, RuntimeFacts};
-use crate::agent_runtime::gateway::{ModelGateway, ModelRequest};
+use crate::agent_runtime::gateway::{ModelGateway, ModelRequest, ProviderMessage};
 use crate::agent_runtime::protocol::{
     AgentError, AgentErrorKind, AgentEvent, AgentEventPayload, AuthorityRef, ModelEvent,
     ModelUsage, RunBudget, TerminationReason, ToolCall, ToolResult,
@@ -24,22 +24,37 @@ use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 /// 用户请求停止的共享信号。Coordinator 在模型流式输出与工具批次边界检查它。
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug)]
 pub(crate) struct Cancellation {
     flag: Arc<AtomicBool>,
 }
 
 impl Cancellation {
-    pub fn new() -> Self {
-        Self::default()
-    }
-
-    pub fn request(&self) {
-        self.flag.store(true, Ordering::SeqCst);
+    /// 与外部共享的停止标志桥接（例如既有 Quick AI 的会话级 abort flag）。
+    pub(crate) fn from_shared(flag: Arc<AtomicBool>) -> Self {
+        Self { flag }
     }
 
     pub fn is_requested(&self) -> bool {
         self.flag.load(Ordering::SeqCst)
+    }
+
+    #[cfg(test)]
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    #[cfg(test)]
+    pub fn request(&self) {
+        self.flag.store(true, Ordering::SeqCst);
+    }
+}
+
+impl Default for Cancellation {
+    fn default() -> Self {
+        Self {
+            flag: Arc::new(AtomicBool::new(false)),
+        }
     }
 }
 
@@ -64,13 +79,15 @@ pub(crate) trait AgentEventSink {
 }
 
 /// 防御性 run 身份守卫：拒绝携带其他 run_id 的迟到事件，保证“页面卸载、切换会话
-/// 或请求身份变化后，迟到事件不得更新当前页面”的内核侧约定。接线留给任务 2 的
-/// surface adapter；本任务由测试直接构造。
+/// 或请求身份变化后，迟到事件不得更新当前页面”的内核侧约定。生产接线由任务 2
+/// 的 command 层在事件发布边界构造；当前仅测试直接使用。
+#[cfg(test)]
 pub(crate) struct RunScopedSink<'a> {
     run_id: String,
     inner: &'a mut dyn AgentEventSink,
 }
 
+#[cfg(test)]
 impl<'a> RunScopedSink<'a> {
     pub fn new(run_id: impl Into<String>, inner: &'a mut dyn AgentEventSink) -> Self {
         Self {
@@ -80,6 +97,7 @@ impl<'a> RunScopedSink<'a> {
     }
 }
 
+#[cfg(test)]
 impl AgentEventSink for RunScopedSink<'_> {
     fn emit(&mut self, event: AgentEvent) -> Result<(), AgentError> {
         if event.run_id != self.run_id {
@@ -100,6 +118,8 @@ impl AgentEventSink for RunScopedSink<'_> {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum ToolExecutionOrder {
     CallOrder,
+    /// 确定性完成顺序演示（证明结果顺序与完成顺序无关），当前仅测试构造。
+    #[allow(dead_code)]
     ReverseCallOrder,
 }
 
@@ -114,6 +134,9 @@ pub(crate) struct RunRequest {
     pub runtime_facts: RuntimeFacts,
     pub capability: CapabilityPolicy,
     pub tool_execution_order: ToolExecutionOrder,
+    /// Some 时直接作为初始 transcript（surface 提供系统提示词 + 历史 + 当前
+    /// user）；None 时由 ContextAssembler 从 user_prompt/facts 构建。
+    pub initial_messages: Option<Vec<ProviderMessage>>,
 }
 
 /// run 的最终摘要。事件本身由 `AgentEventSink` 承载，不在这里重复。
@@ -216,8 +239,14 @@ impl AgentRunCoordinator {
 
         let active_tools = registry.active_tools(&request.capability);
         // 边界：max_context_bytes 未在本轮强制（上下文预算与 compaction 属后续任务）。
-        let mut transcript =
-            assembler.initial_messages(&request.user_prompt, &request.runtime_facts, &active_tools);
+        let mut transcript = match &request.initial_messages {
+            Some(messages) => messages.clone(),
+            None => assembler.initial_messages(
+                &request.user_prompt,
+                &request.runtime_facts,
+                &active_tools,
+            ),
+        };
 
         loop {
             // ---- 终止条件：取消、run 超时、模型轮数预算 ----
@@ -709,6 +738,7 @@ mod tests {
             },
             capability: CapabilityPolicy::default(),
             tool_execution_order: order,
+            initial_messages: None,
         }
     }
 
