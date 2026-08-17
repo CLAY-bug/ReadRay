@@ -13,7 +13,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use tauri::{AppHandle, Manager};
 
 const DATABASE_FILE_NAME: &str = "readray.sqlite3";
-const DATABASE_SCHEMA_VERSION: i64 = 20;
+const DATABASE_SCHEMA_VERSION: i64 = 21;
 const LEARNING_TARGET_CANONICALIZATION_VERSION: i64 = 1;
 const REVIEW_DAY_UNIX_MS: i64 = 24 * 60 * 60 * 1_000;
 pub const EXPLANATION_CARD_SCHEMA_VERSION: i64 = 2;
@@ -771,6 +771,25 @@ CREATE TABLE agent_sources (
 CREATE INDEX idx_agent_sources_run ON agent_sources(run_id);
 "#;
 
+/// 阶段八点五任务 4：重新生成替代关系、来源随回答落库与截断标志。
+/// 一次集中追加三列（不零碎改 schema）：superseded_by_id 记录重新生成对旧
+/// assistant 的替代链（旧行保留可审计，可见快照/导出只取未被替代的当前回答）；
+/// sources_json 保存回答引用的结构化来源（数据小，重启与历史回看直接来自本行，
+/// 不从 run/step 审计表重建）；truncated 标记 finish_reason=length 的诚实截断
+/// 提示（回答照常持久化，UI 只显示轻微提示）。
+const MIGRATION_21: &str = r#"
+ALTER TABLE quick_ai_messages
+  ADD COLUMN superseded_by_id INTEGER
+  REFERENCES quick_ai_messages(id) ON DELETE SET NULL;
+
+ALTER TABLE quick_ai_messages
+  ADD COLUMN sources_json TEXT;
+
+ALTER TABLE quick_ai_messages
+  ADD COLUMN truncated INTEGER NOT NULL DEFAULT 0
+  CHECK (truncated IN (0, 1));
+"#;
+
 const MIGRATIONS: &[(i64, &str)] = &[
     (1, MIGRATION_1),
     (2, MIGRATION_2),
@@ -790,8 +809,9 @@ const MIGRATIONS: &[(i64, &str)] = &[
     (16, MIGRATION_16),
     (17, MIGRATION_17),
     (18, MIGRATION_18),
-    (DATABASE_SCHEMA_VERSION - 1, MIGRATION_19),
-    (DATABASE_SCHEMA_VERSION, MIGRATION_20),
+    (DATABASE_SCHEMA_VERSION - 2, MIGRATION_19),
+    (DATABASE_SCHEMA_VERSION - 1, MIGRATION_20),
+    (DATABASE_SCHEMA_VERSION, MIGRATION_21),
 ];
 
 #[derive(Clone, Debug, Serialize)]
@@ -5870,6 +5890,176 @@ INSERT INTO review_card_generation_failures (
             )
             .unwrap();
         assert_eq!(preserved_conversation, 1);
+        drop(upgraded);
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn migration_v21_creates_message_metadata_columns_with_invariants() {
+        let (root, path) = test_database_path();
+        fs::create_dir_all(&root).unwrap();
+        let connection = open_database(&path).unwrap();
+        let version: i64 = connection
+            .query_row("SELECT MAX(version) FROM schema_migrations", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        assert_eq!(version, DATABASE_SCHEMA_VERSION);
+
+        // 三列一次落地：替代关系、来源 JSON、截断标志。
+        let columns: Vec<(String, String, Option<String>, Option<i64>)> = {
+            let mut statement = connection
+                .prepare(
+                    "SELECT name, type, dflt_value, \"notnull\"
+                     FROM pragma_table_info('quick_ai_messages')
+                     WHERE name IN ('superseded_by_id', 'sources_json', 'truncated')",
+                )
+                .unwrap();
+            statement
+                .query_map([], |row| {
+                    Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?))
+                })
+                .unwrap()
+                .map(Result::unwrap)
+                .collect()
+        };
+        assert_eq!(columns.len(), 3, "v21 必须存在三列：{columns:?}");
+        let by_name = |name: &str| {
+            columns
+                .iter()
+                .find(|(column, _, _, _)| column == name)
+                .expect("列必须存在")
+        };
+        assert_eq!(by_name("superseded_by_id").1, "INTEGER");
+        assert_eq!(by_name("sources_json").1, "TEXT");
+        assert_eq!(by_name("truncated").1, "INTEGER");
+        assert_eq!(
+            by_name("truncated").2.as_deref(),
+            Some("0"),
+            "truncated 默认 0"
+        );
+        assert_eq!(by_name("truncated").3, Some(1), "truncated NOT NULL");
+
+        // 默认值：新行 superseded/sources 为 NULL、truncated 为 0。
+        connection
+            .execute(
+                "INSERT INTO quick_ai_conversations (
+                   title, model, origin, created_at_unix_ms, updated_at_unix_ms
+                 ) VALUES ('新对话', 'deepseek-v4-flash', 'main', 100, 100)",
+                [],
+            )
+            .unwrap();
+        connection
+            .execute(
+                "INSERT INTO quick_ai_messages (
+                   conversation_id, role, content, sequence, created_at_unix_ms
+                 ) VALUES (1, 'user', '新消息', 1, 100)",
+                [],
+            )
+            .unwrap();
+        let (superseded_by_id, sources_json, truncated): (Option<i64>, Option<String>, i64) =
+            connection
+                .query_row(
+                    "SELECT superseded_by_id, sources_json, truncated
+                     FROM quick_ai_messages WHERE conversation_id = 1",
+                    [],
+                    |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+                )
+                .unwrap();
+        assert!(superseded_by_id.is_none());
+        assert!(sources_json.is_none());
+        assert_eq!(truncated, 0);
+
+        // CHECK 约束：truncated 只接受 0/1；超范围与非法文本拒绝。
+        assert!(connection
+            .execute(
+                "INSERT INTO quick_ai_messages (
+                   conversation_id, role, content, sequence, created_at_unix_ms, truncated
+                 ) VALUES (1, 'assistant', 'bad', 2, 100, 2)",
+                [],
+            )
+            .is_err());
+        assert!(connection
+            .execute(
+                "INSERT INTO quick_ai_messages (
+                   conversation_id, role, content, sequence, created_at_unix_ms, truncated
+                 ) VALUES (1, 'assistant', 'ok', 2, 100, 1)",
+                [],
+            )
+            .is_ok());
+        drop(connection);
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn migration_v21_upgrades_v20_database_keeping_existing_data() {
+        let (root, path) = test_database_path();
+        fs::create_dir_all(&root).unwrap();
+        let connection = Connection::open(&path).unwrap();
+        connection
+            .execute_batch(
+                "CREATE TABLE schema_migrations (
+                   version INTEGER PRIMARY KEY,
+                   applied_at_unix_ms INTEGER NOT NULL
+                 );",
+            )
+            .unwrap();
+        for &(version, sql) in MIGRATIONS.iter().take(20) {
+            connection.execute_batch(sql).unwrap();
+            connection
+                .execute(
+                    "INSERT INTO schema_migrations (version, applied_at_unix_ms)
+                     VALUES (?1, ?2)",
+                    params![version, version * 100],
+                )
+                .unwrap();
+        }
+        // 旧库里的既有会话与消息必须原样保留，升级后新列得到默认值。
+        connection
+            .execute(
+                "INSERT INTO quick_ai_conversations (
+                   title, model, origin, created_at_unix_ms, updated_at_unix_ms
+                 ) VALUES ('v20 对话', 'deepseek-v4-flash', 'main', 100, 100)",
+                [],
+            )
+            .unwrap();
+        connection
+            .execute(
+                "INSERT INTO quick_ai_messages (
+                   conversation_id, role, content, sequence, created_at_unix_ms
+                 ) VALUES (1, 'user', 'v20 消息', 1, 100)",
+                [],
+            )
+            .unwrap();
+        drop(connection);
+
+        let upgraded = open_database(&path).unwrap();
+        let version: i64 = upgraded
+            .query_row("SELECT MAX(version) FROM schema_migrations", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        assert_eq!(version, DATABASE_SCHEMA_VERSION);
+        let preserved: String = upgraded
+            .query_row(
+                "SELECT content FROM quick_ai_messages WHERE conversation_id = 1",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(preserved, "v20 消息");
+        let (superseded_by_id, sources_json, truncated): (Option<i64>, Option<String>, i64) =
+            upgraded
+                .query_row(
+                    "SELECT superseded_by_id, sources_json, truncated
+                     FROM quick_ai_messages WHERE conversation_id = 1",
+                    [],
+                    |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+                )
+                .unwrap();
+        assert!(superseded_by_id.is_none(), "旧消息没有被标记为已替代");
+        assert!(sources_json.is_none(), "旧消息没有来源 JSON");
+        assert_eq!(truncated, 0, "旧消息默认非截断");
         drop(upgraded);
         let _ = fs::remove_dir_all(root);
     }

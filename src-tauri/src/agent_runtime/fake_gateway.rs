@@ -13,6 +13,8 @@ use serde_json::{json, Value};
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum FakeScenario {
     FinalOnly,
+    /// 最终回答轮 finish_reason=length（任务 4）：文本照常输出，截断只标记。
+    FinalTruncated,
     SingleToolThenFinal,
     MultipleToolsThenFinal,
     TextThenToolsThenFinal,
@@ -103,6 +105,15 @@ impl ModelGateway for FakeGateway {
                 on_event(usage_event())?;
                 on_event(ModelEvent::Completed {
                     reason: ModelFinishReason::Stop,
+                })?;
+            }
+            FakeScenario::FinalTruncated => {
+                on_event(ModelEvent::TextDelta {
+                    text: "partial answer".to_string(),
+                })?;
+                on_event(usage_event())?;
+                on_event(ModelEvent::Completed {
+                    reason: ModelFinishReason::Length,
                 })?;
             }
             FakeScenario::SingleToolThenFinal

@@ -29,7 +29,7 @@ function snapshot(messages = [], overrides = {}) {
   };
 }
 
-function message(id, role, content, sequence) {
+function message(id, role, content, sequence, overrides = {}) {
   return {
     id,
     conversationId: 17,
@@ -37,11 +37,13 @@ function message(id, role, content, sequence) {
     content,
     sequence,
     createdAtUnixMs: NOW.getTime(),
+    ...overrides,
   };
 }
 
 // 注入式 repository 的流式实现：把 sendStreaming 转接到 send 语义，
-// 并保留 onEvent 回调以模拟 channel 事件。
+// 并保留 onEvent 回调以模拟 channel 事件。事件先于 send 结果发出，
+// 与真实 channel 在 invoke 期间到达的行为一致（停止/失败时事件仍可达）。
 function withStreaming(repository, options = {}) {
   return {
     ...repository,
@@ -50,12 +52,8 @@ function withStreaming(repository, options = {}) {
       expectedUserSequence,
       content,
       onEvent,
+      replaceMessageId = null,
     ) => {
-      const result = await repository.send(
-        conversationId,
-        expectedUserSequence,
-        content,
-      );
       if (options.emitDelta) {
         for (const piece of options.emitDelta) {
           onEvent({ type: "delta", text: piece });
@@ -67,6 +65,12 @@ function withStreaming(repository, options = {}) {
       if (options.truncated) {
         onEvent({ type: "truncated" });
       }
+      const result = await repository.send(
+        conversationId,
+        expectedUserSequence,
+        content,
+        replaceMessageId,
+      );
       return result;
     },
     abortStreaming:
@@ -768,7 +772,7 @@ test("提交成功但 IPC 与随后读取均失败时再次重试仍使用原 se
   assert.equal(result.persistedThread.messages.length, 2);
 });
 
-test("缺失会话和真实后端不支持的重新生成会明确失败", async () => {
+test("缺失会话明确失败，重新生成必须携带目标回答", async () => {
   const service = new RepositoryConversationService(
     withStreaming({
       create: async () => snapshot(),
@@ -788,8 +792,149 @@ test("缺失会话和真实后端不支持的重新生成会明确失败", async
       prompt: "重生成",
       mode: "regenerate",
     }),
-    /暂不支持重新生成/,
+    /必须指定目标回答/,
   );
+  await assert.rejects(
+    service.generateReply({
+      conversationId: "17",
+      messages: [],
+      prompt: "重生成",
+      mode: "regenerate",
+      replaceAssistantMessageId: "not-a-message-id",
+    }),
+    /目标回答 ID 无效/,
+  );
+  await assert.rejects(
+    service.generateReply({
+      conversationId: "17",
+      messages: [],
+      prompt: "追加",
+      mode: "append",
+      replaceAssistantMessageId: "quick-ai-message-42",
+    }),
+    /不能携带重新生成目标/,
+  );
+});
+
+test("重新生成复用同一 user 轮次并携带目标回答 ID", async () => {
+  const sent = [];
+  const regenerated = snapshot([
+    message(41, "user", "重生成问题", 1),
+    message(43, "assistant", "重新生成的新回答", 4),
+  ]);
+  const service = new RepositoryConversationService(
+    withStreaming({
+      create: async () => snapshot(),
+      get: async () => snapshot(),
+      send: async (conversationId, expectedUserSequence, content, replaceMessageId) => {
+        sent.push({ conversationId, expectedUserSequence, content, replaceMessageId });
+        return regenerated;
+      },
+    }),
+  );
+
+  const reply = await service.generateReply({
+    conversationId: "17",
+    messages: [
+      {
+        id: "quick-ai-message-41",
+        role: "user",
+        content: "重生成问题",
+        sequence: 1,
+      },
+    ],
+    prompt: "重生成问题",
+    mode: "regenerate",
+    replaceAssistantMessageId: "quick-ai-message-42",
+  });
+
+  assert.deepEqual(sent, [
+    {
+      conversationId: 17,
+      expectedUserSequence: 1,
+      content: "重生成问题",
+      replaceMessageId: 42,
+    },
+  ]);
+  assert.equal(reply.status, "complete");
+  // 重新生成后的 sequence 有间隙：当前回答不是 userSequence+1，而是该 user
+  // 之后最后一条 assistant（旧回答已被 Rust 快照过滤）。
+  assert.equal(reply.assistantMessageId, "quick-ai-message-43");
+  assert.equal(reply.persistedThread.messages.length, 2);
+  assert.equal(reply.persistedThread.messages[1].markdown, "重新生成的新回答");
+  assert.equal(reply.persistedThread.messages[1].sequence, 4);
+});
+
+test("重新生成未提交时保持失败可重试（目标仍是当前回答）", async () => {
+  const unchanged = snapshot([
+    message(41, "user", "重生成问题", 1),
+    message(42, "assistant", "旧回答", 2),
+  ]);
+  const service = new RepositoryConversationService(
+    withStreaming({
+      create: async () => snapshot(),
+      get: async () => unchanged,
+      send: async () => {
+        throw new Error("重新生成请求失败");
+      },
+    }),
+  );
+
+  const reply = await service.generateReply({
+    conversationId: "17",
+    messages: [
+      {
+        id: "quick-ai-message-41",
+        role: "user",
+        content: "重生成问题",
+        sequence: 1,
+      },
+    ],
+    prompt: "重生成问题",
+    mode: "regenerate",
+    replaceAssistantMessageId: "quick-ai-message-42",
+  });
+
+  // 目标回答仍是当前回答 → 重新生成未提交：返回 pending，可重试。
+  assert.equal(reply.status, "pending");
+  assert.equal(reply.errorMessage, "暂时无法回答，请重试。");
+  assert.equal(reply.persistedThread.messages[1].markdown, "旧回答");
+});
+
+test("重新生成模糊成功：恢复快照中目标已被替代时按成功收尾", async () => {
+  const regenerated = snapshot([
+    message(41, "user", "重生成问题", 1),
+    message(43, "assistant", "已提交的新回答", 4),
+  ]);
+  const service = new RepositoryConversationService(
+    withStreaming({
+      create: async () => snapshot(),
+      get: async () => regenerated,
+      send: async () => {
+        throw new Error("IPC 回传失败");
+      },
+    }),
+  );
+
+  const reply = await service.generateReply({
+    conversationId: "17",
+    messages: [
+      {
+        id: "quick-ai-message-41",
+        role: "user",
+        content: "重生成问题",
+        sequence: 1,
+      },
+    ],
+    prompt: "重生成问题",
+    mode: "regenerate",
+    replaceAssistantMessageId: "quick-ai-message-42",
+  });
+
+  // 当前回答已是新回答（旧目标被替代）→ 重新生成已提交，直接使用权威快照。
+  assert.equal(reply.status, "complete");
+  assert.equal(reply.assistantMessageId, "quick-ai-message-43");
+  assert.equal(reply.persistedThread.messages[1].markdown, "已提交的新回答");
 });
 
 test("全部会话、重命名和删除只使用数据库 ID 并在成功后刷新", async () => {
@@ -963,7 +1108,9 @@ test("正式导出只提交目标数据库 ID，取消不返回成功，失败�
 test("流式回答达到长度上限时返回 truncated 且保留已生成内容", async () => {
   const saved = snapshot([
     message(101, "user", "超长问题", 1),
-    message(102, "assistant", "已生成的前半部分", 2),
+    message(102, "assistant", "已生成的前半部分", 2, {
+      truncated: true,
+    }),
   ]);
   const service = new RepositoryConversationService(
     withStreaming(
@@ -987,6 +1134,39 @@ test("流式回答达到长度上限时返回 truncated 且保留已生成内容
   assert.equal(reply.assistantMessageId, "quick-ai-message-102");
   assert.deepEqual(reply.chunks, ["已生成的前半部分"]);
   assert.equal(reply.persistedThread.messages.length, 2);
+  // 截断标志随消息落库（历史回看仍显示"回答可能不完整"提示）。
+  assert.equal(
+    reply.persistedThread.messages[1].truncated,
+    true,
+  );
+});
+
+test("截断标志随快照映射为消息级提示（重启回看）", () => {
+  const thread = mapQuickAiConversation(
+    snapshot([
+      message(41, "user", "超长问题", 1),
+      message(42, "assistant", "已生成的前半部分", 2, {
+        truncated: true,
+        sources: [
+          {
+            sourceId: "source-1",
+            title: "Example",
+            url: "https://example.com/article",
+            siteName: "Example",
+            publishedAt: null,
+            retrievedAtUnixMs: 100,
+            contentType: "text/html",
+          },
+        ],
+      }),
+    ]),
+    NOW,
+  );
+
+  assert.equal(thread.messages[1].truncated, true);
+  assert.equal(thread.messages[1].sources.length, 1);
+  assert.equal(thread.messages[1].sources[0].url, "https://example.com/article");
+  assert.equal(thread.messages[1].sources[0].siteName, "Example");
 });
 
 test("流式增量通过 onStreamDelta 转发且完成后返回已保存回答", async () => {
@@ -1040,7 +1220,7 @@ test("用户停止后 assistant 未落库时返回 pending 且可重试", async 
           throw new Error("回答已停止，已保留你的问题，可以直接重试。");
         },
       },
-      { emitDelta: ["部分内容"] },
+      { emitDelta: ["部分内容"], stopped: true },
     ),
   );
 
@@ -1101,7 +1281,7 @@ test("stopGeneration 通过 abort 命令请求后端停止", async () => {
   assert.equal(abortConversationId, 17);
 });
 
-test("正式 service 能力为流式可停止且导出仍可用", async () => {
+test("正式 service 能力为流式可停止、可重新生成且导出可用", async () => {
   const service = new RepositoryConversationService(
     withStreaming({
       create: async () => snapshot(),
@@ -1112,7 +1292,7 @@ test("正式 service 能力为流式可停止且导出仍可用", async () => {
 
   assert.equal(service.capabilities.delivery, "streaming");
   assert.equal(service.capabilities.canStop, true);
-  assert.equal(service.capabilities.canRegenerate, false);
+  assert.equal(service.capabilities.canRegenerate, true);
   assert.equal(service.capabilities.canExport, true);
 });
 

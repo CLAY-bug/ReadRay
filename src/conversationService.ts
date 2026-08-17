@@ -17,7 +17,7 @@ import type {
 const STREAMING_DELIVERY_CAPABILITIES = {
   delivery: "streaming",
   canStop: true,
-  canRegenerate: false,
+  canRegenerate: true,
   canExport: true,
 } as const;
 
@@ -117,6 +117,12 @@ function mapMessage(
     // 真实回答保留原始 Markdown 文本，页面渲染层优先走白名单渲染；
     // blocks 字段继续存在以兼容既有协议与 fixture 路径。
     markdown: message.content,
+    // 任务 4：来源随 assistant 消息落库，重启与历史回看直接可用；
+    // 截断标志驱动"回答可能不完整"的轻微提示。
+    sources: message.sources && message.sources.length > 0
+      ? message.sources
+      : undefined,
+    truncated: message.truncated === true,
     sequence: message.sequence,
   } satisfies ConversationAssistantMessage;
 }
@@ -184,10 +190,6 @@ function expectedUserSequence(request: ConversationGenerationRequest) {
   return sequence;
 }
 
-function errorMessage(error: unknown) {
-  return error instanceof Error ? error.message : String(error);
-}
-
 function exportFileName(title: string) {
   const safeTitle = title
     .trim()
@@ -211,10 +213,30 @@ function turnAt(
   ) {
     return null;
   }
-  const assistantMessage = snapshot.messages.find(
-    (message) => message.sequence === userSequence + 1,
-  );
+  // 当前回答 = 该 user 之后最后一条 assistant。重新生成后 sequence 存在间隙
+  // （旧回答 seq+1 被替代、新回答在更后的偶数位），不能假设恰好位于
+  // userSequence + 1；被替代的旧回答已被 Rust 快照过滤。
+  const assistantMessage = [...snapshot.messages]
+    .reverse()
+    .find(
+      (message) => message.role === "assistant" && message.sequence > userSequence,
+    );
   return { userMessage, assistantMessage };
+}
+
+function parseReplaceMessageId(messageId: string | undefined) {
+  if (!messageId) {
+    return null;
+  }
+  const match = /^quick-ai-message-(\d+)$/.exec(messageId);
+  if (!match) {
+    throw new Error("重新生成目标回答 ID 无效。");
+  }
+  const id = Number(match[1]);
+  if (!Number.isSafeInteger(id) || id <= 0) {
+    throw new Error("重新生成目标回答 ID 无效。");
+  }
+  return id;
 }
 
 export class RepositoryConversationService implements ConversationService {
@@ -291,18 +313,24 @@ export class RepositoryConversationService implements ConversationService {
   }
 
   async generateReply(request: ConversationGenerationRequest) {
-    if (request.mode !== "append") {
-      throw new Error("真实 Quick AI 暂不支持重新生成回答。");
-    }
-
     const conversationId = requireConversationId(request.conversationId);
+    const replaceMessageId = parseReplaceMessageId(
+      request.replaceAssistantMessageId,
+    );
+    if (request.mode === "regenerate" && replaceMessageId === null) {
+      throw new Error("重新生成必须指定目标回答。");
+    }
+    if (request.mode === "append" && replaceMessageId !== null) {
+      throw new Error("追加回答不能携带重新生成目标。");
+    }
     const userSequence = expectedUserSequence(request);
+
     let snapshot: QuickAiConversation;
     let updateNotified = false;
     let streamed = false;
     let streamedText = "";
     let stoppedByUser = false;
-    let truncated = false;
+    let eventTruncated = false;
     try {
       snapshot = await this.repository.sendStreaming(
         conversationId,
@@ -316,13 +344,14 @@ export class RepositoryConversationService implements ConversationService {
           } else if (event.type === "stopped") {
             stoppedByUser = true;
           } else if (event.type === "truncated") {
-            truncated = true;
+            eventTruncated = true;
           } else if (event.type === "sources_updated") {
             request.onSourcesUpdated?.(event.sources);
           } else if (event.type === "tool_state") {
             request.onToolState?.(event.label);
           }
         },
+        replaceMessageId,
       );
     } catch (sendError) {
       this.onConversationUpdated?.();
@@ -342,7 +371,20 @@ export class RepositoryConversationService implements ConversationService {
           persistedThread,
           errorMessage: stoppedByUser
             ? "回答已停止，已保留你的问题，可以直接重试。"
-            : errorMessage(sendError),
+            : "暂时无法回答，请重试。",
+        };
+      }
+      if (
+        replaceMessageId !== null &&
+        `quick-ai-message-${recoveredTurn.assistantMessage.id}` ===
+          request.replaceAssistantMessageId
+      ) {
+        // 重新生成未提交：目标回答仍是当前回答（旧回答未被替代），保持失败可重试。
+        const persistedThread = mapQuickAiConversation(recovered);
+        return {
+          status: "pending" as const,
+          persistedThread,
+          errorMessage: "暂时无法回答，请重试。",
         };
       }
       snapshot = recovered;
@@ -357,6 +399,9 @@ export class RepositoryConversationService implements ConversationService {
     if (!updateNotified) {
       this.onConversationUpdated?.();
     }
+    // 任务 4：finish_reason=length 的截断以落库标志为准（历史回看一致）；
+    // 事件标志保留兼容旧路径。
+    const truncated = eventTruncated || assistantMessage.truncated === true;
     return {
       status: truncated ? ("truncated" as const) : ("complete" as const),
       assistantMessageId: `quick-ai-message-${assistantMessage.id}`,

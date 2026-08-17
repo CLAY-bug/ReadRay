@@ -55,6 +55,12 @@ pub struct ConversationMessage {
     pub content: String,
     pub sequence: i64,
     pub created_at_unix_ms: i64,
+    /// 回答引用的外部来源（任务 4）：随 assistant 消息落库的 JSON 数组，重启与
+    /// 历史回看直接来自本行，不从 run/step 审计表重建。
+    pub sources: Option<Vec<crate::agent_runtime::protocol::SourceMetadata>>,
+    /// finish_reason=length 的诚实截断标志（任务 4）：回答照常持久化，UI 只给
+    /// "回答可能不完整"的轻微提示，不做"继续生成"。
+    pub truncated: bool,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
@@ -103,6 +109,9 @@ struct StoredMessage {
     content: String,
     sequence: i64,
     created_at_unix_ms: i64,
+    sources_json: Option<String>,
+    truncated: i64,
+    superseded_by_id: Option<i64>,
 }
 
 pub(crate) struct ConversationStore {
@@ -116,6 +125,20 @@ pub(crate) enum PreparedTurn {
         user_message_id: i64,
     },
     Completed {
+        snapshot: ConversationSnapshot,
+    },
+}
+
+/// 重新生成准备结果（任务 4）：Ready 可执行新 run；AlreadyCurrent 表示目标回答
+/// 已被更新的重新生成替代（幂等，不新建 run，直接返回当前权威快照）。
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) enum RegenerationTurn {
+    Ready {
+        snapshot: ConversationSnapshot,
+        user_message_id: i64,
+        target_message_id: i64,
+    },
+    AlreadyCurrent {
         snapshot: ConversationSnapshot,
     },
 }
@@ -175,7 +198,14 @@ impl ConversationStore {
             } => user_message_id,
             PreparedTurn::Completed { snapshot } => return Ok(snapshot),
         };
-        self.complete_turn(conversation.id, 1, user_message_id, assistant_content)
+        self.complete_turn(
+            conversation.id,
+            1,
+            user_message_id,
+            assistant_content,
+            None,
+            false,
+        )
     }
 
     #[cfg(test)]
@@ -203,6 +233,8 @@ impl ConversationStore {
             expected_user_sequence,
             user_message_id,
             assistant_content,
+            None,
+            false,
         )
     }
 
@@ -311,6 +343,8 @@ impl ConversationStore {
             normalized_content,
             expected_user_sequence,
             timestamp,
+            None,
+            false,
         )?;
         let user_message_id = transaction.last_insert_rowid();
         transaction
@@ -329,6 +363,8 @@ impl ConversationStore {
         expected_user_sequence: i64,
         user_message_id: i64,
         assistant_content: &str,
+        sources_json: Option<String>,
+        truncated: bool,
     ) -> Result<ConversationSnapshot, String> {
         validate_user_sequence(expected_user_sequence)?;
         validate_message("助手消息", assistant_content)?;
@@ -376,6 +412,8 @@ impl ConversationStore {
             assistant_content,
             expected_user_sequence + 1,
             timestamp,
+            sources_json,
+            truncated,
         )?;
         transaction
             .execute(
@@ -388,6 +426,150 @@ impl ConversationStore {
         transaction
             .commit()
             .map_err(|error| format!("Quick AI 回答事务无法提交：{error}"))?;
+
+        self.get_required(conversation_id)
+    }
+
+    /// 重新生成准备（任务 4）：校验该轮 user 与目标 assistant 后返回 Ready；
+    /// 目标已被更新的重新生成替代时返回 AlreadyCurrent（幂等，直接返回权威快照）。
+    /// 只允许重新生成会话中最后一条（未被替代的）assistant。
+    pub(crate) fn prepare_regeneration(
+        &mut self,
+        conversation_id: i64,
+        expected_user_sequence: i64,
+        user_content: &str,
+        target_message_id: i64,
+    ) -> Result<RegenerationTurn, String> {
+        validate_user_sequence(expected_user_sequence)?;
+        let normalized_content = user_content.trim();
+        let transaction = self
+            .connection
+            .transaction()
+            .map_err(|error| format!("Quick AI 重新生成事务无法开始：{error}"))?;
+        let stored_user = stored_message_at(&transaction, conversation_id, expected_user_sequence)?
+            .ok_or_else(|| {
+                format!(
+                    "Quick AI 待重新生成的用户消息不存在：conversation_id={conversation_id}, sequence={expected_user_sequence}。"
+                )
+            })?;
+        if role_from_storage(&stored_user.role)? != ConversationRole::User {
+            return Err("Quick AI 重新生成目标不是用户消息。".to_string());
+        }
+        if stored_user.content != normalized_content {
+            return Err("Quick AI 重新生成的用户消息内容不匹配。".to_string());
+        }
+
+        let target = stored_message_by_id(&transaction, conversation_id, target_message_id)?
+            .ok_or_else(|| format!("Quick AI 重新生成目标回答不存在：id={target_message_id}。"))?;
+        if role_from_storage(&target.role)? != ConversationRole::Assistant {
+            return Err("Quick AI 重新生成目标不是助手消息。".to_string());
+        }
+        if target.sequence <= expected_user_sequence {
+            return Err("Quick AI 重新生成目标不属于该轮回答。".to_string());
+        }
+        // 已被替代的目标优先幂等返回（重复请求/迟到重试不报"非尾"错误）；
+        // 未替代但非尾的目标才是真正的非法请求。
+        if target.superseded_by_id.is_some() {
+            drop(transaction);
+            return Ok(RegenerationTurn::AlreadyCurrent {
+                snapshot: self.get_required(conversation_id)?,
+            });
+        }
+        let current_max = max_sequence(&transaction, conversation_id)?.unwrap_or(0);
+        if target.sequence != current_max {
+            return Err("Quick AI 只能重新生成会话中最后一条回答。".to_string());
+        }
+        drop(transaction);
+        Ok(RegenerationTurn::Ready {
+            snapshot: self.get_required(conversation_id)?,
+            user_message_id: stored_user.id,
+            target_message_id,
+        })
+    }
+
+    /// 重新生成完成（任务 4）：插入新 assistant（sequence 取当前最大序号的下一个
+    /// 偶数，保持 user 奇 / assistant 偶交替），再把旧 assistant 标记为被替代；
+    /// 旧行不物理删除（可审计），可见快照与导出只取未被替代的当前回答。
+    pub(crate) fn complete_regeneration(
+        &mut self,
+        conversation_id: i64,
+        expected_user_sequence: i64,
+        user_message_id: i64,
+        target_message_id: i64,
+        assistant_content: &str,
+        sources_json: Option<String>,
+        truncated: bool,
+    ) -> Result<ConversationSnapshot, String> {
+        validate_user_sequence(expected_user_sequence)?;
+        validate_message("助手消息", assistant_content)?;
+        let timestamp = unix_time_ms()?;
+        let transaction = self
+            .connection
+            .transaction()
+            .map_err(|error| format!("Quick AI 重新生成回答事务无法开始：{error}"))?;
+        let stored_user = stored_message_at(
+            &transaction,
+            conversation_id,
+            expected_user_sequence,
+        )?
+        .ok_or_else(|| {
+            format!(
+                "Quick AI 待重新生成的用户消息不存在：conversation_id={conversation_id}, sequence={expected_user_sequence}。"
+            )
+        })?;
+        if stored_user.id != user_message_id
+            || role_from_storage(&stored_user.role)? != ConversationRole::User
+        {
+            return Err("Quick AI 待重新生成用户消息身份不匹配。".to_string());
+        }
+        let target = stored_message_by_id(&transaction, conversation_id, target_message_id)?
+            .ok_or_else(|| format!("Quick AI 重新生成目标回答不存在：id={target_message_id}。"))?;
+        if role_from_storage(&target.role)? != ConversationRole::Assistant
+            || target.sequence <= expected_user_sequence
+        {
+            return Err("Quick AI 重新生成目标不是该轮助手消息。".to_string());
+        }
+        if target.superseded_by_id.is_some() {
+            return Err("Quick AI 重新生成目标已被更新的回答替代。".to_string());
+        }
+        let current_max = max_sequence(&transaction, conversation_id)?.unwrap_or(0);
+        if target.sequence != current_max {
+            return Err("Quick AI 只能重新生成会话中最后一条回答。".to_string());
+        }
+        let new_sequence = current_max + 1 + i64::from(current_max % 2 == 0);
+        insert_message(
+            &transaction,
+            conversation_id,
+            ConversationRole::Assistant,
+            assistant_content,
+            new_sequence,
+            timestamp,
+            sources_json,
+            truncated,
+        )?;
+        let new_message_id = transaction.last_insert_rowid();
+        let superseded = transaction
+            .execute(
+                "UPDATE quick_ai_messages
+                 SET superseded_by_id = ?1
+                 WHERE id = ?2 AND superseded_by_id IS NULL",
+                params![new_message_id, target_message_id],
+            )
+            .map_err(|error| format!("Quick AI 重新生成替代标记失败：{error}"))?;
+        if superseded != 1 {
+            return Err("Quick AI 重新生成目标已被更新的回答替代。".to_string());
+        }
+        transaction
+            .execute(
+                "UPDATE quick_ai_conversations
+                 SET updated_at_unix_ms = ?1
+                 WHERE id = ?2",
+                params![timestamp, conversation_id],
+            )
+            .map_err(|error| format!("Quick AI 对话更新时间失败：{error}"))?;
+        transaction
+            .commit()
+            .map_err(|error| format!("Quick AI 重新生成回答事务无法提交：{error}"))?;
 
         self.get_required(conversation_id)
     }
@@ -419,9 +601,10 @@ impl ConversationStore {
         let mut statement = self
             .connection
             .prepare(
-                "SELECT id, conversation_id, role, content, sequence, created_at_unix_ms
+                "SELECT id, conversation_id, role, content, sequence, created_at_unix_ms,
+                        sources_json, truncated
                  FROM quick_ai_messages
-                 WHERE conversation_id = ?1
+                 WHERE conversation_id = ?1 AND superseded_by_id IS NULL
                  ORDER BY sequence ASC",
             )
             .map_err(|error| format!("Quick AI 消息读取语句无法准备：{error}"))?;
@@ -434,6 +617,9 @@ impl ConversationStore {
                     content: row.get(3)?,
                     sequence: row.get(4)?,
                     created_at_unix_ms: row.get(5)?,
+                    sources_json: row.get(6)?,
+                    truncated: row.get(7)?,
+                    superseded_by_id: None,
                 })
             })
             .map_err(|error| format!("Quick AI 消息读取失败：{error}"))?;
@@ -650,23 +836,47 @@ fn stored_message_at(
 ) -> Result<Option<StoredMessage>, String> {
     connection
         .query_row(
-            "SELECT id, conversation_id, role, content, sequence, created_at_unix_ms
+            "SELECT id, conversation_id, role, content, sequence, created_at_unix_ms,
+                    sources_json, truncated, superseded_by_id
              FROM quick_ai_messages
              WHERE conversation_id = ?1 AND sequence = ?2",
             params![conversation_id, sequence],
-            |row| {
-                Ok(StoredMessage {
-                    id: row.get(0)?,
-                    conversation_id: row.get(1)?,
-                    role: row.get(2)?,
-                    content: row.get(3)?,
-                    sequence: row.get(4)?,
-                    created_at_unix_ms: row.get(5)?,
-                })
-            },
+            read_stored_message,
         )
         .optional()
         .map_err(|error| format!("Quick AI 指定序号消息读取失败：{error}"))
+}
+
+fn stored_message_by_id(
+    connection: &Connection,
+    conversation_id: i64,
+    message_id: i64,
+) -> Result<Option<StoredMessage>, String> {
+    connection
+        .query_row(
+            "SELECT id, conversation_id, role, content, sequence, created_at_unix_ms,
+                    sources_json, truncated, superseded_by_id
+             FROM quick_ai_messages
+             WHERE conversation_id = ?1 AND id = ?2",
+            params![conversation_id, message_id],
+            read_stored_message,
+        )
+        .optional()
+        .map_err(|error| format!("Quick AI 指定消息读取失败：{error}"))
+}
+
+fn read_stored_message(row: &rusqlite::Row<'_>) -> rusqlite::Result<StoredMessage> {
+    Ok(StoredMessage {
+        id: row.get(0)?,
+        conversation_id: row.get(1)?,
+        role: row.get(2)?,
+        content: row.get(3)?,
+        sequence: row.get(4)?,
+        created_at_unix_ms: row.get(5)?,
+        sources_json: row.get(6)?,
+        truncated: row.get(7)?,
+        superseded_by_id: row.get(8)?,
+    })
 }
 
 fn insert_message(
@@ -676,18 +886,23 @@ fn insert_message(
     content: &str,
     sequence: i64,
     created_at_unix_ms: i64,
+    sources_json: Option<String>,
+    truncated: bool,
 ) -> Result<(), String> {
     connection
         .execute(
             "INSERT INTO quick_ai_messages (
-                conversation_id, role, content, sequence, created_at_unix_ms
-             ) VALUES (?1, ?2, ?3, ?4, ?5)",
+                conversation_id, role, content, sequence, created_at_unix_ms,
+                sources_json, truncated
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
             params![
                 conversation_id,
                 role_to_storage(role),
                 content.trim(),
                 sequence,
                 created_at_unix_ms,
+                sources_json,
+                i64::from(truncated),
             ],
         )
         .map_err(|error| format!("Quick AI 消息写入失败：{error}"))?;
@@ -696,6 +911,20 @@ fn insert_message(
 }
 
 fn decode_message(stored: StoredMessage) -> Result<ConversationMessage, String> {
+    let sources = match stored.sources_json.as_deref() {
+        None | Some("") => None,
+        Some(raw) => {
+            match serde_json::from_str::<Vec<crate::agent_runtime::protocol::SourceMetadata>>(raw) {
+                Ok(sources) => Some(sources),
+                Err(error) => {
+                    // 来源是展示元数据：解析失败只记录日志并降级为无来源，
+                    // 不因单个损坏 blob 阻断整个会话加载。
+                    eprintln!("READRAY_AGENT_SOURCES_PARSE_FAILED={error}");
+                    None
+                }
+            }
+        }
+    };
     Ok(ConversationMessage {
         id: stored.id,
         conversation_id: stored.conversation_id,
@@ -703,6 +932,8 @@ fn decode_message(stored: StoredMessage) -> Result<ConversationMessage, String> 
         content: stored.content,
         sequence: stored.sequence,
         created_at_unix_ms: stored.created_at_unix_ms,
+        sources,
+        truncated: stored.truncated != 0,
     })
 }
 
@@ -951,6 +1182,8 @@ pub(crate) mod tests {
                 1,
                 user_message_id,
                 "Completed after restart",
+                None,
+                false,
             )
             .unwrap();
 
@@ -1043,7 +1276,7 @@ pub(crate) mod tests {
 
         // 完成新轮次后恰好补一条 assistant，旧失败轮次不被改动。
         let completed = store
-            .complete_turn(conversation.id, 3, second_id, "Second answer")
+            .complete_turn(conversation.id, 3, second_id, "Second answer", None, false)
             .unwrap();
         assert_eq!(completed.messages.len(), 3);
         assert_eq!(completed.messages[1].content, "Second new question");
@@ -1066,7 +1299,14 @@ pub(crate) mod tests {
             panic!("first prepare must be pending");
         };
         let completed = store
-            .complete_turn(conversation.id, 1, user_message_id, "Committed answer")
+            .complete_turn(
+                conversation.id,
+                1,
+                user_message_id,
+                "Committed answer",
+                None,
+                false,
+            )
             .unwrap();
         assert_eq!(completed.messages.len(), 2);
 
@@ -1082,6 +1322,8 @@ pub(crate) mod tests {
                 1,
                 user_message_id,
                 "Ignored duplicate answer",
+                None,
+                false,
             )
             .unwrap();
 
@@ -1131,6 +1373,8 @@ pub(crate) mod tests {
                 3,
                 user_message_id + 1000,
                 "Must not be saved",
+                None,
+                false,
             )
             .unwrap_err();
         assert!(wrong_identity.contains("身份不匹配"));
@@ -1170,7 +1414,14 @@ pub(crate) mod tests {
             .unwrap();
 
         let error = store
-            .complete_turn(conversation.id, 3, user_message_id, "This save should fail")
+            .complete_turn(
+                conversation.id,
+                3,
+                user_message_id,
+                "This save should fail",
+                None,
+                false,
+            )
             .unwrap_err();
         assert!(error.contains("simulated assistant save failure"));
         let after_failure = store.get_required(conversation.id).unwrap();
@@ -1192,7 +1443,14 @@ pub(crate) mod tests {
         };
         assert_eq!(retried_user_id, user_message_id);
         let after_retry = store
-            .complete_turn(conversation.id, 3, retried_user_id, "This save succeeds")
+            .complete_turn(
+                conversation.id,
+                3,
+                retried_user_id,
+                "This save succeeds",
+                None,
+                false,
+            )
             .unwrap();
         assert_eq!(after_retry.messages.len(), 4);
         drop(store);
@@ -1253,7 +1511,14 @@ pub(crate) mod tests {
             panic!("overlay first turn must be pending");
         };
         let overlay = store
-            .complete_turn(overlay.id, 1, user_message_id, "Overlay answer")
+            .complete_turn(
+                overlay.id,
+                1,
+                user_message_id,
+                "Overlay answer",
+                None,
+                false,
+            )
             .unwrap();
 
         let overlay_recent = store
@@ -1375,6 +1640,317 @@ pub(crate) mod tests {
         assert!(write_error.contains("写入失败"));
         assert!(store.get_required(conversation.id).is_ok());
 
+        drop(store);
+        let _ = fs::remove_dir_all(root);
+    }
+
+    fn sample_sources_json() -> String {
+        serde_json::json!([{
+            "sourceId": "source-1",
+            "title": "Example",
+            "url": "https://example.com/article",
+            "siteName": "Example",
+            "publishedAt": null,
+            "retrievedAtUnixMs": 100,
+            "contentType": "text/html"
+        }])
+        .to_string()
+    }
+
+    #[test]
+    fn complete_turn_persists_sources_and_truncated_flag_with_the_message() {
+        let (root, path) = test_database_path();
+        let mut store = ConversationStore::open_path(&path).unwrap();
+        let conversation = store.create("deepseek-v4-flash").unwrap();
+        let PreparedTurn::Pending {
+            user_message_id, ..
+        } = store
+            .prepare_turn(conversation.id, 1, "带来源的问题")
+            .unwrap()
+        else {
+            panic!("first prepare must be pending");
+        };
+        let completed = store
+            .complete_turn(
+                conversation.id,
+                1,
+                user_message_id,
+                "带来源的回答",
+                Some(sample_sources_json()),
+                true,
+            )
+            .unwrap();
+        let assistant = completed.messages.last().unwrap();
+        assert_eq!(assistant.role, ConversationRole::Assistant);
+        assert_eq!(assistant.truncated, true);
+        let sources = assistant.sources.as_ref().expect("来源必须随消息返回");
+        assert_eq!(sources.len(), 1);
+        assert_eq!(sources[0].source_id, "source-1");
+        assert_eq!(sources[0].url, "https://example.com/article");
+        assert_eq!(sources[0].site_name.as_deref(), Some("Example"));
+
+        // 重启（重新打开数据库）后来源与截断标志仍可回看。
+        drop(store);
+        let reopened = ConversationStore::open_path(&path).unwrap();
+        let loaded = reopened.get_required(conversation.id).unwrap();
+        let assistant = loaded.messages.last().unwrap();
+        assert_eq!(assistant.truncated, true);
+        assert_eq!(assistant.sources.as_ref().unwrap()[0].source_id, "source-1");
+        drop(reopened);
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn regeneration_replaces_visible_answer_and_keeps_old_row_for_audit() {
+        let (root, path) = test_database_path();
+        let mut store = ConversationStore::open_path(&path).unwrap();
+        let conversation = store
+            .create_with_exchange("deepseek-v4-flash", "原问题", "旧回答")
+            .unwrap();
+        let old_assistant = conversation.messages[1].id;
+
+        let RegenerationTurn::Ready {
+            user_message_id,
+            target_message_id,
+            ..
+        } = store
+            .prepare_regeneration(conversation.id, 1, "原问题", old_assistant)
+            .unwrap()
+        else {
+            panic!("首次重新生成必须 Ready");
+        };
+        assert_eq!(target_message_id, old_assistant);
+
+        let regenerated = store
+            .complete_regeneration(
+                conversation.id,
+                1,
+                user_message_id,
+                old_assistant,
+                "新回答",
+                Some(sample_sources_json()),
+                false,
+            )
+            .unwrap();
+        // 可见快照只保留当前回答：旧回答被过滤，新回答在新 sequence（下一个偶数）。
+        assert_eq!(regenerated.messages.len(), 2);
+        assert_eq!(regenerated.messages[0].content, "原问题");
+        assert_eq!(regenerated.messages[1].content, "新回答");
+        assert_eq!(regenerated.messages[1].sequence, 4);
+        assert_eq!(
+            regenerated.messages[1].sources.as_ref().unwrap()[0].source_id,
+            "source-1"
+        );
+
+        // 旧行物理保留、标记被替代（可审计），内容不被覆盖。
+        let connection = open_database(&path).unwrap();
+        let (old_content, superseded_by): (String, Option<i64>) = connection
+            .query_row(
+                "SELECT content, superseded_by_id FROM quick_ai_messages WHERE id = ?1",
+                [old_assistant],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(old_content, "旧回答", "旧回答不得被物理覆盖");
+        let superseded_by = superseded_by.expect("旧回答必须标记被替代");
+        assert_ne!(superseded_by, old_assistant);
+        let new_content: String = connection
+            .query_row(
+                "SELECT content FROM quick_ai_messages WHERE id = ?1",
+                [superseded_by],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(new_content, "新回答");
+        drop(connection);
+
+        // 再次对同一旧目标重新生成：AlreadyCurrent 幂等返回当前权威快照。
+        let RegenerationTurn::AlreadyCurrent { snapshot } = store
+            .prepare_regeneration(conversation.id, 1, "原问题", old_assistant)
+            .unwrap()
+        else {
+            panic!("已被替代的目标必须返回 AlreadyCurrent");
+        };
+        assert_eq!(snapshot.messages.len(), 2);
+        assert_eq!(snapshot.messages[1].content, "新回答");
+        drop(store);
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn regeneration_export_shows_current_answer_only() {
+        let (root, path) = test_database_path();
+        let mut store = ConversationStore::open_path(&path).unwrap();
+        let conversation = store
+            .create_with_exchange("deepseek-v4-flash", "导出问题", "旧回答")
+            .unwrap();
+        let old_assistant = conversation.messages[1].id;
+        let RegenerationTurn::Ready {
+            user_message_id, ..
+        } = store
+            .prepare_regeneration(conversation.id, 1, "导出问题", old_assistant)
+            .unwrap()
+        else {
+            panic!("首次重新生成必须 Ready");
+        };
+        let regenerated = store
+            .complete_regeneration(
+                conversation.id,
+                1,
+                user_message_id,
+                old_assistant,
+                "当前回答",
+                None,
+                false,
+            )
+            .unwrap();
+        let export_path = root.join("regenerated.md");
+        export_snapshot_to_path(&regenerated, &export_path).unwrap();
+        let content = fs::read_to_string(&export_path).unwrap();
+        assert!(content.contains("导出问题"));
+        assert!(content.contains("当前回答"));
+        assert!(!content.contains("旧回答"), "导出必须只显示当前答案");
+        assert_eq!(content.matches("## ReadRay").count(), 1);
+        drop(store);
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn regeneration_keeps_parity_for_the_next_new_turn() {
+        let (root, path) = test_database_path();
+        let mut store = ConversationStore::open_path(&path).unwrap();
+        let conversation = store
+            .create_with_exchange("deepseek-v4-flash", "第一问", "第一答")
+            .unwrap();
+        let old_assistant = conversation.messages[1].id;
+        let RegenerationTurn::Ready {
+            user_message_id, ..
+        } = store
+            .prepare_regeneration(conversation.id, 1, "第一问", old_assistant)
+            .unwrap()
+        else {
+            panic!("首次重新生成必须 Ready");
+        };
+        let regenerated = store
+            .complete_regeneration(
+                conversation.id,
+                1,
+                user_message_id,
+                old_assistant,
+                "重新回答",
+                None,
+                false,
+            )
+            .unwrap();
+        assert_eq!(regenerated.messages.last().unwrap().sequence, 4);
+
+        // 重新生成后追加新轮次：user sequence 仍为奇数、assistant 为下一个偶数。
+        let PreparedTurn::Pending {
+            user_message_id: next_user,
+            ..
+        } = store.prepare_turn(conversation.id, 5, "第二问").unwrap()
+        else {
+            panic!("重新生成后的新轮次必须 pending");
+        };
+        let completed = store
+            .complete_turn(conversation.id, 5, next_user, "第二答", None, false)
+            .unwrap();
+        assert_eq!(
+            completed
+                .messages
+                .iter()
+                .map(|message| message.sequence)
+                .collect::<Vec<_>>(),
+            vec![1, 4, 5, 6],
+            "可见序列：[user(1), 重新回答(4), 第二问(5), 第二答(6)]"
+        );
+        drop(store);
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn regeneration_rejects_invalid_targets_and_untail_turns() {
+        let (root, path) = test_database_path();
+        let mut store = ConversationStore::open_path(&path).unwrap();
+        let conversation = store
+            .create_with_exchange("deepseek-v4-flash", "第一问", "第一答")
+            .unwrap();
+        let first_assistant = conversation.messages[1].id;
+        let PreparedTurn::Pending {
+            user_message_id, ..
+        } = store.prepare_turn(conversation.id, 3, "第二问").unwrap()
+        else {
+            panic!("第二问必须 pending");
+        };
+        store
+            .complete_turn(conversation.id, 3, user_message_id, "第二答", None, false)
+            .unwrap();
+
+        // 只允许重新生成会话中最后一条回答：第一轮的回答不是尾。
+        let not_tail = store
+            .prepare_regeneration(conversation.id, 1, "第一问", first_assistant)
+            .unwrap_err();
+        assert!(not_tail.contains("最后一条"));
+
+        // 用户消息内容不匹配、不存在的目标、非 assistant 目标都被拒绝。
+        let mismatch = store
+            .prepare_regeneration(conversation.id, 1, "改过的问题", first_assistant)
+            .unwrap_err();
+        assert!(mismatch.contains("内容不匹配"));
+        let missing = store
+            .prepare_regeneration(conversation.id, 3, "第二问", 999_999)
+            .unwrap_err();
+        assert!(missing.contains("不存在"));
+        let not_assistant = store
+            .prepare_regeneration(conversation.id, 3, "第二问", {
+                let loaded = store.get_required(conversation.id).unwrap();
+                loaded.messages[2].id
+            })
+            .unwrap_err();
+        assert!(not_assistant.contains("不是助手消息"));
+
+        // 完成时目标已被替代：拒绝（避免两个"当前回答"并存）。
+        let last_assistant = {
+            let loaded = store.get_required(conversation.id).unwrap();
+            loaded.messages.last().unwrap().id
+        };
+        let RegenerationTurn::Ready {
+            user_message_id: regen_user,
+            ..
+        } = store
+            .prepare_regeneration(conversation.id, 3, "第二问", last_assistant)
+            .unwrap()
+        else {
+            panic!("尾回答必须 Ready");
+        };
+        let raced = store
+            .complete_regeneration(
+                conversation.id,
+                3,
+                regen_user,
+                last_assistant,
+                "并发替代",
+                None,
+                false,
+            )
+            .unwrap();
+        // 第一次完成成功。
+        let raced_assistant = raced.messages.last().unwrap().id;
+        let second_attempt = store
+            .complete_regeneration(
+                conversation.id,
+                3,
+                regen_user,
+                last_assistant,
+                "不应保存",
+                None,
+                false,
+            )
+            .unwrap_err();
+        assert!(second_attempt.contains("已被更新的回答替代"));
+        let loaded = store.get_required(conversation.id).unwrap();
+        assert_eq!(loaded.messages.last().unwrap().id, raced_assistant);
+        assert_eq!(loaded.messages.last().unwrap().content, "并发替代");
         drop(store);
         let _ = fs::remove_dir_all(root);
     }

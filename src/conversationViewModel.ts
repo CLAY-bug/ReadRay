@@ -55,8 +55,10 @@ export type ConversationAssistantMessage = {
   /** 真实 Quick AI 回答的原始 Markdown 文本；存在时页面优先渲染它（白名单子集），否则回退 blocks。 */
   markdown?: string;
   citation?: ConversationMemoryCitation;
-  /** 回答引用的外部来源（任务 3）；来自 Agent 结构化来源事件，不从 Markdown 反推。 */
+  /** 回答引用的外部来源（任务 3/4）：来自 Agent 结构化来源事件，随回答落库后历史回看同样可用。 */
   sources?: AgentSource[];
+  /** finish_reason=length 的诚实截断标志（任务 4）：回答已持久化，只显示轻微提示。 */
+  truncated?: boolean;
   sequence?: number;
 };
 
@@ -208,6 +210,8 @@ export type ConversationGenerationRequest = {
   messages: ConversationMessage[];
   prompt: string;
   mode: "append" | "regenerate";
+  /** 重新生成目标（任务 4）：被替代的旧 assistant 前端消息 ID（quick-ai-message-{id}）。 */
+  replaceAssistantMessageId?: string;
   onStreamDelta?: (delta: string) => void;
   /** 来源更新回调（任务 3）：每次工具来源发布时增量更新。 */
   onSourcesUpdated?: (sources: AgentSource[]) => void;

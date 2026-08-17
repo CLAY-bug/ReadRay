@@ -315,6 +315,8 @@ pub fn open_agent_source(app: AppHandle, url: String) -> Result<(), String> {
 /// Agent 正式链路：prepare_turn → AgentRun → complete_turn（AGENT_RUNTIME_UPGRADE_PLAN §19 任务 2）。
 /// 旧非 Agent 路径（send_quick_ai_message / send_quick_ai_message_streaming）保留为
 /// 受控回退；前端统一事件 envelope 展示不属于本任务，标注延后。
+/// replace_message_id 为 Some 时走重新生成（任务 4）：复用同一 user 轮次与
+/// retry_of_run_id，新 assistant 追加后把旧 assistant 标记为被替代（不物理覆盖）。
 #[tauri::command]
 pub async fn send_quick_ai_message_agent(
     app: AppHandle,
@@ -322,6 +324,7 @@ pub async fn send_quick_ai_message_agent(
     expected_user_sequence: i64,
     content: String,
     channel: Channel<QuickAiStreamEvent>,
+    replace_message_id: Option<i64>,
 ) -> Result<ConversationSnapshot, String> {
     let sender = QuickAiStreamSender { channel };
     let abort_flag = abort_flag_for(conversation_id);
@@ -344,6 +347,7 @@ pub async fn send_quick_ai_message_agent(
             &mut gateway,
             &mut ui,
             &registry,
+            replace_message_id,
         )
     })
     .await
@@ -393,9 +397,13 @@ fn project_ui_event(event: &AgentEvent) -> Option<QuickAiStreamEvent> {
         AgentEventPayload::RunCompleted { .. } => Some(QuickAiStreamEvent::Done),
         AgentEventPayload::RunStopped { .. } => Some(QuickAiStreamEvent::Stopped),
         AgentEventPayload::RunTruncated { .. } => Some(QuickAiStreamEvent::Truncated),
-        AgentEventPayload::RunFailed { error } => Some(QuickAiStreamEvent::Error {
-            message: error.message.clone(),
-        }),
+        AgentEventPayload::RunFailed { .. } => {
+            // 任务 4：UI 永不展示技术错误原文；错误分类与细节由调用方写入
+            // READRAY_AGENT_* 日志，这里只投影友好文案。
+            Some(QuickAiStreamEvent::Error {
+                message: "暂时无法回答，请重试。".to_string(),
+            })
+        }
         // 其余事件（TurnStarted/AssistantTextCompleted/工具进度/ToolCallFailed 等）
         // 不投影到既有 QuickAiStreamEvent 协议。
         _ => None,
@@ -415,6 +423,31 @@ impl AgentEventSink for SessionSink<'_, '_> {
     }
 }
 
+/// 组合持久化 + 来源收集 + UI 的 sink：持久化失败时快速失败（不伪装成功），
+/// 不再发送 UI 事件；运行期 SourcesUpdated 按 source_id 去重累积，随最终
+/// assistant 一起落库（任务 4：来源随回答持久化，不从 run/step 审计表重建）。
+struct SourceCollectingSink<'a> {
+    inner: &'a mut dyn AgentEventSink,
+    sources: &'a mut Vec<crate::agent_runtime::protocol::SourceMetadata>,
+}
+
+impl AgentEventSink for SourceCollectingSink<'_> {
+    fn emit(&mut self, event: AgentEvent) -> Result<(), AgentError> {
+        if let AgentEventPayload::SourcesUpdated { sources } = &event.payload {
+            for source in sources {
+                if !self
+                    .sources
+                    .iter()
+                    .any(|known| known.source_id == source.source_id)
+                {
+                    self.sources.push(source.clone());
+                }
+            }
+        }
+        self.inner.emit(event)
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 fn run_agent_session_core<F>(
     mut open_store: F,
@@ -427,6 +460,7 @@ fn run_agent_session_core<F>(
     gateway: &mut dyn ModelGateway,
     on_agent_event: &mut dyn AgentEventSink,
     registry: &ToolRegistry,
+    replace_message_id: Option<i64>,
 ) -> Result<ConversationSnapshot, String>
 where
     F: FnMut() -> Result<ConversationStore, String>,
@@ -444,13 +478,18 @@ where
     let mut surface = ChatSurfaceAdapter::open(surface_kind, store)?;
     let mut repository = AgentRunRepository::open(database_path)?;
 
-    // 幂等边界：assistant 已落库则直接返回权威快照（并对账 run 终态）。
-    let prepared = surface.prepare(
-        conversation_id,
-        expected_user_sequence,
-        content,
-        &mut repository,
-    )?;
+    // 幂等边界：assistant 已落库则直接返回权威快照（并对账 run 终态）；
+    // 重新生成时目标已被更新的回答替代也直接返回当前权威快照。
+    let prepared = if let Some(target_id) = replace_message_id {
+        surface.prepare_regeneration(conversation_id, expected_user_sequence, content, target_id)?
+    } else {
+        surface.prepare(
+            conversation_id,
+            expected_user_sequence,
+            content,
+            &mut repository,
+        )?
+    };
     let (pending_snapshot, user_message_id) = match prepared {
         ChatPreparedTurn::Completed { snapshot } => return Ok(snapshot),
         ChatPreparedTurn::Pending {
@@ -461,6 +500,7 @@ where
 
     // 恢复语义（§17）：仅 pending user 时创建新 run，retry_of 指向该轮最近一次
     // run（prepare 返回 Pending 时它必然未完成，completed 对应已落库 assistant）。
+    // 重新生成复用它：新 run 的 retry_of 指向该轮最近一次 run（含已完成的旧 run）。
     let run_id = generate_run_id(conversation_id, expected_user_sequence);
     let retry_of_run_id = repository
         .latest_run_for_turn(conversation_id, expected_user_sequence)?
@@ -482,13 +522,29 @@ where
     let facts = runtime_facts(app_version);
     let capability = conversation_capability();
     let active_tools = registry.active_tools(&capability);
-    let transcript = surface.transcript(&pending_snapshot, &facts, &active_tools);
+    // 重新生成：模型上下文只到该轮 user（旧回答不进入模型上下文），相当于
+    // 一次"对该问题重新作答"的 pending 轮次；普通追加使用完整可见快照。
+    let transcript_snapshot = if replace_message_id.is_some() {
+        let mut history = pending_snapshot.clone();
+        history
+            .messages
+            .retain(|message| message.sequence <= expected_user_sequence);
+        history
+    } else {
+        pending_snapshot.clone()
+    };
+    let transcript = surface.transcript(&transcript_snapshot, &facts, &active_tools);
 
     let cancellation = Cancellation::from_shared(abort_flag.clone());
     let mut persisting = PersistingSink::new(&run_id, &mut repository);
+    let mut collected_sources: Vec<crate::agent_runtime::protocol::SourceMetadata> = Vec::new();
+    let mut collecting = SourceCollectingSink {
+        inner: on_agent_event,
+        sources: &mut collected_sources,
+    };
     let mut session_sink = SessionSink {
         persisting: &mut persisting,
-        ui: on_agent_event,
+        ui: &mut collecting,
     };
     let mut coordinator =
         AgentRunCoordinator::new(run_id.clone(), authority, RunBudget::first_version())?;
@@ -513,6 +569,7 @@ where
         Err(error) => {
             // 持久化/UI sink 失败：run 行会停在中间状态，先落 failed 终态
             // （尽力而为）再返回错误；pending user 保留，重试不受影响。
+            // 任务 4：技术细节只进日志，UI 只显示友好文案。
             let now = unix_time_ms()?;
             let _ = repository.transition(
                 &run_id,
@@ -520,7 +577,11 @@ where
                 Some("persistence_failed"),
                 now,
             );
-            return Err(error.message);
+            eprintln!(
+                "READRAY_AGENT_RUN_FAILED=persistence error={}",
+                error.message
+            );
+            return Err("暂时无法回答，请重试。".to_string());
         }
     };
 
@@ -529,12 +590,34 @@ where
     match outcome.termination {
         TerminationReason::FinalAnswer => {
             let final_text = outcome.final_text.unwrap_or_default();
-            let completed = surface.complete(
-                conversation_id,
-                expected_user_sequence,
-                user_message_id,
-                &final_text,
-            )?;
+            let sources_json = if collected_sources.is_empty() {
+                None
+            } else {
+                Some(
+                    serde_json::to_string(&collected_sources)
+                        .map_err(|error| format!("回答来源序列化失败：{error}"))?,
+                )
+            };
+            let completed = if let Some(target_id) = replace_message_id {
+                surface.complete_regeneration(
+                    conversation_id,
+                    expected_user_sequence,
+                    user_message_id,
+                    target_id,
+                    &final_text,
+                    sources_json,
+                    outcome.truncated,
+                )?
+            } else {
+                surface.complete(
+                    conversation_id,
+                    expected_user_sequence,
+                    user_message_id,
+                    &final_text,
+                    sources_json,
+                    outcome.truncated,
+                )?
+            };
             repository.transition(&run_id, AgentRunStatus::Completed, None, now)?;
             Ok(completed)
         }
@@ -549,7 +632,7 @@ where
                 Some("run_budget_exceeded"),
                 now,
             )?;
-            Err("回答已截断：达到预算上限，已保留你的问题，可以直接重试。".to_string())
+            Err("回答未完成，已保留你的问题，可以直接重试。".to_string())
         }
         other => {
             repository.transition(
@@ -562,7 +645,8 @@ where
                 .error
                 .map(|error| error.message)
                 .unwrap_or_else(|| "Agent run 失败。".to_string());
-            Err(message)
+            eprintln!("READRAY_AGENT_RUN_FAILED=termination={other:?} error={message}");
+            Err("暂时无法回答，请重试。".to_string())
         }
     }
 }
@@ -742,6 +826,8 @@ where
         expected_user_sequence,
         user_message_id,
         &assistant_content,
+        None,
+        false,
     )
 }
 
@@ -882,6 +968,8 @@ mod tests {
             content: content.to_string(),
             sequence,
             created_at_unix_ms: 1,
+            sources: None,
+            truncated: false,
         }
     }
 
@@ -1048,7 +1136,14 @@ mod tests {
                 panic!("turn must begin pending");
             };
             store
-                .complete_turn(conversation.id, 1, user_message_id, "Stored answer")
+                .complete_turn(
+                    conversation.id,
+                    1,
+                    user_message_id,
+                    "Stored answer",
+                    None,
+                    false,
+                )
                 .unwrap();
             conversation.id
         };
@@ -1456,6 +1551,31 @@ mod tests {
         abort_flag: &Arc<AtomicBool>,
         events: &mut Vec<AgentEvent>,
     ) -> Result<ConversationSnapshot, String> {
+        run_agent_at_path_with_replace(
+            path,
+            conversation_id,
+            expected_user_sequence,
+            content,
+            scenario,
+            registry,
+            abort_flag,
+            events,
+            None,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn run_agent_at_path_with_replace(
+        path: &Path,
+        conversation_id: i64,
+        expected_user_sequence: i64,
+        content: &str,
+        scenario: FakeScenario,
+        registry: &ToolRegistry,
+        abort_flag: &Arc<AtomicBool>,
+        events: &mut Vec<AgentEvent>,
+        replace_message_id: Option<i64>,
+    ) -> Result<ConversationSnapshot, String> {
         let mut gateway = FakeGateway::new(scenario);
         let mut sink = VecSink { events };
         run_agent_session_core(
@@ -1469,6 +1589,7 @@ mod tests {
             &mut gateway,
             &mut sink,
             registry,
+            replace_message_id,
         )
     }
 
@@ -1701,7 +1822,8 @@ mod tests {
             &mut events,
         )
         .unwrap_err();
-        assert!(first_error.contains("fake provider"));
+        // 任务 4：UI 只显示友好文案；技术错误只进 READRAY_AGENT_* 日志。
+        assert_eq!(first_error, "暂时无法回答，请重试。");
 
         // pending user 保留，run 标记 failed。
         let snapshot = ConversationStore::open_path(&path)
@@ -1998,7 +2120,8 @@ mod tests {
             &mut events,
         )
         .unwrap_err();
-        assert!(error.contains("simulated step persistence failure"));
+        // 任务 4：持久化失败也只返回友好文案，不把技术错误透给 UI。
+        assert_eq!(error, "暂时无法回答，请重试。");
 
         // assistant 未落库：pending user 保留，允许修复后重试。
         let snapshot = ConversationStore::open_path(&path)
@@ -2024,6 +2147,241 @@ mod tests {
         )
         .unwrap();
         assert_eq!(completed.messages.len(), 2);
+        let _ = fs::remove_dir_all(root);
+    }
+
+    // ---- 任务 4：重新生成、来源随回答落库、截断诚实提示 ----
+
+    #[test]
+    fn agent_regeneration_reuses_user_turn_and_marks_old_answer_superseded() {
+        let (root, path) = test_database_path();
+        let registry = ToolRegistry::default();
+        let abort = Arc::new(AtomicBool::new(false));
+        let conversation_id = create_conversation(&path);
+
+        // 第一轮经 Agent 链路完成（产生 completed run 与旧回答）。
+        let mut first_events = Vec::new();
+        let first = run_agent_at_path(
+            &path,
+            conversation_id,
+            1,
+            "重生成问题",
+            FakeScenario::FinalOnly,
+            &registry,
+            &abort,
+            &mut first_events,
+        )
+        .unwrap();
+        let old_assistant = first.messages[1].id;
+        let first_answer = first.messages[1].content.clone();
+        let first_run = AgentRunRepository::open(&path)
+            .unwrap()
+            .latest_run_for_turn(conversation_id, 1)
+            .unwrap()
+            .unwrap();
+
+        // 重新生成：复用同一 user 轮次，新 run 的 retry_of 指向旧 run。
+        let mut events = Vec::new();
+        let regenerated = run_agent_at_path_with_replace(
+            &path,
+            conversation_id,
+            1,
+            "重生成问题",
+            FakeScenario::FinalOnly,
+            &registry,
+            &abort,
+            &mut events,
+            Some(old_assistant),
+        )
+        .unwrap();
+        assert_eq!(regenerated.messages.len(), 2, "可见快照只保留当前回答");
+        assert_eq!(regenerated.messages[0].content, "重生成问题");
+        assert_eq!(regenerated.messages[1].content, "final answer");
+        assert_ne!(regenerated.messages[1].id, old_assistant);
+        assert!(
+            validate_event_sequence(&events, &RunBudget::first_version()).is_ok(),
+            "重新生成 run 的事件序列必须合法"
+        );
+
+        let repository = AgentRunRepository::open(&path).unwrap();
+        let new_run = repository
+            .latest_run_for_turn(conversation_id, 1)
+            .unwrap()
+            .unwrap();
+        assert_eq!(new_run.status, AgentRunStatus::Completed);
+        assert_eq!(
+            new_run.retry_of_run_id.as_deref(),
+            Some(first_run.run_id.as_str()),
+            "重新生成 run 的 retry_of 必须指向该轮旧 run"
+        );
+
+        // 旧回答物理保留、标记被替代（可审计）。
+        let connection = crate::learning_records::open_database(&path).unwrap();
+        let (old_content, superseded_by): (String, Option<i64>) = connection
+            .query_row(
+                "SELECT content, superseded_by_id FROM quick_ai_messages WHERE id = ?1",
+                [old_assistant],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(old_content, first_answer, "旧回答不得被物理覆盖");
+        assert_eq!(
+            superseded_by,
+            Some(regenerated.messages[1].id),
+            "旧回答必须指向新回答"
+        );
+        drop(connection);
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn agent_regeneration_of_already_replaced_answer_returns_current_snapshot() {
+        let (root, path) = test_database_path();
+        let registry = ToolRegistry::default();
+        let abort = Arc::new(AtomicBool::new(false));
+
+        let conversation_id = {
+            let mut store = ConversationStore::open_path(&path).unwrap();
+            store
+                .create_with_exchange("deepseek-v4-flash", "再次重生成", "旧回答")
+                .unwrap()
+                .id
+        };
+        let old_assistant = ConversationStore::open_path(&path)
+            .unwrap()
+            .get_required(conversation_id)
+            .unwrap()
+            .messages[1]
+            .id;
+        let mut events = Vec::new();
+        run_agent_at_path_with_replace(
+            &path,
+            conversation_id,
+            1,
+            "再次重生成",
+            FakeScenario::FinalOnly,
+            &registry,
+            &abort,
+            &mut events,
+            Some(old_assistant),
+        )
+        .unwrap();
+
+        // 对同一旧目标再次重新生成：目标已被替代 → 幂等返回当前快照，不新建 run。
+        let mut repeated_events = Vec::new();
+        let repeated = run_agent_at_path_with_replace(
+            &path,
+            conversation_id,
+            1,
+            "再次重生成",
+            FakeScenario::FinalOnly,
+            &registry,
+            &abort,
+            &mut repeated_events,
+            Some(old_assistant),
+        )
+        .unwrap();
+        assert_eq!(repeated.messages.len(), 2);
+        assert_eq!(repeated.messages[1].content, "final answer");
+        assert!(
+            repeated_events.is_empty(),
+            "已被替代目标的重复请求不得产生 run 事件"
+        );
+        let run_count: i64 = AgentRunRepository::open(&path)
+            .unwrap()
+            .latest_run_for_turn(conversation_id, 1)
+            .map(|run| run.map(|_| 1_i64).unwrap_or(0))
+            .unwrap();
+        assert_eq!(run_count, 1);
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn agent_regeneration_persists_sources_with_the_new_answer() {
+        let (root, path) = test_database_path();
+        let mut registry = ToolRegistry::new();
+        registry.register(sources_tool()).unwrap();
+        let abort = Arc::new(AtomicBool::new(false));
+
+        let conversation_id = {
+            let mut store = ConversationStore::open_path(&path).unwrap();
+            store
+                .create_with_exchange("deepseek-v4-flash", "搜索问题", "旧回答")
+                .unwrap()
+                .id
+        };
+        let old_assistant = ConversationStore::open_path(&path)
+            .unwrap()
+            .get_required(conversation_id)
+            .unwrap()
+            .messages[1]
+            .id;
+        let mut events = Vec::new();
+        let regenerated = run_agent_at_path_with_replace(
+            &path,
+            conversation_id,
+            1,
+            "搜索问题",
+            FakeScenario::SingleToolThenFinal,
+            &registry,
+            &abort,
+            &mut events,
+            Some(old_assistant),
+        )
+        .unwrap();
+        let new_assistant = regenerated.messages.last().unwrap();
+        let sources = new_assistant
+            .sources
+            .as_ref()
+            .expect("重新生成的新回答必须携带来源");
+        assert_eq!(sources.len(), 1);
+        assert_eq!(sources[0].source_id, "source-web-1");
+        assert_eq!(
+            sources[0].url,
+            "https://en.wikipedia.org/wiki/Rust_(programming_language)"
+        );
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn agent_length_truncation_persists_answer_with_flag() {
+        let (root, path) = test_database_path();
+        let registry = ToolRegistry::default();
+        let abort = Arc::new(AtomicBool::new(false));
+        let conversation_id = create_conversation(&path);
+
+        let mut events = Vec::new();
+        let snapshot = run_agent_at_path(
+            &path,
+            conversation_id,
+            1,
+            "超长问题",
+            FakeScenario::FinalTruncated,
+            &registry,
+            &abort,
+            &mut events,
+        )
+        .unwrap();
+        // finish_reason=length：回答照常持久化，assistant 消息带截断标志。
+        assert_eq!(snapshot.messages.len(), 2);
+        assert_eq!(snapshot.messages[1].content, "partial answer");
+        assert_eq!(snapshot.messages[1].truncated, true);
+
+        // 重启后截断提示仍可回看（标志随消息落库）。
+        let reopened = ConversationStore::open_path(&path).unwrap();
+        let loaded = reopened.get_required(conversation_id).unwrap();
+        assert_eq!(loaded.messages[1].truncated, true);
+        assert_eq!(loaded.messages[1].content, "partial answer");
+        let repository = AgentRunRepository::open(&path).unwrap();
+        let run = repository
+            .latest_run_for_turn(conversation_id, 1)
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            run.status,
+            AgentRunStatus::Completed,
+            "截断回答仍是 completed run"
+        );
         let _ = fs::remove_dir_all(root);
     }
 }

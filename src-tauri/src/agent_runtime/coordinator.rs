@@ -14,7 +14,7 @@ use crate::agent_runtime::context::{ContextAssembler, RuntimeFacts};
 use crate::agent_runtime::gateway::{ModelGateway, ModelRequest, ProviderMessage};
 use crate::agent_runtime::protocol::{
     AgentError, AgentErrorKind, AgentEvent, AgentEventPayload, AuthorityRef, ModelEvent,
-    ModelUsage, RunBudget, TerminationReason, ToolCall, ToolResult,
+    ModelFinishReason, ModelUsage, RunBudget, TerminationReason, ToolCall, ToolResult,
 };
 use crate::agent_runtime::tool::{CapabilityPolicy, ToolDefinition, ToolPolicy, ToolRegistry};
 use serde_json::Value;
@@ -147,6 +147,9 @@ pub(crate) struct RunOutcome {
     pub model_turns: u32,
     pub tool_calls: u32,
     pub usage: Option<ModelUsage>,
+    /// 最终回答轮次的 provider finish_reason=length（任务 4）：回答照常作为
+    /// 最终答案持久化，只给"回答可能不完整"的诚实提示，不做继续生成。
+    pub truncated: bool,
 }
 
 pub(crate) struct AgentDeps<'a> {
@@ -218,6 +221,7 @@ impl AgentRunCoordinator {
             model_turns: 0,
             tool_calls: 0,
             usage: None,
+            truncated: false,
         };
         let mut step_sequence = 0_u64;
         macro_rules! emit {
@@ -304,6 +308,9 @@ impl AgentRunCoordinator {
             let mut calls: Vec<ToolCall> = Vec::new();
             let mut pending_arguments: BTreeMap<String, String> = BTreeMap::new();
             let mut usage: Option<ModelUsage> = None;
+            // 本轮 provider 完成原因（任务 4）：只有最终回答轮 finish_reason=length
+            // 才标记截断；工具轮次的 finish 不影响最终答案的截断语义。
+            let mut turn_finish_reason = ModelFinishReason::Stop;
 
             let model_request = ModelRequest {
                 messages: transcript.clone(),
@@ -353,7 +360,10 @@ impl AgentRunCoordinator {
                         );
                         Ok(())
                     }
-                    ModelEvent::Completed { .. } => Ok(()),
+                    ModelEvent::Completed { reason } => {
+                        turn_finish_reason = reason;
+                        Ok(())
+                    }
                 }
             });
 
@@ -448,6 +458,7 @@ impl AgentRunCoordinator {
                 );
                 outcome.final_text = Some(text.clone());
                 outcome.termination = TerminationReason::FinalAnswer;
+                outcome.truncated = matches!(turn_finish_reason, ModelFinishReason::Length);
                 outcome.usage = usage.clone();
                 emit!(
                     Some(turn_id),
@@ -897,6 +908,26 @@ mod tests {
         assert_eq!(outcome.final_text.as_deref(), Some("final answer"));
         assert_eq!(outcome.model_turns, 1);
         assert_eq!(outcome.tool_calls, 0);
+        assert!(!outcome.truncated);
+        assert!(validate_event_sequence(&events, &RunBudget::first_version()).is_ok());
+    }
+
+    #[test]
+    fn final_answer_truncated_flag_is_set_only_for_length_finish() {
+        // finish_reason=length：回答照常作为最终答案（FinalAnswer），只标记截断。
+        let (outcome, events, _) = run(
+            "run-test-1",
+            FakeScenario::FinalTruncated,
+            RunBudget::first_version(),
+            vec![],
+            ToolExecutionOrder::CallOrder,
+            CapabilityPolicy::default(),
+            &Cancellation::new(),
+            steady_clock(),
+        );
+        assert_eq!(outcome.termination, TerminationReason::FinalAnswer);
+        assert_eq!(outcome.final_text.as_deref(), Some("partial answer"));
+        assert!(outcome.truncated, "length 结束必须标记截断");
         assert!(validate_event_sequence(&events, &RunBudget::first_version()).is_ok());
     }
 

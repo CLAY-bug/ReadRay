@@ -102,18 +102,76 @@ impl ChatSurfaceAdapter {
     }
 
     /// 幂等完成轮次：只补一条 assistant，已完成轮次返回权威快照。
+    /// sources_json/truncated 随 assistant 消息落库（任务 4：来源回看与诚实截断提示）。
     pub(crate) fn complete(
         &mut self,
         conversation_id: i64,
         expected_user_sequence: i64,
         user_message_id: i64,
         assistant_content: &str,
+        sources_json: Option<String>,
+        truncated: bool,
     ) -> Result<ConversationSnapshot, String> {
         self.store.complete_turn(
             conversation_id,
             expected_user_sequence,
             user_message_id,
             assistant_content,
+            sources_json,
+            truncated,
+        )
+    }
+
+    /// 重新生成准备（任务 4）：复用同一 user 轮次（conversation_id + sequence +
+    /// user_message_id 不变），新 run 的 retry_of 仍指向该轮最近一次 run；目标
+    /// 已被更新的重新生成替代时幂等返回当前权威快照（不新建 run）。
+    pub(crate) fn prepare_regeneration(
+        &mut self,
+        conversation_id: i64,
+        expected_user_sequence: i64,
+        user_content: &str,
+        target_message_id: i64,
+    ) -> Result<ChatPreparedTurn, String> {
+        match self.store.prepare_regeneration(
+            conversation_id,
+            expected_user_sequence,
+            user_content,
+            target_message_id,
+        )? {
+            crate::conversations::RegenerationTurn::Ready {
+                snapshot,
+                user_message_id,
+                ..
+            } => Ok(ChatPreparedTurn::Pending {
+                snapshot,
+                user_message_id,
+            }),
+            crate::conversations::RegenerationTurn::AlreadyCurrent { snapshot } => {
+                Ok(ChatPreparedTurn::Completed { snapshot })
+            }
+        }
+    }
+
+    /// 重新生成完成（任务 4）：插入新 assistant 并把旧 assistant 标记为被替代；
+    /// 旧行保留可审计，可见快照与导出只取未被替代的当前回答。
+    pub(crate) fn complete_regeneration(
+        &mut self,
+        conversation_id: i64,
+        expected_user_sequence: i64,
+        user_message_id: i64,
+        target_message_id: i64,
+        assistant_content: &str,
+        sources_json: Option<String>,
+        truncated: bool,
+    ) -> Result<ConversationSnapshot, String> {
+        self.store.complete_regeneration(
+            conversation_id,
+            expected_user_sequence,
+            user_message_id,
+            target_message_id,
+            assistant_content,
+            sources_json,
+            truncated,
         )
     }
 
@@ -501,6 +559,8 @@ mod tests {
             content: content.to_string(),
             sequence,
             created_at_unix_ms: 1,
+            sources: None,
+            truncated: false,
         }
     }
 
@@ -589,7 +649,14 @@ mod tests {
             panic!("首轮必须为 pending");
         };
         surface
-            .complete(conversation_id, 1, user_message_id, "First answer")
+            .complete(
+                conversation_id,
+                1,
+                user_message_id,
+                "First answer",
+                None,
+                false,
+            )
             .unwrap();
 
         // 重试已完成轮次：直接返回权威快照，不重复 user/assistant。
@@ -641,7 +708,14 @@ mod tests {
         runs.transition(&run_id, AgentRunStatus::Synthesizing, None, 100)
             .unwrap();
         surface
-            .complete(conversation_id, 1, user_message_id, "Committed answer")
+            .complete(
+                conversation_id,
+                1,
+                user_message_id,
+                "Committed answer",
+                None,
+                false,
+            )
             .unwrap();
 
         // 再次 prepare 命中 Completed → 对账把 run 标记 completed。
@@ -653,6 +727,55 @@ mod tests {
         };
         let stored = runs.get_run(&run_id).unwrap().unwrap();
         assert_eq!(stored.status, AgentRunStatus::Completed);
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn regeneration_through_adapter_replaces_the_visible_answer() {
+        let (root, path) = test_database_path();
+        let mut surface = adapter(&path);
+        let conversation_id = ConversationStore::open_path(&path)
+            .unwrap()
+            .create_with_exchange("deepseek-v4-flash", "重生成问题", "旧回答")
+            .unwrap()
+            .id;
+        let old_assistant = ConversationStore::open_path(&path)
+            .unwrap()
+            .get_required(conversation_id)
+            .unwrap()
+            .messages[1]
+            .id;
+
+        let ChatPreparedTurn::Pending {
+            user_message_id, ..
+        } = surface
+            .prepare_regeneration(conversation_id, 1, "重生成问题", old_assistant)
+            .unwrap()
+        else {
+            panic!("重新生成必须返回 pending 准备结果");
+        };
+        let regenerated = surface
+            .complete_regeneration(
+                conversation_id,
+                1,
+                user_message_id,
+                old_assistant,
+                "新回答",
+                None,
+                false,
+            )
+            .unwrap();
+        assert_eq!(regenerated.messages.len(), 2);
+        assert_eq!(regenerated.messages[1].content, "新回答");
+        assert_ne!(regenerated.messages[1].id, old_assistant);
+
+        // 同一旧目标再次准备：目标已被替代 → 幂等返回 Completed（不新建 run）。
+        let ChatPreparedTurn::Completed { .. } = surface
+            .prepare_regeneration(conversation_id, 1, "重生成问题", old_assistant)
+            .unwrap()
+        else {
+            panic!("已被替代的目标必须返回 Completed");
+        };
         let _ = fs::remove_dir_all(root);
     }
 

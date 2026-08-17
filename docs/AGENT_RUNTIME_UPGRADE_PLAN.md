@@ -2,7 +2,7 @@
 
 最后更新：2026-08-17
 
-状态：任务 0/1/2/3 已完成并通过评审（任务 3 已正式收口，含真实 Tauri 使用验收）；下一步进入任务 4
+状态：任务 0/1/2/3 已完成并通过评审（任务 3 已正式收口，含真实 Tauri 使用验收）；任务 4 已实现并通过自动验证，待调度者复审与真实 Tauri 验收
 
 ## 1. 文档定位
 
@@ -917,22 +917,36 @@ Runtime 与网络纵切稳定后，再开放：
 
 ### 任务 4：日常使用交互
 
-目标：消除“必须等待一次回答结束”的 demo 交互。
+目标：让日常使用交互完整自洽——重新生成可用、错误呈现友好、回答来源可回看。面向普通英语学习者，不展示技术内部细节。
 
 工作内容：
 
-- steering/follow-up 或第一版统一排队输入。
-- 重新生成的覆盖式正式实现。
-- 截断后的安全继续。
-- 工具失败的局部可重试与清晰状态。
-- 对话中的工具步骤折叠显示和来源回看。
+- 重新生成的覆盖式正式实现（§18.4）：不物理覆盖原始回答——原 assistant 行保留可审计，设计替代关系；导出一致性（导出显示当前答案）。实现前先定替代关系与落库方案（如需新表，集中 migration + 回滚测试）。
+- 错误呈现友好化：UI 永不展示技术错误原文（错误进 Rust 日志，沿用 `READRAY_AGENT_*` 模式）；整轮失败时页面只显示友好文案（"暂时无法回答，请重试"），pending 轮次语义不变。
+- 来源持久化回看：来源数据随 assistant 消息落库（数据小、最小路径），重启与历史对话中来源卡片仍可回看；不从 run/step 审计表重建。
+- 截断诚实提示：`finish_reason=length` 时回答照常持久化并给出"回答可能不完整"的轻微提示；"继续生成"功能推迟到任务 5 长上下文之后（本任务不做）。
+
+范围决策（2026-08-17 用户确认，与 pi 式交互模型差异）：
+
+- 不做 steering/follow-up/排队输入：ReadRay 是秒级单次交互的学习助手，不需要队列状态机；"生成中禁止发送 + 草稿保留在输入框"即为正确策略，运行中输入不会丢失或污染其他会话。
+- 不做工具步骤折叠展示：普通学习者不需要看工具内部执行细节；只保留友好状态文案（"正在搜索相关资料…"）与来源卡片。
+- 不做工具失败的局部可重试/UI 可识别：工具失败由应用层处理（任务 3 已实现运行期失败回传模型、模型诚实降级）；用户不感知工具内部成败。
 
 验收：
 
-- 运行中追加内容不会丢失或污染其他会话。
-- stop、steer、follow-up 的顺序可复现。
-- 重新生成不破坏原始用户轮次和导出一致性。
-- 页面卸载、切换会话和窗口隐藏后事件身份仍正确。
+- 重新生成不破坏原始用户轮次和导出一致性；旧回答不物理覆盖、可审计。
+- 页面卸载、切换会话和窗口隐藏后事件身份仍正确；运行中输入不丢失、不污染其他会话。
+- UI 不出现技术错误原文；失败只展示友好文案，原始错误可在日志中找到。
+- 来源随回答持久化，重启与历史回看可用。
+
+#### 实施/评审记录（任务 4，2026-08-17）
+
+- **替代关系与落库（SQLite v21，集中一次）**：`quick_ai_messages` 一次追加三列——`superseded_by_id`（重新生成替代链，旧行保留可审计）、`sources_json`（来源随 assistant 消息落库，不从 run/step 审计表重建）、`truncated`（finish_reason=length 诚实截断标志）。重新生成复用同一 user 轮次（conversation_id + expected_user_sequence + user_message_id 不变），新 run 的 `retry_of_run_id` 指向该轮最近一次 run（含已完成的旧 run）；新 assistant 以"当前最大序号的下一个偶数"插入（保持 user 奇/assistant 偶交替），旧 assistant 行标记被替代。可见快照与导出统一过滤 `superseded_by_id IS NULL`，只显示当前答案；目标已被替代的重复请求幂等返回当前权威快照。migration 带新库约束测试与 v20→v21 旧库升级数据保留测试。
+- **重新生成链路**：`send_quick_ai_message_agent` 新增 `replace_message_id` 参数；`ChatSurfaceAdapter::prepare_regeneration/complete_regeneration` 走独立幂等边界（目标必须是该轮当前、未被替代且为会话尾的 assistant）；模型上下文只到该轮 user（旧回答不进入模型上下文），相当于对同一问题的全新作答。前端 `canRegenerate` 置真，`generateReply` 支持 mode=regenerate + replaceAssistantMessageId；模糊成功语义：恢复快照中目标仍为当前回答 → pending 可重试，已被替代 → 按成功收尾返回权威快照。
+- **错误呈现友好化**：UI 永不展示技术错误原文——`run_agent_session_core` 各失败分支把终止原因与技术消息写入 `eprintln!("READRAY_AGENT_RUN_FAILED=…")`，只返回友好文案（停止/未完成/暂时无法回答）；`project_ui_event` 的 RunFailed 只投影"暂时无法回答，请重试。"；前端 failed 气泡与打开失败路径同样只显示友好文案，技术细节进 console。
+- **截断诚实提示**：coordinator 捕获最终回答轮的 `ModelFinishReason::Length` → `RunOutcome.truncated`（仅改 coordinator.rs，未动 protocol.rs 冻结协议）；回答照常持久化并携带 truncated 标志，前端消息显示"回答可能不完整"轻微提示（重启后仍可回看），移除"继续生成"按钮；预算截断（RunBudgetExceeded）保持不落答案、pending 可重试，文案改为友好版"回答未完成"。
+- **来源持久化回看**：运行期经 SourceCollectingSink 从 SourcesUpdated 事件按 source_id 去重累积，随 complete/complete_regeneration 事务写入 assistant 行 `sources_json`；快照 `get()` 解析并返回 `sources`（camelCase 与前端 AgentSource 同构），损坏 blob 只记日志降级为无来源，不阻断会话加载；重启与历史对话来源卡片直接可回看。
+- **验证**：Rust lib 385/0（基线 372 + 新增 13：migration v21、重新生成端到端/幂等/来源随新回答落库、截断标志持久化、快照过滤/导出一致性、sequence 交替）；前端 conversation 37/37（新增重新生成参数传递、未提交 pending、模糊成功、来源/截断映射）、overlay 20/review 50/writing 30/settings 57/startup 3 全绿；`pnpm build`、cargo fmt/check --all-targets、git diff --check 全通过；浏览器预览（vite preview + fixture）实测"更多操作 → 重新生成回答"启用并原地替换回答、来源卡片完成态渲染无控制台错误。未运行 live 测试；真实 Tauri/DeepSeek 人工验收（重新生成真实回答、截断提示、重启回看来源）留待停点。
 
 ### 任务 5：长上下文与 compaction
 
@@ -1107,7 +1121,7 @@ late_event_after_new_run
 5. 更新本文任务状态和必要的恢复文档。
 6. 停止等待用户确认，再进入下一任务。
 
-任务 0/1/2/3 已通过评审（任务 3 已正式收口），当前实施入口是"任务 4：日常使用交互"。任务 4 完成前不开放 steering/follow-up、重新生成、截断继续等交互能力；Web Search 已通过 Wikipedia provider 开放给真实会话（覆盖范围以工具描述为准）。Writing Coach 必须等通用对话 Runtime、自动联网与长上下文完成各自验收后，再进入任务 6。
+任务 0/1/2/3 已通过评审（任务 3 已正式收口），任务 4（日常使用交互）已实现并通过自动验证，当前待调度者复审与真实 Tauri 人工验收。任务 4 完成前不开放 steering/follow-up 与截断继续；重新生成已按 §18.4 覆盖式语义正式开放（不物理覆盖旧回答）。Web Search 已通过 Wikipedia provider 开放给真实会话（覆盖范围以工具描述为准）。Writing Coach 必须等通用对话 Runtime、自动联网与长上下文完成各自验收后，再进入任务 6。
 
 ## 26. 研究来源
 

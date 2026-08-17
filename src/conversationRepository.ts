@@ -37,6 +37,7 @@ export interface ConversationRepository {
     expectedUserSequence: number,
     content: string,
     onEvent: (event: QuickAiStreamEvent) => void,
+    replaceMessageId?: number | null,
   ): Promise<QuickAiConversation>;
   abortStreaming(conversationId: number): Promise<void>;
   openSource(url: string): Promise<void>;
@@ -135,10 +136,13 @@ export class TauriConversationRepository implements ConversationRepository {
     expectedUserSequence: number,
     content: string,
     onEvent: (event: QuickAiStreamEvent) => void,
+    replaceMessageId: number | null = null,
   ) {
     const channel = new Channel<QuickAiStreamEvent>(onEvent);
     // 任务 3：正式对话链路切换到 Agent 命令（来源/工具状态经扩展事件协议到达）；
     // 旧 send_quick_ai_message_streaming 保留为受控回退。
+    // 任务 4：replaceMessageId 为 Some 时 Rust 走重新生成（复用同一 user 轮次，
+    // 旧 assistant 标记被替代，不物理覆盖）。
     return this.invokeCommand<QuickAiConversation>(
       "send_quick_ai_message_agent",
       {
@@ -146,6 +150,7 @@ export class TauriConversationRepository implements ConversationRepository {
         expectedUserSequence,
         content,
         channel,
+        replaceMessageId: replaceMessageId ?? null,
       },
     );
   }

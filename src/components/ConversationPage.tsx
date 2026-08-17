@@ -43,7 +43,7 @@ type ConversationPageProps = {
 };
 
 type GenerationState = {
-  phase: "generating" | "complete" | "stopped" | "truncated" | "failed";
+  phase: "generating" | "complete" | "stopped" | "failed";
   prompt: string;
   text: string;
   errorMessage?: string;
@@ -281,6 +281,13 @@ function AssistantMessage({
             />
           </div>
         ) : null}
+        {message.truncated ? (
+          <div className="rr-conversation-generation-row">
+            <span className="rr-conversation-message-meta">
+              回答可能不完整
+            </span>
+          </div>
+        ) : null}
       </div>
       <button
         className="rr-conversation-assistant-copy-button"
@@ -421,9 +428,7 @@ function GenerationMessage({
           {sourcesBlock}
           <div className="rr-conversation-answer-kicker">生成中断</div>
           <p className="rr-conversation-error-copy">
-            {state.errorMessage
-              ? `${state.errorMessage} 你的输入仍然保留，可以直接重试。`
-              : "暂时无法完成回答。你的输入仍然保留，可以直接重试。"}
+            {state.errorMessage ?? "暂时无法回答，请重试。"}
           </p>
           <button
             className="rr-conversation-quiet-button"
@@ -447,19 +452,6 @@ function GenerationMessage({
             onStop={canStop ? onStop : undefined}
             label={state.toolLabel}
           />
-        ) : state.phase === "truncated" ? (
-          <div className="rr-conversation-generation-row">
-            <span className="rr-conversation-message-meta">
-              回答达到长度上限被截断
-            </span>
-            <button
-              className="rr-conversation-quiet-button"
-              type="button"
-              onClick={onRetry}
-            >
-              继续生成
-            </button>
-          </div>
         ) : state.phase === "stopped" ? (
           <div className="rr-conversation-generation-row">
             <span className="rr-conversation-message-meta">已停止</span>
@@ -773,6 +765,7 @@ function ConversationPage({
           messages: structuredClone(messages),
           prompt,
           mode,
+          replaceAssistantMessageId,
           onStreamDelta: (delta) => {
             if (generationToken !== generationTokenRef.current) {
               return;
@@ -832,16 +825,9 @@ function ConversationPage({
         }
         if (service.capabilities.delivery === "streaming") {
           updateThread(reply.persistedThread!);
-          if (reply.status === "truncated") {
-            setGeneration({
-              ...pendingState,
-              phase: "truncated",
-              text: reply.chunks[0] ?? "",
-              sources: [...generationSourcesRef.current],
-            });
-            return;
-          }
-          // 合并本轮来源到最终 assistant 消息（展示增强；SQLite 权威不受影响）。
+          // 任务 4：finish_reason=length 的回答照常持久化；"回答可能不完整"
+          // 提示来自 assistant 消息的 truncated 标志（重启后仍可回看），
+          // 不再使用瞬态"继续生成"行。
           if (generationSourcesRef.current.length > 0) {
             const mergedThread = {
               ...reply.persistedThread!,
@@ -881,13 +867,13 @@ function ConversationPage({
         if (generationToken !== generationTokenRef.current) {
           return;
         }
+        // 任务 4：UI 永不展示技术错误原文；技术细节只进 console 与 Rust 日志。
         console.error("ReadRay 对话生成失败：", error);
         stopTimer();
         setGeneration({
           ...pendingState,
           phase: "failed",
-          errorMessage:
-            error instanceof Error ? error.message : String(error),
+          errorMessage: "暂时无法回答，请重试。",
         });
       }
     },
@@ -995,6 +981,7 @@ function ConversationPage({
         if (ignore || requestToken !== generationTokenRef.current) {
           return;
         }
+        // 任务 4：UI 只显示友好文案；打开失败的技术细节只进 console 日志。
         console.error("ReadRay 对话打开失败：", error);
         if (request.kind === "prompt") {
           setDraft(request.prompt);
@@ -1003,8 +990,7 @@ function ConversationPage({
           phase: "failed",
           prompt: request.kind === "prompt" ? request.prompt : "",
           text: "",
-          errorMessage:
-            error instanceof Error ? error.message : String(error),
+          errorMessage: "暂时无法回答，请重试。",
           chunks: [],
           nextChunkIndex: 0,
           assistantMessageId: "",
