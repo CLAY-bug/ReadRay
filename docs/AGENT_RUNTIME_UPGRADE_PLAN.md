@@ -2,7 +2,7 @@
 
 最后更新：2026-08-17
 
-状态：任务 0/1/2 已完成并通过评审；任务 3 自动联网纵切已完成实现（Wikipedia provider + 受控抓取 + 来源卡片），待调度者评审，下一步进入任务 4
+状态：任务 0/1/2/3 已完成并通过评审（任务 3 已正式收口，含真实 Tauri 使用验收）；下一步进入任务 4
 
 ## 1. 文档定位
 
@@ -912,6 +912,7 @@ Runtime 与网络纵切稳定后，再开放：
 - **内核与协议投影**：L1 工具在 `conversation_l1_tools` 注册（web_search/fetch_web_page，ExternalReadOnly），对话 capability 提升到 ExternalReadOnly；coordinator 在工具完成时把 `details.sources` 投影为 SourcesUpdated 事件（先于 ToolCallCompleted）；PersistingSink 改为从 ToolCallCompleted/Failed 提取来源落库并关联 tool_call_id（移除空串落库）。未改 protocol.rs。
 - **前端**：正式对话切换到 `send_quick_ai_message_agent`；QuickAiStreamEvent 扩展 `sources_updated`/`tool_state`；ConversationPage 展示来源卡片（标题/站点/URL，点击走受控 `open_agent_source` command）与"正在搜索/正在读取/正在整理"状态；来源以 ref 为权威累积（修复了来源被后续 setGeneration 覆盖的缺陷）；fixture 增加 `[fixture:sources]` 演示。
 - **验证**：Rust lib 362/0（含网络 15 项、来源事件/落库/投影等新增约 28 项）、前端 conversation 30/30 与其他套件全绿、tsc/vite build、fmt/check/diff 通过；浏览器预览验证来源卡片与工具状态展示。未运行其他 live 测试；真实 Tauri/DeepSeek 人工验收留待停点。
+- **评审修复轮（2026-08-17）**：调度者评审后执行会话逐项修复并通过复审：① 真实使用发现多轮对话 400（历史 assistant 投影为 `tool_calls: []`，DeepSeek 要求长度 ≥1）——`project_message` 空 tool_calls 省略该键；② 失败/中断后 composer 被 `generation !== null` 锁死且无出口——改为仅 generating 阻塞发送，`prepare_turn` 允许尾 pending user 时以 `current_max+2` 开启新轮次（旧 pending 保留可审计、重试复用同 sequence/id、stale 拒绝），不添加"放弃"按钮；③ fetch_web_page 运行时失败归 `NetworkBlocked` 会 fail-fast 杀死 run——改为运行时失败（DNS/传输/非 200/内容类型/重定向超限）归 `ToolExecutionFailed` 可恢复，`NetworkBlocked` 只留安全拒绝（SSRF/私网/凭据/重定向到非 HTTP(S) 协议）；④ Wikipedia 解析失败被当"无结果"——区分三态（非法 JSON/缺列表 → ToolExecutionFailed；空列表 → 无结果）；⑤ `stable_source_id` 收敛为 network.rs 共享实现；⑥ 全局网络权限门（方案 §5.3）本轮只标注边界不实现，未来经 app_preferences 回落 L0。真实使用另暴露并修复：DeepSeek 拒绝无 `type: "object"` 的 function schema、多工具轮次 `ToolRunning→ToolRunning` 自环缺失导致整轮非法迁移、Wikipedia 无 User-Agent 返回 403、模型对"能联网吗"保守回答"不能"（有网络工具时提示词据实声明联网能力）。收口时全量 Rust 372/0、前端 conversation 33/33、build/fmt/check/diff 全绿；用户已完成真实 Tauri 多轮追问、失败后发新消息、联网来源卡片与"能联网吗"人工验收，任务 3 正式收口。
 
 
 ### 任务 4：日常使用交互
@@ -1106,7 +1107,7 @@ late_event_after_new_run
 5. 更新本文任务状态和必要的恢复文档。
 6. 停止等待用户确认，再进入下一任务。
 
-任务 0 协议与 provider spike 已通过评审，当前实施入口是"任务 1：Rust Agent Kernel"。在任务 1 完成并验收前，不新增 Agent migration，不改正式对话或写作 UI，不开放 Web Search 给用户真实会话。Writing Coach 必须等通用对话 Runtime、自动联网与长上下文完成各自验收后，再进入任务 6。
+任务 0/1/2/3 已通过评审（任务 3 已正式收口），当前实施入口是"任务 4：日常使用交互"。任务 4 完成前不开放 steering/follow-up、重新生成、截断继续等交互能力；Web Search 已通过 Wikipedia provider 开放给真实会话（覆盖范围以工具描述为准）。Writing Coach 必须等通用对话 Runtime、自动联网与长上下文完成各自验收后，再进入任务 6。
 
 ## 26. 研究来源
 

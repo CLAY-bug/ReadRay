@@ -945,10 +945,11 @@ mod tests {
                 crate::agent_runtime::protocol::AgentEventPayload::TurnStarted { turn_index: 1 },
             )
             .unwrap(),
-        );
-        sink.emit(tool_start(2, "call-a"));
-        sink.emit(tool_start(3, "call-b"));
-        sink.emit(tool_start(4, "call-c"));
+        )
+        .unwrap();
+        sink.emit(tool_start(2, "call-a")).unwrap();
+        sink.emit(tool_start(3, "call-b")).unwrap();
+        sink.emit(tool_start(4, "call-c")).unwrap();
         drop(sink);
 
         let run = repository.get_run("run-1").unwrap().unwrap();
