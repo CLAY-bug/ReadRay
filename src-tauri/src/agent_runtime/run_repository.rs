@@ -80,6 +80,7 @@ fn allowed_transitions(from: AgentRunStatus) -> &'static [AgentRunStatus] {
             AgentRunStatus::Truncated,
         ],
         AgentRunStatus::ToolRunning => &[
+            AgentRunStatus::ToolRunning,
             AgentRunStatus::ModelStreaming,
             AgentRunStatus::Stopped,
             AgentRunStatus::Failed,
@@ -903,6 +904,59 @@ mod tests {
             )
             .unwrap();
         assert_eq!(count, 0, "没有 tool_call_id 的来源不落库");
+        drop(repository);
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn multiple_tool_calls_in_one_turn_do_not_trigger_illegal_transition() {
+        // 回归：单个 turn 模型可发起多个工具调用，每个 ToolCallStarted 都会让
+        // PersistingSink 把 run 迁移到 ToolRunning；第二个及后续调用落到
+        // ToolRunning -> ToolRunning，此前不在迁移表中，被判"非法迁移"导致
+        // 整轮失败（真实多工具场景偶发 400/非法迁移错误）。ToolRunning 自环
+        // 是幂等中间态，必须与 ModelStreaming -> ModelStreaming 对称。
+        let (root, path) = test_database_path();
+        let mut repository = AgentRunRepository::open(&path).unwrap();
+        repository.create_run(&new_run("run-1", 100)).unwrap();
+
+        fn tool_start(step: u64, id: &str) -> crate::agent_runtime::protocol::AgentEvent {
+            crate::agent_runtime::protocol::AgentEvent::new(
+                "run-1",
+                Some(1),
+                step,
+                crate::agent_runtime::protocol::AgentEventPayload::ToolCallStarted {
+                    call: crate::agent_runtime::protocol::ToolCall {
+                        id: id.to_string(),
+                        name: "web_search".to_string(),
+                        arguments: serde_json::json!({"query": "Rust"}),
+                    },
+                },
+            )
+            .unwrap()
+        }
+
+        let mut sink = PersistingSink::new("run-1", &mut repository);
+        // TurnStarted 推进到 model_streaming，随后两个并行工具调用都落到 tool_running。
+        sink.emit(
+            crate::agent_runtime::protocol::AgentEvent::new(
+                "run-1",
+                Some(1),
+                1,
+                crate::agent_runtime::protocol::AgentEventPayload::TurnStarted { turn_index: 1 },
+            )
+            .unwrap(),
+        );
+        sink.emit(tool_start(2, "call-a"));
+        sink.emit(tool_start(3, "call-b"));
+        sink.emit(tool_start(4, "call-c"));
+        drop(sink);
+
+        let run = repository.get_run("run-1").unwrap().unwrap();
+        assert_eq!(
+            run.status,
+            AgentRunStatus::ToolRunning,
+            "多个工具调用必须稳定停在 tool_running，而不是报非法迁移"
+        );
         drop(repository);
         let _ = fs::remove_dir_all(root);
     }
