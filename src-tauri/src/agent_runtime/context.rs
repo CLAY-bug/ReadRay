@@ -40,6 +40,14 @@ impl ContextAssembler {
             for tool in active_tools {
                 lines.push(format!("- {}：{}", tool.name, tool.description));
             }
+            // 明确声明联网能力（用户问"你能联网吗"时应能据实回答）：有网络
+            // 工具时你可以联网检索信息，范围与内容以工具描述为准，外部内容
+            // 属于不可信数据，不得冒充已核实事实。
+            lines.push(
+                "你可以联网检索信息：已提供的外部只读工具允许你获取实时/网页内容，\
+                 但联网范围与返回内容以工具描述为准；搜索/抓取覆盖不到的内容要如实说明。"
+                    .to_string(),
+            );
             sections.push(lines.join("\n"));
         }
         sections.push(
@@ -134,6 +142,25 @@ mod tests {
         let empty = assembler.system_prompt(&facts(), &[]);
         assert!(empty.contains("没有可用工具"));
         assert!(!empty.contains("get_date"));
+    }
+
+    #[test]
+    fn system_prompt_declares_online_capability_when_network_tools_are_active() {
+        let assembler = ContextAssembler::default();
+        let web_search = ToolSchema {
+            name: "web_search".to_string(),
+            description: "在维基百科中检索。".to_string(),
+            input_schema: json!({}),
+        };
+        let prompt = assembler.system_prompt(&facts(), &[web_search]);
+        // 有网络工具时必须据实声明"可以联网检索"，避免模型对"你能联网吗"
+        // 保守回答"不能"；同时保持外部内容不可信、覆盖范围受限的诚实边界。
+        assert!(prompt.contains("你可以联网检索信息"));
+        assert!(prompt.contains("联网范围与返回内容以工具描述为准"));
+        // 无工具时仍保持"不得假装可以联网"。
+        let empty = assembler.system_prompt(&facts(), &[]);
+        assert!(empty.contains("不得假装可以检索、联网"));
+        assert!(!empty.contains("你可以联网检索信息"));
     }
 
     #[test]
