@@ -1077,12 +1077,12 @@ source_areas:
     risk: "这里只放共享传输和 usage 响应边界，不放 ExplanationCard、Quick AI 或写作业务 prompt；不得因统计写入失败改写模型调用结果。"
 
   - path: "src-tauri/src/agent_runtime/mod.rs"
-    purpose: "阶段八点五任务 0 Agent Runtime 协议试验区的模块装配。"
+    purpose: "阶段八点五 Agent Runtime 内核与网络工具的模块装配。"
     status: "experimental"
     read_when:
-      - "执行或评审 Agent Runtime 任务 0 的协议、离线重放或 provider spike。"
-    notes: "只装配纯协议模块及测试专用 replay/responses spike；不注册 Tauri command、不接正式会话/写作、不创建 SQLite migration。"
-    risk: "任务 1 完成并验收前不得把本目录装配到正式 Agent loop、工具执行或 UI。"
+      - "执行或评审 Agent Runtime 协议、内核循环、会话接入或网络工具。"
+    notes: "装配 chat_surface/context/coordinator/deepseek_gateway/gateway/network/protocol/run_repository/tool/tool_schema 及测试专用 fake_gateway/replay/responses_spike；不注册 Tauri command（command 在 quick_ai.rs/lib.rs）。"
+    risk: "不得开放 L3 能力（Bash/任意文件/动态扩展）或把测试 fake 当作生产 fallback。"
 
   - path: "src-tauri/src/agent_runtime/protocol.rs"
     purpose: "Surface-neutral Agent Runtime 协议草案与纯验证。"
@@ -1100,13 +1100,22 @@ source_areas:
     notes: "只在测试构建编译，覆盖无工具、单/多工具、未知工具、坏参数、tool failure/timeout、model/tool abort 与 budget exceeded；不访问网络、凭据、SQLite 或 Tauri。"
     risk: "不得把 fake provider 作为生产 fallback 或正式工具注册表。"
 
+  - path: "src-tauri/src/agent_runtime/network.rs"
+    purpose: "任务 3 L1 网络边界：web_search（Wikipedia provider，可替换 SearchProvider）与受控 fetch_web_page。"
+    status: "active"
+    read_when:
+      - "调整搜索 provider、抓取安全策略或来源元数据投影。"
+      - "排查 SSRF、DNS rebinding、重定向、内容类型或大小限制。"
+    notes: "web_search 通过 SearchProvider trait 可替换（未来 Tavily 等 key 服务只换实现，不动 Agent loop/UI 协议），任务 3 只实现无 key 的 Wikipedia API provider，工具描述诚实标注'维基百科覆盖，非通用搜索'；fetch_web_page 逐跳校验 URL 与解析后 IP、把连接固定到已验证 IP（防 DNS rebinding）、限制 5 跳重定向/2 MiB 响应/连接 10s 与整体 30s 超时、只接受文本内容类型白名单、不携带 cookies、剥离 script/style/iframe/svg 等 active content；来源以 details.sources 结构携带，source_id 为不暴露 URL 的确定性 hash。"
+    risk: "外部内容始终视为不可信数据，不得作为指令或权限依据；不得放宽 SSRF/重定向/大小/类型校验或携带凭据。"
+
   - path: "src-tauri/src/agent_runtime/responses_spike.rs"
-    purpose: "DeepSeek Responses API 的离线事件夹具与默认忽略 live spike。"
+    purpose: "DeepSeek Responses API 与 chat/completions web_search 的离线夹具与默认忽略 live spike。"
     status: "experimental"
     read_when:
-      - "核对 Responses API function tool、server-side web_search、流式事件、usage 和来源元数据可观察性。"
-    notes: "复用现有 HTTP client/secret_store 边界，默认 endpoint 为官方 /responses 并支持显式环境覆盖；DeepSeek Responses 按 stateless 处理，只观察 provider response ID，不使用 previous_response_id。live test 必须同时满足 #[ignore] 与 READRAY_RUN_DEEPSEEK_RESPONSES_SPIKE=1，严格校验 event:/data.type、sequence_number 和 response.completed/incomplete/failed 终态，response.failed 拒绝、incomplete 分类为 provider protocol error，错误只报告状态不读取或输出敏感 body，不写用户数据库。离线只观察 web_search action；只有 provider 明确返回 citation/annotation 时才记录来源，source ID 使用不暴露 URL 的确定性 hash。2026-08-17 修复未加载项目根 `.env` 的问题并显式执行一次：请求已发出，但 `POST /responses` 返回 HTTP 400，错误 body 不读取，端点/请求体/作用域原因未确定，web_search 行动与来源元数据未能 live 确认。"
-    risk: "Responses API 形状仍未经成功 live 验证（2026-08-17 一次显式 spike 返回 HTTP 400）前，不得据此接入正式会话或假定内置 Web Search 已满足来源验收；不得用自造 sources 字段替代官方证据。"
+      - "核对 DeepSeek 内置 web_search、Responses API 或 OpenAI 兼容 citations 的可观察性。"
+    notes: "复用现有 HTTP client/secret_store 边界；Responses 按 stateless 处理，严格校验 event:/data.type、sequence_number 与终态，错误只报告状态与截断后的错误分类（code/type/message ≤400 字符），不输出完整 body、不写用户数据库。2026-08-17 live 决策结论：Responses `/responses` 与 chat/completions 的 `tools:[{\"type\":\"web_search\"}]` 均返回 HTTP 400，chat/completions 错误明确为 unknown variant 'web_search', expected 'function'——当前 DeepSeek 端点只接受 function 工具，内置 server-side web_search 不存在，来源要求不满足；任务 3 因此改用受控 Wikipedia provider。"
+    risk: "不得假定 DeepSeek 内置 web_search 可用；不得用自造 sources 字段替代官方证据。"
 
   - path: "src-tauri/src/explanation_cache.rs"
     purpose: "ExplanationCard SQLite v18 精确缓存 identity、命中重绑校验、TTL/容量后台维护和 fail-open 边界。"
@@ -1174,8 +1183,8 @@ source_areas:
     read_when:
       - "调整 Quick AI system prompt、上下文窗口或发送流程。"
       - "排查 create/get/send/list_recent/list_all/rename/delete/export Quick AI commands。"
-    notes: "独立于 ExplanationCard JSON 协议；create command 要求 overlay/main 创建来源，recent/all commands 可按来源过滤，主窗口不传过滤时读取全部来源。管理和导出 commands 始终携带数据库 conversationId，export 在用户选定路径后重新读取权威快照再写文件。send command 要求已创建的 conversationId 和 expectedUserSequence，先 prepare pending user，再从该 SQLite 快照装配多轮上下文并以 quick_ai 分类调用共享模型边界，成功后 complete assistant；已完成轮次不会再次请求模型或重复统计。"
-    risk: "当前实现仍无工具调用和联网搜索；未来只能按 AGENT_RUNTIME_UPGRADE_PLAN 的任务门禁接入 Rust 原生 Runtime，不得直接嵌入通用 Agent 框架或提前接入阶段九长期记忆。"
+    notes: "独立于 ExplanationCard JSON 协议；create command 要求 overlay/main 创建来源，recent/all commands 可按来源过滤，主窗口不传过滤时读取全部来源。管理和导出 commands 始终携带数据库 conversationId，export 在用户选定路径后重新读取权威快照再写文件。send command 要求已创建的 conversationId 和 expectedUserSequence，先 prepare pending user，再从该 SQLite 快照装配多轮上下文并以 quick_ai 分类调用共享模型边界，成功后 complete assistant；已完成轮次不会再次请求模型或重复统计。任务 2/3：send_quick_ai_message_agent 走 Agent Runtime（spawn_blocking 同步内核 + DeepSeekChatGateway + conversation_l1_tools + PersistingSink/SessionSink），前端正式对话已切换到该命令；QuickAiStreamEvent 扩展 sources_updated/tool_state 事件（来源卡片与工具状态）；open_agent_source 对来源 URL 做 HTTP(S)/凭据/保留网段校验后交受控 opener。旧 send_quick_ai_message / send_quick_ai_message_streaming 保留为受控回退。"
+    risk: "不得把私有 reasoning、API key 或未裁剪工具参数投影到前端协议；来源打开必须经过网络校验，不得拼接 Shell 命令。"
 
   - path: "src-tauri/src/writing.rs"
     purpose: "阶段五写作 SQLite repository、结构化 DeepSeek 分析/问答和 Tauri commands。"

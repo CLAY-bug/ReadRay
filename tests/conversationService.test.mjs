@@ -1115,3 +1115,92 @@ test("正式 service 能力为流式可停止且导出仍可用", async () => {
   assert.equal(service.capabilities.canRegenerate, false);
   assert.equal(service.capabilities.canExport, true);
 });
+
+test("Agent 来源与工具状态事件转发给生成回调", async () => {
+  const sources = [
+    {
+      sourceId: "source-1",
+      title: "Rust (programming language)",
+      url: "https://en.wikipedia.org/wiki/Rust_(programming_language)",
+      siteName: "Wikipedia (en)",
+      publishedAt: null,
+      retrievedAtUnixMs: 100,
+      contentType: "text/html",
+    },
+  ];
+  const service = new RepositoryConversationService({
+    create: async () => snapshot(),
+    get: async () => snapshot(),
+    send: async () => snapshot(),
+    sendStreaming: async (
+      conversationId,
+      expectedUserSequence,
+      content,
+      onEvent,
+    ) => {
+      assert.equal(content, "最新 Rust 版本");
+      onEvent({ type: "tool_state", label: "正在搜索相关资料…" });
+      onEvent({ type: "sources_updated", sources });
+      onEvent({ type: "tool_state", label: "正在整理答案…" });
+      onEvent({ type: "done" });
+      return snapshot([
+        message(41, "user", "最新 Rust 版本", 1),
+        message(42, "assistant", "已回答", 2),
+      ]);
+    },
+  });
+
+  const toolLabels = [];
+  let receivedSources = null;
+  const reply = await service.generateReply({
+    conversationId: "17",
+    messages: [
+      {
+        id: "temporary-user",
+        role: "user",
+        content: "最新 Rust 版本",
+      },
+    ],
+    prompt: "最新 Rust 版本",
+    mode: "append",
+    onToolState: (label) => toolLabels.push(label),
+    onSourcesUpdated: (next) => {
+      receivedSources = next;
+    },
+  });
+
+  assert.equal(reply.status, "complete");
+  assert.deepEqual(toolLabels, ["正在搜索相关资料…", "正在整理答案…"]);
+  assert.equal(receivedSources, sources);
+  assert.equal(receivedSources[0].siteName, "Wikipedia (en)");
+});
+
+test("Agent 事件不携带来源或状态时生成不受影响", async () => {
+  const service = new RepositoryConversationService(
+    withStreaming({
+      create: async () => snapshot(),
+      get: async () => snapshot(),
+      send: async () => snapshot([
+        message(41, "user", "普通问题", 1),
+        message(42, "assistant", "普通回答", 2),
+      ]),
+    }),
+  );
+
+  let sourcesCallback = 0;
+  let toolCallback = 0;
+  const reply = await service.generateReply({
+    conversationId: "17",
+    messages: [
+      { id: "temporary-user", role: "user", content: "普通问题" },
+    ],
+    prompt: "普通问题",
+    mode: "append",
+    onSourcesUpdated: () => { sourcesCallback += 1; },
+    onToolState: () => { toolCallback += 1; },
+  });
+
+  assert.equal(reply.status, "complete");
+  assert.equal(sourcesCallback, 0);
+  assert.equal(toolCallback, 0);
+});

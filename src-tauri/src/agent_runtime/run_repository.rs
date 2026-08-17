@@ -399,15 +399,16 @@ impl AgentEventSink for PersistingSink<'_> {
                 .map_err(persistence_error)?;
         }
 
-        if let AgentEventPayload::SourcesUpdated { sources } = &event.payload {
-            for source in sources {
-                // 边界：任务 1 事件协议未把来源关联到具体 tool_call_id，先存空串；
-                // 任务 3 来源协议细化时再补关联。
+        if let AgentEventPayload::ToolCallCompleted { result }
+        | AgentEventPayload::ToolCallFailed { result } = &event.payload
+        {
+            // 任务 3：来源与工具调用关联落库（工具结果的 details.sources）。
+            for source in crate::agent_runtime::network::sources_from_details(&result.details) {
                 self.repository
                     .insert_source(&NewSource {
                         source_id: source.source_id.clone(),
                         run_id: self.run_id.clone(),
-                        tool_call_id: String::new(),
+                        tool_call_id: result.tool_call_id.clone(),
                         title: source.title.clone(),
                         url: source.url.clone(),
                         site_name: source.site_name.clone(),
@@ -805,6 +806,103 @@ mod tests {
             completed_at_unix_ms: None,
         };
         assert!(repository.append_step(&orphan).is_err());
+        drop(repository);
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn persisting_sink_links_sources_to_tool_call_id() {
+        let (root, path) = test_database_path();
+        let mut repository = AgentRunRepository::open(&path).unwrap();
+        repository.create_run(&new_run("run-1", 100)).unwrap();
+        let mut sink = PersistingSink::new("run-1", &mut repository);
+        let source = crate::agent_runtime::protocol::SourceMetadata {
+            source_id: "source-1".to_string(),
+            title: "Example".to_string(),
+            url: "https://example.com/article".to_string(),
+            site_name: Some("Example".to_string()),
+            published_at: None,
+            retrieved_at_unix_ms: 100,
+            content_type: None,
+        };
+        let call = crate::agent_runtime::protocol::ToolCall {
+            id: "call-search-1".to_string(),
+            name: "web_search".to_string(),
+            arguments: serde_json::json!({"query": "Rust"}),
+        };
+        let result = crate::agent_runtime::protocol::ToolResult {
+            tool_call_id: call.id.clone(),
+            tool_name: call.name.clone(),
+            is_error: false,
+            is_truncated: false,
+            content: "results".to_string(),
+            provenance: crate::agent_runtime::protocol::ToolProvenance::ExternalSearch,
+            started_at_unix_ms: 100,
+            finished_at_unix_ms: 101,
+            details: Some(serde_json::json!({ "sources": [source] })),
+            error: None,
+        };
+        let event = crate::agent_runtime::protocol::AgentEvent::new(
+            "run-1",
+            Some(1),
+            2,
+            crate::agent_runtime::protocol::AgentEventPayload::ToolCallCompleted { result },
+        )
+        .unwrap();
+        sink.emit(event).unwrap();
+        drop(sink);
+
+        let (tool_call_id, url, title): (String, String, String) = repository
+            .connection
+            .query_row(
+                "SELECT tool_call_id, url, title FROM agent_sources WHERE source_id = 'source-1'",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .unwrap();
+        assert_eq!(tool_call_id, "call-search-1", "来源必须关联 tool_call_id");
+        assert_eq!(url, "https://example.com/article");
+        assert_eq!(title, "Example");
+        drop(repository);
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn persisting_sink_does_not_write_empty_tool_call_sources() {
+        let (root, path) = test_database_path();
+        let mut repository = AgentRunRepository::open(&path).unwrap();
+        repository.create_run(&new_run("run-1", 100)).unwrap();
+        let mut sink = PersistingSink::new("run-1", &mut repository);
+        // SourcesUpdated 事件本身不再落库（来源由工具完成事件携带 tool_call_id 落库）。
+        let source = crate::agent_runtime::protocol::SourceMetadata {
+            source_id: "source-orphan".to_string(),
+            title: "Orphan".to_string(),
+            url: "https://example.com/orphan".to_string(),
+            site_name: None,
+            published_at: None,
+            retrieved_at_unix_ms: 100,
+            content_type: None,
+        };
+        let event = crate::agent_runtime::protocol::AgentEvent::new(
+            "run-1",
+            Some(1),
+            2,
+            crate::agent_runtime::protocol::AgentEventPayload::SourcesUpdated {
+                sources: vec![source],
+            },
+        )
+        .unwrap();
+        sink.emit(event).unwrap();
+        drop(sink);
+        let count: i64 = repository
+            .connection
+            .query_row(
+                "SELECT COUNT(*) FROM agent_sources WHERE run_id = 'run-1'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(count, 0, "没有 tool_call_id 的来源不落库");
         drop(repository);
         let _ = fs::remove_dir_all(root);
     }

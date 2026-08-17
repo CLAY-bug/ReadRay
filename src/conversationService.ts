@@ -312,6 +312,10 @@ export class RepositoryConversationService implements ConversationService {
             stoppedByUser = true;
           } else if (event.type === "truncated") {
             truncated = true;
+          } else if (event.type === "sources_updated") {
+            request.onSourcesUpdated?.(event.sources);
+          } else if (event.type === "tool_state") {
+            request.onToolState?.(event.label);
           }
         },
       );
@@ -360,6 +364,10 @@ export class RepositoryConversationService implements ConversationService {
     await this.repository.abortStreaming(
       requireConversationId(conversationId),
     );
+  }
+
+  async openSource(url: string): Promise<void> {
+    await this.repository.openSource(url);
   }
 
   async exportConversation(

@@ -1003,6 +1003,7 @@ pub fn run() {
             quick_ai::send_quick_ai_message_streaming,
             quick_ai::send_quick_ai_message_agent,
             quick_ai::abort_quick_ai_streaming,
+            quick_ai::open_agent_source,
             settings::get_settings_snapshot,
             settings::get_app_preferences,
             settings::update_app_preferences,

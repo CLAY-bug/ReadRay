@@ -6,13 +6,16 @@ import type {
   RecentQuickAiConversation,
   ConversationOrigin,
 } from "./types/quickAi";
+import type { AgentSource } from "./conversationViewModel";
 
 export type QuickAiStreamEvent =
   | { type: "delta"; text: string }
   | { type: "done" }
   | { type: "stopped" }
   | { type: "truncated" }
-  | { type: "error"; message: string };
+  | { type: "error"; message: string }
+  | { type: "sources_updated"; sources: AgentSource[] }
+  | { type: "tool_state"; label: string };
 
 export interface ConversationRepository {
   create(): Promise<QuickAiConversation>;
@@ -36,6 +39,7 @@ export interface ConversationRepository {
     onEvent: (event: QuickAiStreamEvent) => void,
   ): Promise<QuickAiConversation>;
   abortStreaming(conversationId: number): Promise<void>;
+  openSource(url: string): Promise<void>;
 }
 
 export type ConversationInvoke = <T>(
@@ -133,8 +137,10 @@ export class TauriConversationRepository implements ConversationRepository {
     onEvent: (event: QuickAiStreamEvent) => void,
   ) {
     const channel = new Channel<QuickAiStreamEvent>(onEvent);
+    // 任务 3：正式对话链路切换到 Agent 命令（来源/工具状态经扩展事件协议到达）；
+    // 旧 send_quick_ai_message_streaming 保留为受控回退。
     return this.invokeCommand<QuickAiConversation>(
-      "send_quick_ai_message_streaming",
+      "send_quick_ai_message_agent",
       {
         conversationId,
         expectedUserSequence,
@@ -142,6 +148,10 @@ export class TauriConversationRepository implements ConversationRepository {
         channel,
       },
     );
+  }
+
+  async openSource(url: string): Promise<void> {
+    await this.invokeCommand<void>("open_agent_source", { url });
   }
 
   abortStreaming(conversationId: number) {

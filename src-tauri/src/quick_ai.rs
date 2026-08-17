@@ -1,5 +1,6 @@
 use crate::agent_runtime::chat_surface::{
-    conversation_l0_tools, generate_run_id, runtime_facts, ChatPreparedTurn, ChatSurfaceAdapter,
+    conversation_capability, conversation_l1_tools, generate_run_id, runtime_facts,
+    ChatPreparedTurn, ChatSurfaceAdapter,
 };
 use crate::agent_runtime::context::ContextAssembler;
 use crate::agent_runtime::coordinator::{
@@ -15,7 +16,7 @@ use crate::agent_runtime::protocol::{
 use crate::agent_runtime::run_repository::{
     AgentRunRepository, AgentRunStatus, NewRun, PersistingSink,
 };
-use crate::agent_runtime::tool::{CapabilityPolicy, ToolPolicy, ToolRegistry};
+use crate::agent_runtime::tool::{ToolPolicy, ToolRegistry};
 use crate::conversations::{
     export_snapshot_to_path, ConversationExportSummary, ConversationMessage, ConversationOrigin,
     ConversationRole, ConversationSnapshot, ConversationStore, PreparedTurn,
@@ -54,11 +55,24 @@ struct DeepSeekRequestMessage {
 #[serde(rename_all = "camelCase")]
 #[serde(tag = "type")]
 pub enum QuickAiStreamEvent {
-    Delta { text: String },
+    Delta {
+        text: String,
+    },
     Done,
     Stopped,
     Truncated,
-    Error { message: String },
+    Error {
+        message: String,
+    },
+    /// 工具来源更新（任务 3）：来源卡片数据，直接来自 Agent SourcesUpdated。
+    SourcesUpdated {
+        sources: Vec<crate::agent_runtime::protocol::SourceMetadata>,
+    },
+    /// 工具状态文案（任务 3）："正在搜索相关资料…" / "正在读取网页内容…" /
+    /// "正在整理答案…"。
+    ToolState {
+        label: String,
+    },
 }
 
 static STREAMING_ABORT_FLAGS: Mutex<Option<Vec<(i64, std::sync::Arc<AtomicBool>)>>> =
@@ -287,6 +301,17 @@ pub fn abort_quick_ai_streaming(conversation_id: i64) -> Result<(), String> {
     Ok(())
 }
 
+/// 受控来源打开（任务 3）：来源卡片 URL 必须通过网络校验（HTTP(S)、无 userinfo、
+/// 无敏感查询参数、非保留网段）后才交给受控 opener，不拼接 Shell 命令。
+#[tauri::command]
+pub fn open_agent_source(app: AppHandle, url: String) -> Result<(), String> {
+    crate::agent_runtime::network::validate_fetch_url(&url)?;
+    use tauri_plugin_opener::OpenerExt;
+    app.opener()
+        .open_url(url, None::<&str>)
+        .map_err(|error| format!("来源打开失败：{error}"))
+}
+
 /// Agent 正式链路：prepare_turn → AgentRun → complete_turn（AGENT_RUNTIME_UPGRADE_PLAN §19 任务 2）。
 /// 旧非 Agent 路径（send_quick_ai_message / send_quick_ai_message_streaming）保留为
 /// 受控回退；前端统一事件 envelope 展示不属于本任务，标注延后。
@@ -306,7 +331,7 @@ pub async fn send_quick_ai_message_agent(
     tauri::async_runtime::spawn_blocking(move || {
         // 同步内核在 blocking 线程运行；真实 gateway 内部 block_on HTTP SSE 流。
         let mut gateway = DeepSeekChatGateway::new(model, Some(&app));
-        let registry = conversation_l0_tools(app_version.clone());
+        let registry = conversation_l1_tools(app_version.clone());
         let mut ui = AgentUiSink { sender: &sender };
         run_agent_session_core(
             || ConversationStore::open_for_app(&app),
@@ -332,33 +357,48 @@ struct AgentUiSink<'a> {
 
 impl AgentEventSink for AgentUiSink<'_> {
     fn emit(&mut self, event: AgentEvent) -> Result<(), AgentError> {
-        match &event.payload {
-            AgentEventPayload::AssistantTextDelta { text } => {
-                if !self
-                    .sender
-                    .send(QuickAiStreamEvent::Delta { text: text.clone() })
-                {
-                    return Err(agent_stream_error("Agent 流式事件无法送达。"));
-                }
-            }
-            AgentEventPayload::RunCompleted { .. } => {
-                self.sender.send(QuickAiStreamEvent::Done);
-            }
-            AgentEventPayload::RunStopped { .. } => {
-                self.sender.send(QuickAiStreamEvent::Stopped);
-            }
-            AgentEventPayload::RunTruncated { .. } => {
-                self.sender.send(QuickAiStreamEvent::Truncated);
-            }
-            AgentEventPayload::RunFailed { error } => {
-                self.sender.send(QuickAiStreamEvent::Error {
-                    message: error.message.clone(),
-                });
-            }
-            // 工具事件与来源展示属于后续前端协议任务，当前不发送。
-            _ => {}
+        let Some(projected) = project_ui_event(&event) else {
+            return Ok(());
+        };
+        if !self.sender.send(projected) {
+            return Err(agent_stream_error("Agent 流式事件无法送达。"));
         }
         Ok(())
+    }
+}
+
+/// AgentEvent → QuickAiStreamEvent 的确定性投影（离线可测）。
+/// 只投影对用户有意义的状态，不暴露工具参数细节或内部事件。
+fn project_ui_event(event: &AgentEvent) -> Option<QuickAiStreamEvent> {
+    match &event.payload {
+        AgentEventPayload::AssistantTextDelta { text } => {
+            Some(QuickAiStreamEvent::Delta { text: text.clone() })
+        }
+        AgentEventPayload::SourcesUpdated { sources } => Some(QuickAiStreamEvent::SourcesUpdated {
+            sources: sources.clone(),
+        }),
+        AgentEventPayload::ToolCallStarted { call } => {
+            let label = match call.name.as_str() {
+                "web_search" => "正在搜索相关资料…",
+                "fetch_web_page" => "正在读取网页内容…",
+                _ => return None,
+            };
+            Some(QuickAiStreamEvent::ToolState {
+                label: label.to_string(),
+            })
+        }
+        AgentEventPayload::ToolCallCompleted { .. } => Some(QuickAiStreamEvent::ToolState {
+            label: "正在整理答案…".to_string(),
+        }),
+        AgentEventPayload::RunCompleted { .. } => Some(QuickAiStreamEvent::Done),
+        AgentEventPayload::RunStopped { .. } => Some(QuickAiStreamEvent::Stopped),
+        AgentEventPayload::RunTruncated { .. } => Some(QuickAiStreamEvent::Truncated),
+        AgentEventPayload::RunFailed { error } => Some(QuickAiStreamEvent::Error {
+            message: error.message.clone(),
+        }),
+        // 其余事件（TurnStarted/AssistantTextCompleted/工具进度/ToolCallFailed 等）
+        // 不投影到既有 QuickAiStreamEvent 协议。
+        _ => None,
     }
 }
 
@@ -440,7 +480,7 @@ where
     let authority =
         surface.authority_ref(conversation_id, expected_user_sequence, user_message_id)?;
     let facts = runtime_facts(app_version);
-    let capability = CapabilityPolicy::default();
+    let capability = conversation_capability();
     let active_tools = registry.active_tools(&capability);
     let transcript = surface.transcript(&pending_snapshot, &facts, &active_tools);
 
@@ -824,7 +864,7 @@ mod tests {
     use crate::agent_runtime::coordinator::AgentEventSink;
     use crate::agent_runtime::fake_gateway::{FakeGateway, FakeScenario};
     use crate::agent_runtime::protocol::{
-        validate_event_sequence, AgentEvent, ToolProvenance, ToolResult,
+        validate_event_sequence, AgentEvent, ToolCall, ToolProvenance, ToolResult,
     };
     use crate::agent_runtime::run_repository::{AgentRunRepository, AgentRunStatus};
     use crate::agent_runtime::tool::{RiskLevel, ToolDefinition, ToolRegistry};
@@ -1089,6 +1129,130 @@ mod tests {
         assert!(abort_quick_ai_streaming(-1).is_err());
         assert!(abort_quick_ai_streaming(17).is_ok());
         clear_streaming_abort(17);
+    }
+
+    fn agent_event(payload: AgentEventPayload) -> AgentEvent {
+        AgentEvent::new("run-1", Some(1), 1, payload).unwrap()
+    }
+
+    fn source(url: &str) -> crate::agent_runtime::protocol::SourceMetadata {
+        crate::agent_runtime::protocol::SourceMetadata {
+            source_id: format!("source-{url}"),
+            title: "Example".to_string(),
+            url: url.to_string(),
+            site_name: None,
+            published_at: None,
+            retrieved_at_unix_ms: 1,
+            content_type: None,
+        }
+    }
+
+    #[test]
+    fn ui_event_projection_maps_sources_and_tool_states() {
+        let sources_event = project_ui_event(&agent_event(AgentEventPayload::SourcesUpdated {
+            sources: vec![source("https://example.com/a")],
+        }))
+        .expect("来源事件必须投影");
+        match sources_event {
+            QuickAiStreamEvent::SourcesUpdated { sources } => {
+                assert_eq!(sources.len(), 1);
+                assert_eq!(sources[0].url, "https://example.com/a");
+            }
+            other => panic!("来源事件投影错误：{other:?}"),
+        }
+
+        let search_started = project_ui_event(&agent_event(AgentEventPayload::ToolCallStarted {
+            call: ToolCall {
+                id: "c1".into(),
+                name: "web_search".into(),
+                arguments: json!({"query": "Rust"}),
+            },
+        }))
+        .expect("web_search 开始必须投影");
+        assert!(matches!(
+            search_started,
+            QuickAiStreamEvent::ToolState { ref label } if label == "正在搜索相关资料…"
+        ));
+
+        let fetch_started = project_ui_event(&agent_event(AgentEventPayload::ToolCallStarted {
+            call: ToolCall {
+                id: "c2".into(),
+                name: "fetch_web_page".into(),
+                arguments: json!({"url": "https://example.com"}),
+            },
+        }))
+        .expect("fetch 开始必须投影");
+        assert!(matches!(
+            fetch_started,
+            QuickAiStreamEvent::ToolState { ref label } if label == "正在读取网页内容…"
+        ));
+
+        // 非联网工具不投影工具开始事件。
+        assert!(
+            project_ui_event(&agent_event(AgentEventPayload::ToolCallStarted {
+                call: ToolCall {
+                    id: "c3".into(),
+                    name: "get_date".into(),
+                    arguments: json!({}),
+                },
+            }))
+            .is_none()
+        );
+
+        let completed = project_ui_event(&agent_event(AgentEventPayload::ToolCallCompleted {
+            result: ToolResult::success(
+                &ToolCall {
+                    id: "c1".into(),
+                    name: "web_search".into(),
+                    arguments: json!({"query": "Rust"}),
+                },
+                "ok",
+                ToolProvenance::ExternalSearch,
+                1,
+                2,
+            ),
+        }))
+        .expect("工具完成必须投影");
+        assert!(matches!(
+            completed,
+            QuickAiStreamEvent::ToolState { ref label } if label == "正在整理答案…"
+        ));
+    }
+
+    #[test]
+    fn ui_event_projection_keeps_terminal_mapping() {
+        assert!(matches!(
+            project_ui_event(&agent_event(AgentEventPayload::RunCompleted {
+                text: "answer".into(),
+                usage: None,
+            })),
+            Some(QuickAiStreamEvent::Done)
+        ));
+        assert!(matches!(
+            project_ui_event(&agent_event(AgentEventPayload::RunStopped {
+                reason: TerminationReason::UserAborted,
+            })),
+            Some(QuickAiStreamEvent::Stopped)
+        ));
+        assert!(matches!(
+            project_ui_event(&agent_event(AgentEventPayload::RunTruncated {
+                reason: TerminationReason::RunBudgetExceeded,
+            })),
+            Some(QuickAiStreamEvent::Truncated)
+        ));
+        assert!(matches!(
+            project_ui_event(&agent_event(AgentEventPayload::RunFailed {
+                error: AgentError::new(AgentErrorKind::ProviderNetwork, "网络错误").unwrap(),
+            })),
+            Some(QuickAiStreamEvent::Error { .. })
+        ));
+        // 内部生命周期事件不投影到前端协议。
+        assert!(
+            project_ui_event(&agent_event(AgentEventPayload::TurnStarted {
+                turn_index: 1,
+            }))
+            .is_none()
+        );
     }
 
     #[test]
@@ -1425,6 +1589,96 @@ mod tests {
         assert!(steps
             .iter()
             .any(|(kind, status, _)| kind == "tool_call_completed" && status == "ok"));
+        let _ = fs::remove_dir_all(root);
+    }
+
+    fn sources_tool() -> ToolDefinition {
+        // 工具名与 SingleToolThenFinal 场景一致；L1 风险级，返回结构化来源。
+        ToolDefinition::new(
+            "get_date",
+            "返回当前本地日期。",
+            json!({}),
+            RiskLevel::ExternalReadOnly,
+            |call, started, _| {
+                let source = crate::agent_runtime::protocol::SourceMetadata {
+                    source_id: "source-web-1".to_string(),
+                    title: "Wikipedia Rust".to_string(),
+                    url: "https://en.wikipedia.org/wiki/Rust_(programming_language)".to_string(),
+                    site_name: Some("Wikipedia (en)".to_string()),
+                    published_at: None,
+                    retrieved_at_unix_ms: started,
+                    content_type: Some("text/html".to_string()),
+                };
+                Ok(ToolResult {
+                    tool_call_id: call.id.clone(),
+                    tool_name: call.name.clone(),
+                    is_error: false,
+                    is_truncated: false,
+                    content: "results".to_string(),
+                    provenance: ToolProvenance::ExternalSearch,
+                    started_at_unix_ms: started,
+                    finished_at_unix_ms: started + 1,
+                    details: Some(json!({ "sources": [source] })),
+                    error: None,
+                })
+            },
+        )
+        .expect("sources 工具定义必须有效")
+    }
+
+    #[test]
+    fn agent_session_projects_sources_to_ui_and_persists_with_tool_call_id() {
+        let (root, path) = test_database_path();
+        let mut registry = ToolRegistry::new();
+        registry.register(sources_tool()).unwrap();
+        let conversation_id = create_conversation(&path);
+        let abort = Arc::new(AtomicBool::new(false));
+
+        let mut events = Vec::new();
+        let snapshot = run_agent_at_path(
+            &path,
+            conversation_id,
+            1,
+            "Search the web",
+            FakeScenario::SingleToolThenFinal,
+            &registry,
+            &abort,
+            &mut events,
+        )
+        .unwrap();
+        assert_eq!(snapshot.messages[1].content, "final after tools");
+
+        // UI 投影：SourcesUpdated 与工具状态都映射为 QuickAiStreamEvent。
+        // （非联网工具不投影"正在搜索"状态；该映射由 unit 测试覆盖。）
+        let projected: Vec<QuickAiStreamEvent> =
+            events.iter().filter_map(project_ui_event).collect();
+        assert!(projected.iter().any(|event| matches!(
+            event,
+            QuickAiStreamEvent::SourcesUpdated { sources } if sources.len() == 1
+        )));
+        assert!(projected.iter().any(|event| matches!(
+            event,
+            QuickAiStreamEvent::ToolState { label } if label == "正在整理答案…"
+        )));
+        assert!(projected
+            .iter()
+            .any(|event| matches!(event, QuickAiStreamEvent::Done)));
+
+        // 落库：来源与 tool_call_id 关联（不是空串）。
+        let connection = crate::learning_records::open_database(&path).unwrap();
+        let (tool_call_id, url): (String, String) = connection
+            .query_row(
+                "SELECT tool_call_id, url FROM agent_sources WHERE source_id = 'source-web-1'",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(tool_call_id, "call-1", "来源必须关联工具调用");
+        assert_eq!(
+            url,
+            "https://en.wikipedia.org/wiki/Rust_(programming_language)"
+        );
+        drop(connection);
         let _ = fs::remove_dir_all(root);
     }
 

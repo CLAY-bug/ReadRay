@@ -505,6 +505,33 @@ export class FixtureConversationService implements ConversationService {
             "这也解释了为什么 in this context 和 under these circumstances 最自然。",
           ];
 
+    // 来源/工具状态演示（沿用 [fixture:slow] 的显式演示模式）：
+    // 模拟 Agent 搜索工具的开始、来源发布与整理状态，验证来源卡片与状态文案。
+    if (request.prompt.includes("[fixture:sources]")) {
+      request.onToolState?.("正在搜索相关资料…");
+      request.onSourcesUpdated?.([
+        {
+          sourceId: "fixture-source-1",
+          title: "Rust (programming language)",
+          url: "https://en.wikipedia.org/wiki/Rust_(programming_language)",
+          siteName: "Wikipedia (en)",
+          publishedAt: null,
+          retrievedAtUnixMs: Date.now(),
+          contentType: "text/html",
+        },
+        {
+          sourceId: "fixture-source-2",
+          title: "Context (language use)",
+          url: "https://en.wikipedia.org/wiki/Context_(language_use)",
+          siteName: "Wikipedia (en)",
+          publishedAt: null,
+          retrievedAtUnixMs: Date.now(),
+          contentType: "text/html",
+        },
+      ]);
+      request.onToolState?.("正在整理答案…");
+    }
+
     return {
       status: "complete",
       assistantMessageId: `${request.conversationId}-assistant-${Date.now()}`,
@@ -538,6 +565,11 @@ export class FixtureConversationService implements ConversationService {
         content,
       },
     };
+  }
+
+  async openSource(url: string): Promise<void> {
+    // 浏览器预览路径：仅用于开发预览；正式 Tauri 路径走受控 opener command。
+    window.open(url, "_blank", "noopener,noreferrer");
   }
 
   getLastExportedThread() {

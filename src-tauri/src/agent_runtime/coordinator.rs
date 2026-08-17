@@ -646,6 +646,13 @@ impl AgentRunCoordinator {
                             return Ok(outcome);
                         }
                         results_by_id.insert(call.id.clone(), result.clone());
+                        // 工具结果携带的结构化来源投影为 SourcesUpdated（任务 3）：
+                        // 来源先于工具完成事件发布，UI 可在工具状态结束后立即展示。
+                        let sources =
+                            crate::agent_runtime::network::sources_from_details(&result.details);
+                        if !sources.is_empty() {
+                            emit!(Some(turn_id), AgentEventPayload::SourcesUpdated { sources },);
+                        }
                         emit!(
                             Some(turn_id),
                             AgentEventPayload::ToolCallCompleted { result },
@@ -1532,6 +1539,97 @@ mod tests {
             events.last().map(|event| &event.payload),
             Some(AgentEventPayload::RunCompleted { .. })
         )
+    }
+
+    #[test]
+    fn tool_sources_are_published_as_sources_updated_before_completed() {
+        // 工具名与 SingleToolThenFinal 场景一致（get_date），风险级为 L1；
+        // 测试关注"工具结果携带来源 → 发布 SourcesUpdated"的投影。
+        let search_tool = crate::agent_runtime::tool::ToolDefinition::new(
+            "get_date",
+            "返回当前本地日期。",
+            json!({}),
+            RiskLevel::ExternalReadOnly,
+            |call, started, _| {
+                let source = crate::agent_runtime::protocol::SourceMetadata {
+                    source_id: "source-1".to_string(),
+                    title: "Example".to_string(),
+                    url: "https://example.com/article".to_string(),
+                    site_name: None,
+                    published_at: None,
+                    retrieved_at_unix_ms: started,
+                    content_type: None,
+                };
+                Ok(ToolResult {
+                    tool_call_id: call.id.clone(),
+                    tool_name: call.name.clone(),
+                    is_error: false,
+                    is_truncated: false,
+                    content: "results".to_string(),
+                    provenance: ToolProvenance::ExternalSearch,
+                    started_at_unix_ms: started,
+                    finished_at_unix_ms: started + 1,
+                    details: Some(json!({ "sources": [source] })),
+                    error: None,
+                })
+            },
+        )
+        .expect("search 工具定义必须有效");
+        let capability = CapabilityPolicy {
+            allowed_risk: RiskLevel::ExternalReadOnly,
+            enabled_tools: None,
+        };
+        let (outcome, events, _) = run(
+            "run-test-1",
+            FakeScenario::SingleToolThenFinal,
+            RunBudget::first_version(),
+            vec![search_tool],
+            ToolExecutionOrder::CallOrder,
+            capability,
+            &Cancellation::new(),
+            steady_clock(),
+        );
+        assert_eq!(outcome.termination, TerminationReason::FinalAnswer);
+        let sources_events: Vec<&AgentEvent> = events
+            .iter()
+            .filter(|event| matches!(event.payload, AgentEventPayload::SourcesUpdated { .. }))
+            .collect();
+        assert_eq!(sources_events.len(), 1);
+        let completed_index = events
+            .iter()
+            .position(|event| matches!(event.payload, AgentEventPayload::ToolCallCompleted { .. }))
+            .expect("工具完成事件必须存在");
+        let sources_index = events
+            .iter()
+            .position(|event| matches!(event.payload, AgentEventPayload::SourcesUpdated { .. }))
+            .expect("来源事件必须存在");
+        assert!(sources_index < completed_index, "来源必须先于工具完成发布");
+        match &sources_events[0].payload {
+            AgentEventPayload::SourcesUpdated { sources } => {
+                assert_eq!(sources.len(), 1);
+                assert_eq!(sources[0].url, "https://example.com/article");
+            }
+            _ => unreachable!(),
+        }
+        assert!(validate_event_sequence(&events, &RunBudget::first_version()).is_ok());
+    }
+
+    #[test]
+    fn tool_without_sources_publishes_no_sources_updated() {
+        let (outcome, events, _) = run(
+            "run-test-1",
+            FakeScenario::SingleToolThenFinal,
+            RunBudget::first_version(),
+            vec![date_tool()],
+            ToolExecutionOrder::CallOrder,
+            CapabilityPolicy::default(),
+            &Cancellation::new(),
+            steady_clock(),
+        );
+        assert_eq!(outcome.termination, TerminationReason::FinalAnswer);
+        assert!(!events
+            .iter()
+            .any(|event| matches!(event.payload, AgentEventPayload::SourcesUpdated { .. })));
     }
 
     #[test]

@@ -440,6 +440,132 @@ mod tests {
         })
     }
 
+    /// chat/completions 端点的 server-side web search 请求形状（OpenAI 兼容）。
+    /// 任务 3 provider 决策：Responses 端点 400 后，唯一能 live 确认内置
+    /// web_search 来源能力的途径；与 Responses spike 共用同一显式开关。
+    fn web_search_chat_request_body(model: &str) -> Value {
+        json!({
+            "model": model,
+            "messages": [{
+                "role": "user",
+                "content": "Search the public web for the current Rust language release and report the version together with its source URLs."
+            }],
+            "tools": [{ "type": "web_search" }],
+            "stream": true,
+            "stream_options": { "include_usage": true }
+        })
+    }
+
+    #[derive(Debug, Default, PartialEq)]
+    struct ChatObservation {
+        text: String,
+        usages: Vec<ModelUsage>,
+        citations: Vec<SourceMetadata>,
+        finish_reason: Option<String>,
+    }
+
+    /// OpenAI 兼容 SSE（`data:` 单行 JSON + 末尾 `[DONE]`）的宽松观察器。
+    /// 只收集决策所需事实：文本、usage、finish_reason 与顶层 citations。
+    fn parse_chat_sse_observation(input: &str) -> Result<ChatObservation, String> {
+        let mut observation = ChatObservation::default();
+        let mut done_seen = false;
+        for (line_index, line) in input.lines().enumerate() {
+            if line.trim().is_empty() {
+                continue;
+            }
+            let Some(data) = line.strip_prefix("data:") else {
+                return Err(format!(
+                    "chat SSE line must start with data: at line {}.",
+                    line_index + 1
+                ));
+            };
+            let data = data.trim();
+            if data == "[DONE]" {
+                done_seen = true;
+                break;
+            }
+            let value = serde_json::from_str::<Value>(data).map_err(|_| {
+                format!("chat SSE event JSON is invalid at line {}.", line_index + 1)
+            })?;
+            let Some(object) = value.as_object() else {
+                return Err(format!(
+                    "chat SSE event must be a JSON object at line {}.",
+                    line_index + 1
+                ));
+            };
+            if let Some(choice) = object
+                .get("choices")
+                .and_then(Value::as_array)
+                .and_then(|choices| choices.first())
+                .and_then(Value::as_object)
+            {
+                if let Some(delta) = choice
+                    .get("delta")
+                    .and_then(Value::as_object)
+                    .and_then(|delta| delta.get("content"))
+                    .and_then(Value::as_str)
+                {
+                    observation.text.push_str(delta);
+                }
+                if let Some(reason) = choice.get("finish_reason").and_then(Value::as_str) {
+                    observation.finish_reason = Some(reason.to_string());
+                }
+            }
+            if let Some(usage) = object.get("usage").and_then(parse_usage) {
+                if !observation.usages.contains(&usage) {
+                    observation.usages.push(usage);
+                }
+            }
+            if let Some(citations) = object.get("citations").and_then(Value::as_array) {
+                for citation in citations {
+                    if let Some(source) = source_metadata_from_citation(citation) {
+                        if !observation
+                            .citations
+                            .iter()
+                            .any(|known| known.url == source.url)
+                        {
+                            observation.citations.push(source);
+                        }
+                    }
+                }
+            }
+        }
+        if !done_seen {
+            return Err("chat SSE stream ended without [DONE].".to_string());
+        }
+        Ok(observation)
+    }
+
+    /// 把 OpenAI 兼容 citation 元素投影为 SourceMetadata；字段缺失时回退，
+    /// 协议级校验失败（含敏感查询参数/凭据）的条目整体跳过。
+    fn source_metadata_from_citation(value: &Value) -> Option<SourceMetadata> {
+        let object = value.as_object()?;
+        let url = object.get("url").and_then(Value::as_str)?;
+        let title = object
+            .get("title")
+            .and_then(Value::as_str)
+            .filter(|title| !title.trim().is_empty())
+            .unwrap_or("Web source")
+            .to_string();
+        let source = SourceMetadata {
+            source_id: stable_source_id(url),
+            title,
+            url: url.to_string(),
+            site_name: object
+                .get("site_name")
+                .or_else(|| object.get("site"))
+                .and_then(Value::as_str)
+                .map(str::to_string),
+            published_at: object
+                .get("published_at")
+                .and_then(Value::as_str)
+                .map(str::to_string),
+            retrieved_at_unix_ms: 0,
+            content_type: None,
+        };
+        source.validate().ok().map(|_| source)
+    }
+
     async fn send_streaming_spike_request(
         endpoint: &str,
         api_key: &str,
@@ -454,8 +580,33 @@ mod tests {
             .map_err(|_| "Responses spike request failed before HTTP response.".to_string())?;
         let status = response.status();
         if !status.is_success() {
-            // 不读取/打印错误 body，避免 provider 回显敏感请求内容。
-            return Err(format!("Responses spike returned HTTP {}", status.as_u16()));
+            // 只提取错误分类与截断后的 message（请求体不含凭据，message 最多
+            // 400 字符，用于区分端点/请求形状/账户作用域原因），不打印完整 body。
+            let classification = response
+                .bytes()
+                .await
+                .ok()
+                .and_then(|bytes| {
+                    serde_json::from_str::<Value>(&String::from_utf8_lossy(&bytes)).ok()
+                })
+                .and_then(|value| value.get("error").cloned())
+                .map(|error| {
+                    let code = error.get("code").and_then(Value::as_str).unwrap_or("?");
+                    let kind = error.get("type").and_then(Value::as_str).unwrap_or("?");
+                    let message = error
+                        .get("message")
+                        .and_then(Value::as_str)
+                        .unwrap_or("")
+                        .chars()
+                        .take(400)
+                        .collect::<String>();
+                    format!("code={code} type={kind} message={message}")
+                })
+                .unwrap_or_default();
+            return Err(format!(
+                "Responses spike returned HTTP {} {classification}",
+                status.as_u16()
+            ));
         }
         let mut stream = response.bytes_stream();
         let mut body = Vec::new();
@@ -705,5 +856,152 @@ event: {}\ndata: {{\"type\":\"{}\",\"sequence_number\":1}}\n",
         );
         // DeepSeek 官方是否返回可映射的 citation/annotation 来源由 live 结果决定；
         // 离线 fixture 不把自造 sources 字段当作来源证据。
+    }
+
+    #[test]
+    fn chat_web_search_fixture_exposes_text_usage_and_citations() {
+        let fixture = concat!(
+            "data: {\"choices\":[{\"delta\":{\"content\":\"Rust release: \"},\"finish_reason\":null}]}\n",
+            "data: {\"choices\":[{\"delta\":{\"content\":\"1.88.0\"},\"finish_reason\":null}]}\n",
+            "data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}],\"usage\":{\"prompt_tokens\":12,\"completion_tokens\":4,\"total_tokens\":16},\"citations\":[{\"url\":\"https://blog.rust-lang.org/releases\",\"title\":\"Rust Releases\",\"index\":0},{\"url\":\"https://example.com/a\"}]}\n",
+            "data: [DONE]\n",
+        );
+        let observation = parse_chat_sse_observation(fixture).unwrap();
+        assert_eq!(observation.text, "Rust release: 1.88.0");
+        assert_eq!(observation.finish_reason.as_deref(), Some("stop"));
+        assert_eq!(observation.usages[0].total_tokens, 16);
+        assert_eq!(observation.citations.len(), 2);
+        assert_eq!(
+            observation.citations[0].url,
+            "https://blog.rust-lang.org/releases"
+        );
+        assert_eq!(observation.citations[0].title, "Rust Releases");
+        assert_eq!(observation.citations[1].title, "Web source");
+        assert!(!observation.citations[0]
+            .source_id
+            .contains("blog.rust-lang.org"));
+    }
+
+    #[test]
+    fn chat_web_search_parser_rejects_bad_lines_and_missing_done() {
+        let bad_json = "data: {not-json}\n";
+        assert!(parse_chat_sse_observation(bad_json).is_err());
+        let missing_done = "data: {\"choices\":[{\"delta\":{\"content\":\"x\"}}]}\n";
+        assert!(parse_chat_sse_observation(missing_done).is_err());
+        let missing_data_prefix = "choices:[{\"delta\":{\"content\":\"x\"}}]\n";
+        assert!(parse_chat_sse_observation(missing_data_prefix).is_err());
+        // 含凭据查询参数的 citation 被整体拒绝，不会进入来源列表。
+        let sensitive = concat!(
+            "data: {\"choices\":[{\"delta\":{\"content\":\"answer\"},\"finish_reason\":\"stop\"}],\"citations\":[{\"url\":\"https://example.com/page?api_key=redacted\",\"title\":\"Leak\"}]}\n",
+            "data: [DONE]\n",
+        );
+        let observation = parse_chat_sse_observation(sensitive).unwrap();
+        assert!(observation.citations.is_empty());
+    }
+
+    /// 非流式 chat/completions 响应（web_search 变体探测用）。
+    fn parse_chat_completion_response(input: &str) -> Result<ChatObservation, String> {
+        let value: Value = serde_json::from_str(input)
+            .map_err(|_| "chat response JSON is invalid.".to_string())?;
+        let mut observation = ChatObservation::default();
+        if let Some(choice) = value
+            .get("choices")
+            .and_then(Value::as_array)
+            .and_then(|choices| choices.first())
+            .and_then(Value::as_object)
+        {
+            if let Some(message) = choice.get("message").and_then(Value::as_object) {
+                if let Some(content) = message.get("content").and_then(Value::as_str) {
+                    observation.text.push_str(content);
+                }
+                if let Some(citations) = message.get("citations").and_then(Value::as_array) {
+                    for citation in citations {
+                        if let Some(source) = source_metadata_from_citation(citation) {
+                            if !observation
+                                .citations
+                                .iter()
+                                .any(|known| known.url == source.url)
+                            {
+                                observation.citations.push(source);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        if let Some(usage) = value.get("usage").and_then(parse_usage) {
+            observation.usages.push(usage);
+        }
+        Ok(observation)
+    }
+
+    /// 非流式 web_search 请求变体（探测响应形状；正式实现形状由 live 结果决定）。
+    fn non_streaming_web_search_chat_request_body(model: &str) -> Value {
+        json!({
+            "model": model,
+            "messages": [{
+                "role": "user",
+                "content": "Search the public web for the current Rust language release and report the version together with its source URLs."
+            }],
+            "tools": [{ "type": "web_search" }],
+            "stream": false
+        })
+    }
+
+    #[test]
+    #[ignore = "requires READRAY_RUN_DEEPSEEK_RESPONSES_SPIKE=1, DEEPSEEK_API_KEY and network access"]
+    fn live_deepseek_chat_web_search_observability() {
+        if std::env::var(LIVE_SPIKE_FLAG).ok().as_deref() != Some("1") {
+            eprintln!("Responses live spike skipped; set {LIVE_SPIKE_FLAG}=1 explicitly.");
+            return;
+        }
+        load_project_env_for_live_test();
+        let api_key = secret_store::deepseek_api_key_state()
+            .expect("DeepSeek key state should be readable")
+            .into_key()
+            .expect("DeepSeek API key is required for explicit live spike");
+        let endpoint = format!("{DEEPSEEK_BASE_URL}/chat/completions");
+        let model = configured_model();
+        // provider 决策证据：内置 web_search 必须返回真实 URL+标题的 citation，
+        // 才能映射到 UI 来源卡片；探测失败时判定不满足来源要求。
+        let variants: Vec<(&str, Value, bool)> = vec![
+            ("stream", web_search_chat_request_body(&model), true),
+            (
+                "non-stream",
+                non_streaming_web_search_chat_request_body(&model),
+                false,
+            ),
+        ];
+        for (label, request_body, streaming) in variants {
+            let result = tauri::async_runtime::block_on(send_streaming_spike_request(
+                &endpoint,
+                &api_key,
+                &request_body,
+            ));
+            let outcome = match result {
+                Ok(raw) => {
+                    let parsed = if streaming {
+                        parse_chat_sse_observation(&raw)
+                    } else {
+                        parse_chat_completion_response(&raw)
+                    };
+                    match parsed {
+                        Ok(observation) => format!(
+                            "text={} citations={} urls={:?}",
+                            observation.text.trim().len(),
+                            observation.citations.len(),
+                            observation
+                                .citations
+                                .iter()
+                                .map(|source| source.url.as_str())
+                                .collect::<Vec<_>>()
+                        ),
+                        Err(error) => format!("parse_error={error}"),
+                    }
+                }
+                Err(error) => format!("http_error={error}"),
+            };
+            eprintln!("READRAY_WEB_SEARCH_VARIANT={label} {outcome}");
+        }
     }
 }

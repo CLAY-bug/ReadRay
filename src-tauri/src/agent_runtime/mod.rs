@@ -12,6 +12,8 @@ pub(crate) mod coordinator;
 pub(crate) mod deepseek_gateway;
 pub(crate) mod gateway;
 #[allow(dead_code)]
+pub(crate) mod network;
+#[allow(dead_code)]
 pub(crate) mod protocol;
 pub(crate) mod run_repository;
 pub(crate) mod tool;

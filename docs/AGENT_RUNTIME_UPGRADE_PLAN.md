@@ -2,7 +2,7 @@
 
 最后更新：2026-08-17
 
-状态：任务 0 已完成并通过协议评审，下一步进入任务 1
+状态：任务 0/1/2 已完成并通过评审；任务 3 自动联网纵切已完成实现（Wikipedia provider + 受控抓取 + 来源卡片），待调度者评审，下一步进入任务 4
 
 ## 1. 文档定位
 
@@ -903,6 +903,16 @@ Runtime 与网络纵切稳定后，再开放：
 - 搜索失败时诚实说明无法核实。
 - 恶意网页提示无法提升权限或触发禁止工具。
 - 停止后网络和模型都终止，迟到结果不发布。
+
+#### 实施/评审记录（任务 3，2026-08-17）
+
+- **Provider 决策（live spike 证据）**：重跑 Responses spike（`READRAY_RUN_DEEPSEEK_RESPONSES_SPIKE=1`，仅该测试），`POST /responses` 仍返回 HTTP 400；随后在 spike 中补充 chat/completions web_search 变体探测，错误明确为 `tools[0].type: unknown variant 'web_search', expected 'function'`——当前 DeepSeek 端点只接受 function 工具，内置 server-side web_search 不存在，来源要求不满足。经调度者确认采用方案 A：在相同 `web_search` ToolDefinition 后替换为受控 provider，不改变 Agent loop 与 UI 协议。
+- **受控搜索 provider**：`network.rs` 定义 `SearchProvider` trait（可替换，未来 Tavily 等 key 服务只换实现）；任务 3 只实现无 key 的 Wikipedia API provider（zh/en 的 search API，返回条目标题/URL/摘要），工具描述诚实标注"维基百科覆盖，非通用搜索"，覆盖不到时模型必须如实说明，不得用模型记忆冒充已核实事实。
+- **受控抓取 fetch_web_page**：逐跳重新校验 URL 与解析后的全部 IP（防 DNS rebinding），连接固定到已验证 IP；限制重定向 5 跳、响应 2 MiB、连接 10s/整体 30s 超时；只接受文本内容类型白名单；不携带 cookies、拒绝 userinfo 与敏感查询参数；剥离 script/style/iframe/svg/template 与注释；正文始终作为不可信外部数据回传模型。
+- **内核与协议投影**：L1 工具在 `conversation_l1_tools` 注册（web_search/fetch_web_page，ExternalReadOnly），对话 capability 提升到 ExternalReadOnly；coordinator 在工具完成时把 `details.sources` 投影为 SourcesUpdated 事件（先于 ToolCallCompleted）；PersistingSink 改为从 ToolCallCompleted/Failed 提取来源落库并关联 tool_call_id（移除空串落库）。未改 protocol.rs。
+- **前端**：正式对话切换到 `send_quick_ai_message_agent`；QuickAiStreamEvent 扩展 `sources_updated`/`tool_state`；ConversationPage 展示来源卡片（标题/站点/URL，点击走受控 `open_agent_source` command）与"正在搜索/正在读取/正在整理"状态；来源以 ref 为权威累积（修复了来源被后续 setGeneration 覆盖的缺陷）；fixture 增加 `[fixture:sources]` 演示。
+- **验证**：Rust lib 362/0（含网络 15 项、来源事件/落库/投影等新增约 28 项）、前端 conversation 30/30 与其他套件全绿、tsc/vite build、fmt/check/diff 通过；浏览器预览验证来源卡片与工具状态展示。未运行其他 live 测试；真实 Tauri/DeepSeek 人工验收留待停点。
+
 
 ### 任务 4：日常使用交互
 

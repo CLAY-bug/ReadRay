@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useId, useLayoutEffect, useRef, useState, type CSSProperties, type FormEvent, type ReactNode } from "react";
 import { writeText } from "@tauri-apps/plugin-clipboard-manager";
 import type {
+  AgentSource,
   ConversationAssistantMessage,
   ConversationOperationIdentity,
   ConversationInline,
@@ -19,6 +20,7 @@ import {
 import { deliverConversationExport } from "../conversationExportDelivery";
 import MainAppIcon from "./MainAppIcon";
 import { MarkdownContent } from "./MarkdownContent";
+import { AgentSourceList } from "./AgentSourceList";
 import {
   shouldSendMultilineMessage,
   type SendShortcut,
@@ -52,6 +54,10 @@ type GenerationState = {
   mode: "append" | "regenerate";
   replaceAssistantMessageId?: string;
   retryKind: "request" | "generation";
+  /** 本轮 Agent 工具来源（任务 3）：按 sourceId 去重累积。 */
+  sources: AgentSource[];
+  /** 当前工具状态文案（任务 3）："正在搜索相关资料…"等。 */
+  toolLabel?: string;
 };
 
 const USER_CLAMP_LINES = 5;
@@ -177,12 +183,14 @@ function renderAnswerText(
 function AssistantMessage({
   message,
   onOpenMemory,
+  onOpenSource,
 }: {
   message: ConversationAssistantMessage;
   onOpenMemory: (
     citation: ConversationMemoryCitation,
     trigger: HTMLButtonElement,
   ) => void;
+  onOpenSource: (source: AgentSource) => void;
 }) {
   const [copied, setCopied] = useState(false);
   const copyTimerRef = useRef<number | undefined>(undefined);
@@ -265,6 +273,14 @@ function AssistantMessage({
             </button>
           </div>
         ) : null}
+        {message.sources && message.sources.length > 0 ? (
+          <div className="rr-conversation-answer-footnote">
+            <AgentSourceList
+              sources={message.sources}
+              onOpen={onOpenSource}
+            />
+          </div>
+        ) : null}
       </div>
       <button
         className="rr-conversation-assistant-copy-button"
@@ -329,8 +345,10 @@ function formatGenerationElapsed(elapsedMs: number) {
 
 function ConversationGenerationIndicator({
   onStop,
+  label,
 }: {
   onStop?: () => void;
+  label?: string;
 }) {
   const [elapsedMs, setElapsedMs] = useState(0);
 
@@ -354,7 +372,7 @@ function ConversationGenerationIndicator({
         ))}
       </span>
       <span className="rr-conversation-generation-label" aria-live="polite">
-        正在生成
+        {label ?? "正在生成"}
       </span>
       <span
         className="rr-conversation-generation-elapsed"
@@ -380,17 +398,27 @@ function GenerationMessage({
   canStop,
   onStop,
   onRetry,
+  onOpenSource,
 }: {
   state: GenerationState;
   canStop: boolean;
   onStop: () => void;
   onRetry: () => void;
+  onOpenSource: (source: AgentSource) => void;
 }) {
+  const sourcesBlock =
+    state.sources.length > 0 ? (
+      <div className="rr-conversation-answer-footnote">
+        <AgentSourceList sources={state.sources} onOpen={onOpenSource} />
+      </div>
+    ) : null;
+
   if (state.phase === "failed") {
     return (
       <article className="rr-conversation-message is-assistant">
         <div className="rr-conversation-assistant-copy">
           {state.text ? <MarkdownContent text={state.text} /> : null}
+          {sourcesBlock}
           <div className="rr-conversation-answer-kicker">生成中断</div>
           <p className="rr-conversation-error-copy">
             {state.errorMessage
@@ -413,9 +441,11 @@ function GenerationMessage({
     <article className="rr-conversation-message is-assistant">
       <div className="rr-conversation-assistant-copy">
         {state.text ? <MarkdownContent text={state.text} streaming /> : null}
+        {sourcesBlock}
         {state.phase === "generating" ? (
           <ConversationGenerationIndicator
             onStop={canStop ? onStop : undefined}
+            label={state.toolLabel}
           />
         ) : state.phase === "truncated" ? (
           <div className="rr-conversation-generation-row">
@@ -482,6 +512,8 @@ function ConversationPage({
   const requestKeyRef = useRef(request.key);
   const timerRef = useRef<number | undefined>(undefined);
   const generationTokenRef = useRef(0);
+  const generationSourcesRef = useRef<AgentSource[]>([]);
+  const generationToolLabelRef = useRef<string | undefined>(undefined);
   const toastTimerRef = useRef<number | undefined>(undefined);
   const messageIdRef = useRef(0);
   const scrollAnimationRef = useRef<number | undefined>(undefined);
@@ -623,6 +655,10 @@ function ConversationPage({
           },
         ],
         markdown: replyText,
+        sources:
+          generationSourcesRef.current.length > 0
+            ? [...generationSourcesRef.current]
+            : undefined,
       };
 
       setThread((current) => {
@@ -650,7 +686,12 @@ function ConversationPage({
       stopTimer();
       let chunkIndex = state.nextChunkIndex;
       let replyText = state.text;
-      const runningState = { ...state, phase: "generating" as const };
+      const runningState = {
+        ...state,
+        phase: "generating" as const,
+        sources: [...generationSourcesRef.current],
+        toolLabel: generationToolLabelRef.current,
+      };
       setGeneration(runningState);
 
       if (chunkIndex >= state.chunks.length) {
@@ -681,6 +722,8 @@ function ConversationPage({
           phase: "generating",
           text: replyText,
           nextChunkIndex: chunkIndex,
+          sources: [...generationSourcesRef.current],
+          toolLabel: generationToolLabelRef.current,
         });
       }, 520);
     },
@@ -711,7 +754,12 @@ function ConversationPage({
         mode,
         replaceAssistantMessageId,
         retryKind: "generation",
+        sources: [],
       };
+      // 来源与工具状态以 ref 为权威累积（React state 投影可能在后续
+      // setGeneration 中被旧 pendingState 覆盖），每轮生成开始时重置。
+      generationSourcesRef.current = [];
+      generationToolLabelRef.current = undefined;
       setGeneration(pendingState);
 
       try {
@@ -733,6 +781,34 @@ function ConversationPage({
               current
                 ? { ...current, phase: "generating", text: current.text + delta }
                 : current,
+            );
+          },
+          onSourcesUpdated: (sources) => {
+            if (generationToken !== generationTokenRef.current) {
+              return;
+            }
+            for (const source of sources) {
+              if (
+                !generationSourcesRef.current.some(
+                  (known) => known.sourceId === source.sourceId,
+                )
+              ) {
+                generationSourcesRef.current.push(source);
+              }
+            }
+            setGeneration((current) =>
+              current
+                ? { ...current, sources: [...generationSourcesRef.current] }
+                : current,
+            );
+          },
+          onToolState: (label) => {
+            if (generationToken !== generationTokenRef.current) {
+              return;
+            }
+            generationToolLabelRef.current = label;
+            setGeneration((current) =>
+              current ? { ...current, toolLabel: label } : current,
             );
           },
         });
@@ -761,8 +837,25 @@ function ConversationPage({
               ...pendingState,
               phase: "truncated",
               text: reply.chunks[0] ?? "",
+              sources: [...generationSourcesRef.current],
             });
             return;
+          }
+          // 合并本轮来源到最终 assistant 消息（展示增强；SQLite 权威不受影响）。
+          if (generationSourcesRef.current.length > 0) {
+            const mergedThread = {
+              ...reply.persistedThread!,
+              messages: [...reply.persistedThread!.messages],
+            };
+            const lastIndex = mergedThread.messages.length - 1;
+            const last = mergedThread.messages[lastIndex];
+            if (lastIndex >= 0 && last.role === "assistant") {
+              mergedThread.messages[lastIndex] = {
+                ...last,
+                sources: [...generationSourcesRef.current],
+              };
+              updateThread(mergedThread);
+            }
           }
           setGeneration(null);
           return;
@@ -845,6 +938,7 @@ function ConversationPage({
                 userMessageId: nextThread.pendingTurn.userMessageId,
                 mode: "append",
                 retryKind: "generation",
+                sources: [],
               });
             }
           }
@@ -917,6 +1011,7 @@ function ConversationPage({
           userMessageId: "",
           mode: "append",
           retryKind: "request",
+          sources: [],
         });
       }
     };
@@ -1362,6 +1457,16 @@ function ConversationPage({
     );
   };
 
+  const openSource = useCallback(
+    (source: AgentSource) => {
+      void service.openSource(source.url).catch((error) => {
+        console.error("ReadRay 来源打开失败：", error);
+        notify("来源打开失败");
+      });
+    },
+    [service],
+  );
+
   const messageContent: ReactNode = (
     <>
       {thread?.messages.length ? (
@@ -1373,6 +1478,7 @@ function ConversationPage({
               message={message}
               key={message.id}
               onOpenMemory={openMemoryDrawer}
+              onOpenSource={openSource}
             />
           ),
         )
@@ -1385,6 +1491,7 @@ function ConversationPage({
           canStop={service.capabilities.canStop}
           onStop={stopGeneration}
           onRetry={retryOrContinueGeneration}
+          onOpenSource={openSource}
         />
       ) : null}
     </>
