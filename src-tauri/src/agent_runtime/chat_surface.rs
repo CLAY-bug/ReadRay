@@ -196,7 +196,7 @@ pub(crate) fn conversation_l0_tools(app_version: String) -> ToolRegistry {
             ToolDefinition::new(
                 "get_app_version",
                 "返回 ReadRay 当前应用版本。",
-                json!({}),
+                json!({"type": "object", "properties": {}}),
                 RiskLevel::TrustedLocalReadOnly,
                 move |call, started, _| {
                     Ok(ToolResult::success(
@@ -216,7 +216,7 @@ pub(crate) fn conversation_l0_tools(app_version: String) -> ToolRegistry {
             ToolDefinition::new(
                 "get_local_datetime",
                 "返回当前 UTC 日期时间（Unix 毫秒时间戳对应的 UTC 日历时间）。",
-                json!({}),
+                json!({"type": "object", "properties": {}}),
                 RiskLevel::TrustedLocalReadOnly,
                 |call, started, _| {
                     Ok(ToolResult::success(
@@ -698,6 +698,26 @@ mod tests {
             .iter()
             .any(|tool| tool.name == "web_search" && tool.description.contains("维基百科")));
         assert!(active.iter().any(|tool| tool.name == "fetch_web_page"));
+    }
+
+    #[test]
+    fn all_production_tool_schemas_declare_object_type() {
+        // 回归：DeepSeek 拒绝无 `type: "object"` 的 function schema
+        // （HTTP 400 "Invalid schema for function ...: got 'type: null'"）。
+        // 空对象 json!({}) 序列化为 {}，没有 type 键，必须显式 object。
+        let registry = conversation_l1_tools("0.1.0-test".to_string());
+        let active = registry.active_tools(&conversation_capability());
+        assert!(!active.is_empty(), "生产工具集不能为空");
+        for tool in &active {
+            assert_eq!(
+                tool.input_schema
+                    .get("type")
+                    .and_then(serde_json::Value::as_str),
+                Some("object"),
+                "工具 {} 的 schema 必须声明 type=object",
+                tool.name
+            );
+        }
     }
 
     #[test]
