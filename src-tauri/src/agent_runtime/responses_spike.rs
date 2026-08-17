@@ -15,6 +15,7 @@ mod tests {
     use crate::DEEPSEEK_BASE_URL;
     use futures_util::StreamExt;
     use serde_json::json;
+    use std::path::PathBuf;
 
     const LIVE_SPIKE_FLAG: &str = "READRAY_RUN_DEEPSEEK_RESPONSES_SPIKE";
 
@@ -637,6 +638,15 @@ event: {}\ndata: {{\"type\":\"{}\",\"sequence_number\":1}}\n",
         assert!(first_long.source_id.starts_with("deepseek-source-"));
     }
 
+    fn load_project_env_for_live_test() {
+        let env_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .map(|project_root| project_root.join(".env"));
+        if let Some(env_path) = env_path {
+            let _ = dotenvy::from_path_override(env_path);
+        }
+    }
+
     #[test]
     #[ignore = "requires READRAY_RUN_DEEPSEEK_RESPONSES_SPIKE=1, DEEPSEEK_API_KEY and network access"]
     fn live_deepseek_responses_function_and_web_search_observability() {
@@ -644,6 +654,9 @@ event: {}\ndata: {{\"type\":\"{}\",\"sequence_number\":1}}\n",
             eprintln!("Responses live spike skipped; set {LIVE_SPIKE_FLAG}=1 explicitly.");
             return;
         }
+        load_project_env_for_live_test();
+        // 2026-08-17 实测：.env 修复后请求已真实发出，但 POST {base}/responses 返回 HTTP 400，
+        // 错误 body 按设计不读取，端点/请求体/作用域原因与 web_search 来源可观测性仍未确认。
         let api_key = secret_store::deepseek_api_key_state()
             .expect("DeepSeek key state should be readable")
             .into_key()

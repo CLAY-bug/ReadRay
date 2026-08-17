@@ -93,12 +93,12 @@ core_docs:
 
   - path: "docs/AGENT_RUNTIME_UPGRADE_PLAN.md"
     purpose: "阶段八点五共享 Agent Runtime 的完整架构，覆盖主应用聊天、Quick AI overlay、Writing Coach、自动工具决策、安全分级、持久化、任务拆分和验收门禁。"
-    status: "planned"
+    status: "active"
     read_when:
       - "讨论、实现或验收主应用聊天、Quick AI overlay 或 Writing Coach 的 Agent loop、tool call、联网搜索、来源、运行恢复或长上下文。"
       - "判断 pi Agent Core 与 ReadRay Rust/Tauri/SQLite 的适配边界。"
-      - "准备在阶段九之前启动 Agent Runtime 任务。"
-    notes: "方向已确认但尚未实现；采用 Rust 原生 pi-style 共享 Runtime，不直接嵌入 pi coding-agent，不增加 Node/Python sidecar。主应用聊天与 Quick AI overlay 共享 ChatSurfaceAdapter；Writing Coach 在 Runtime 稳定后通过独立 adapter 接入并保留 writing revision 权威。模型在已授权能力内自主选择低风险只读工具；第一入口只有任务 0 协议与 provider spike。"
+      - "继续阶段八点五的任务 1 及之后实现。"
+    notes: "任务 0 协议与 provider spike 已于 2026-08-17 完成并通过评审，下一步为任务 1 Rust Agent Kernel；采用 Rust 原生 pi-style 共享 Runtime，不直接嵌入 pi coding-agent，不增加 Node/Python sidecar。主应用聊天与 Quick AI overlay 共享 ChatSurfaceAdapter；Writing Coach 在 Runtime 稳定后通过独立 adapter 接入并保留 writing revision 权威。模型在已授权能力内自主选择低风险只读工具；任务 1 完成前不新增 migration、不改正式对话或写作 UI、不向用户真实会话开放 Web Search。"
     risk: "不得一次性整包实现，不得开放 Bash、任意文件读写、动态扩展或通用系统权限；不得提前接学习者画像、记忆注入、个性化排序或其他阶段九语义。"
 
   - path: "doc/quick-ai-overlay-upgrade-task.md"
@@ -1082,7 +1082,7 @@ source_areas:
     read_when:
       - "执行或评审 Agent Runtime 任务 0 的协议、离线重放或 provider spike。"
     notes: "只装配纯协议模块及测试专用 replay/responses spike；不注册 Tauri command、不接正式会话/写作、不创建 SQLite migration。"
-    risk: "任务 0 评审前不得把本目录装配到正式 Agent loop、工具执行或 UI。"
+    risk: "任务 1 完成并验收前不得把本目录装配到正式 Agent loop、工具执行或 UI。"
 
   - path: "src-tauri/src/agent_runtime/protocol.rs"
     purpose: "Surface-neutral Agent Runtime 协议草案与纯验证。"
@@ -1105,8 +1105,8 @@ source_areas:
     status: "experimental"
     read_when:
       - "核对 Responses API function tool、server-side web_search、流式事件、usage 和来源元数据可观察性。"
-    notes: "复用现有 HTTP client/secret_store 边界，默认 endpoint 为官方 /responses 并支持显式环境覆盖；DeepSeek Responses 按 stateless 处理，只观察 provider response ID，不使用 previous_response_id。live test 必须同时满足 #[ignore] 与 READRAY_RUN_DEEPSEEK_RESPONSES_SPIKE=1，严格校验 event:/data.type、sequence_number 和 response.completed/incomplete/failed 终态，response.failed 拒绝、incomplete 分类为 provider protocol error，错误只报告状态不读取或输出敏感 body，不写用户数据库。离线只观察 web_search action；只有 provider 明确返回 citation/annotation 时才记录来源，source ID 使用不暴露 URL 的确定性 hash。"
-    risk: "Responses API 形状未经显式 live 验证前，不得据此接入正式会话或假定内置 Web Search 已满足来源验收；不得用自造 sources 字段替代官方证据。"
+    notes: "复用现有 HTTP client/secret_store 边界，默认 endpoint 为官方 /responses 并支持显式环境覆盖；DeepSeek Responses 按 stateless 处理，只观察 provider response ID，不使用 previous_response_id。live test 必须同时满足 #[ignore] 与 READRAY_RUN_DEEPSEEK_RESPONSES_SPIKE=1，严格校验 event:/data.type、sequence_number 和 response.completed/incomplete/failed 终态，response.failed 拒绝、incomplete 分类为 provider protocol error，错误只报告状态不读取或输出敏感 body，不写用户数据库。离线只观察 web_search action；只有 provider 明确返回 citation/annotation 时才记录来源，source ID 使用不暴露 URL 的确定性 hash。2026-08-17 修复未加载项目根 `.env` 的问题并显式执行一次：请求已发出，但 `POST /responses` 返回 HTTP 400，错误 body 不读取，端点/请求体/作用域原因未确定，web_search 行动与来源元数据未能 live 确认。"
+    risk: "Responses API 形状仍未经成功 live 验证（2026-08-17 一次显式 spike 返回 HTTP 400）前，不得据此接入正式会话或假定内置 Web Search 已满足来源验收；不得用自造 sources 字段替代官方证据。"
 
   - path: "src-tauri/src/explanation_cache.rs"
     purpose: "ExplanationCard SQLite v18 精确缓存 identity、命中重绑校验、TTL/容量后台维护和 fail-open 边界。"

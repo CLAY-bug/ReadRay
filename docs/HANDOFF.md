@@ -1,6 +1,6 @@
 # ReadRay 交接记录
 
-最后更新：2026-08-16
+最后更新：2026-08-17
 
 ## TL;DR
 
@@ -263,7 +263,7 @@
 
 ReadRay Agent Runtime 的完整阶段八点五方案已于 2026-08-16 写入 `docs/AGENT_RUNTIME_UPGRADE_PLAN.md`，并同步到 `DEVELOPMENT_PLAN.md` 与 `RESOURCE_MAP.yml`。方向是参考 pi Agent Core 的循环、事件、工具和上下文协议，在 Rust/Tauri/SQLite 内实现原生共享 Runtime；不直接嵌入 pi coding-agent，不增加 Node/Python sidecar，也不开放 Bash、任意文件读写或动态代码扩展。主应用完整对话与 Quick AI overlay 共享现有会话后端和 ChatSurfaceAdapter，属于首要迁移面；Runtime 稳定后，作文中的 Writing Coach 通过独立 adapter 接入，同时继续以 `writing.rs`、文章 revision、完成版本和现有请求身份为权威。模型在用户已授权的能力集合内自主选择低风险只读工具，运行时负责权限、预算、来源、取消、幂等和恢复。
 
-阶段八点五任务 0 已落地协议草案、测试专用 deterministic fake-provider replay 和默认忽略的 DeepSeek Responses API spike，尚未进入正式 Agent loop。`src-tauri/src/agent_runtime/protocol.rs` 冻结了 surface-neutral authority、统一事件 envelope、tool call/result、错误/终止分类、第一版预算和只留内存的 provider continuation state；`ToolCallCompleted/Failed` 的结果方向与 `tool_name` 均有校验，terminal reason/error 矩阵也已冻结；replay 覆盖无工具、单/多工具（controlled completion-order fixture，不声称真实并行）、未知工具、坏参数、失败、超时、model/tool abort 与三类独立预算上限。DeepSeek Responses 按 stateless 处理，只观察 provider response ID，不使用 `previous_response_id`；parser 严格配对 `event:` 与 `data.type`，只观察 function/web-search action、SSE sequence/终态和 usage；只有 provider 明确返回 citation/annotation 时才记录来源，离线来源能力未知，需 live。本轮不再尝试 live；此前按授权尝试时 `secret_store` 未提供可用 key，未发出请求、未改变认证、未写用户数据库。不能据此判定内置 Web Search 已满足来源要求。评审前不新增 Agent migration、不改正式对话或写作 UI、不向用户真实会话开放 Web Search。Writing Coach 必须在通用对话 Runtime、自动联网和长上下文完成各自验收后按任务 6 接入。阶段九继续暂停，学习者画像、长期记忆、记忆注入和个性化工具不属于阶段八点五。
+阶段八点五任务 0 已于 2026-08-16 落地协议草案、测试专用 deterministic fake-provider replay 和默认忽略的 DeepSeek Responses API spike，并通过协议评审。`src-tauri/src/agent_runtime/protocol.rs` 冻结了 surface-neutral authority、统一事件 envelope、tool call/result、错误/终止分类、第一版预算和只留内存的 provider continuation state；`ToolCallCompleted/Failed` 的结果方向与 `tool_name` 均有校验，terminal reason/error 矩阵也已冻结；replay 覆盖无工具、单/多工具（controlled completion-order fixture，不声称真实并行）、未知工具、坏参数、失败、超时、model/tool abort 与三类独立预算上限。DeepSeek Responses 按 stateless 处理，只观察 provider response ID，不使用 `previous_response_id`；parser 严格配对 `event:` 与 `data.type`，只观察 function/web-search action、SSE sequence/终态和 usage；只有 provider 明确返回 citation/annotation 时才记录来源。2026-08-17 修复了 live spike 未加载项目根 `.env` 的问题（此前因未提供可用 key 在发出请求前停止），并用 `.env` 中的可用 key 显式执行一次：请求已真实发出，但 DeepSeek `POST https://api.deepseek.com/responses` 对当前请求形状返回 HTTP 400，错误 body 按设计不读取，本次无法区分端点/请求体/账户作用域原因；web_search 行动与来源元数据未能 live 确认，内置 Web Search 是否满足来源要求仍未验收，该开放问题移入任务 3 自动联网纵切时重新验证。下一步进入任务 1 Rust Agent Kernel（纯离线 fake-provider 循环）。任务 1 完成前不新增 Agent migration、不改正式对话或写作 UI、不向用户真实会话开放 Web Search。Writing Coach 必须在通用对话 Runtime、自动联网和长上下文完成各自验收后按任务 6 接入。阶段九继续暂停，学习者画像、长期记忆、记忆注入和个性化工具不属于阶段八点五。
 
 阶段八与阶段九前的“学习目标聚合”均已完成独立审核、自动验证和用户真实 Tauri/SQLite 人工验收。真实数据库已成功登记 v19，迁移保护性审计、历史兼容身份、Memory 去重/查询次数/历史出现、Review 同目标去重与搜索相关度均已通过实际使用确认；本任务正式收口。阶段九继续暂停，不得在用户明确前扩展到画像、记忆注入、个性化排序、效果评估或语义聚类。
 
@@ -289,7 +289,7 @@ Quick AI 浮层升级任务 7、主窗口静态品牌启动层、WebView 默认�
 - **解释体验限制**：查询类型依赖本地启发式规则，缩写、很短的多句文本或缺少句末标点的长句可能落入相邻类型；优先用真实样本调整，不为分类再增加一次 LLM 请求。
 - **解释体验限制**：CaptureInput 和 ExplanationCard 当前上限为 4096 字符，长段落还受模型 JSON 稳定性与浮窗最大高度约束，不代表整页翻译能力。
 - **阶段八与 v19 聚合边界**：原始 `learning_records` 继续作为追加式真实查询事件完整保留；正式聚合只合并 queryType 相同且英文学习目标在大小写、首尾空白和连续空白规范化后精确一致的记录，不做语义、相近词、同义词或词形聚类。聚合目标详情可追溯全部真实 occurrence、原始来源、上下文和时间；Review 可在后续轮次轮换该目标的不同真实英文语境，但不伪造历史出现。长期学习者记忆、记忆注入与个性化 Feed 排序仍属于阶段九，不得由当前复习状态或质量反馈冒充。
-- **Agent 后续边界**：Quick AI 已支持流式输出、停止/重试、白名单 Markdown 渲染和组合式系统提示词；阶段八点五 Agent Runtime 已完成方案、尚未实现，必须从任务 0 开始逐项验收。记忆注入属于阶段九；回答重新生成、超 8K 续写和长上下文按新计划的后续任务处理，不因文档建立自动并入正式能力。
+- **Agent 后续边界**：Quick AI 已支持流式输出、停止/重试、白名单 Markdown 渲染和组合式系统提示词；阶段八点五 Agent Runtime 的任务 0 协议与 provider spike 已完成并通过评审，下一步从任务 1 Rust Agent Kernel 开始逐项实现、验证、审查并停点验收，任务 1 完成前不新增 Agent migration、不改正式对话或写作 UI、不向用户真实会话开放 Web Search。记忆注入属于阶段九；回答重新生成、超 8K 续写和长上下文按新计划的后续任务处理，不因文档建立自动并入正式能力。
 - **主题后续边界**：Flexoki 与 Codex 主题已作为随包内置主题接入；当前不包含外部主题 adapter、社区商店、在线下载或自动更新。新增 adapter 仍必须转换到 ReadRayThemeV1 并通过同一安全校验，不能放宽任意 CSS、字体、图片或网络资源边界。
 - **对话后续边界**：阶段六的查看全部、重命名、删除和原生导出已经完成；回答重生成和记忆引用聚合属于更后续能力，当前 UI 继续诚实禁用。
 - **阶段七范围**：三批设置功能与桌面生命周期已经通过复审和真实 Tauri 人工验收，阶段七已完成；阶段八新增实现不得回改其已验收行为。

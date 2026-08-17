@@ -1,8 +1,8 @@
 # ReadRay Agent Runtime 升级方案
 
-最后更新：2026-08-16
+最后更新：2026-08-17
 
-状态：方向已确认，尚未开始实现
+状态：任务 0 已完成并通过协议评审，下一步进入任务 1
 
 ## 1. 文档定位
 
@@ -838,7 +838,8 @@ Runtime 与网络纵切稳定后，再开放：
 - **错误/终止分类**：按方案固定 `user_aborted`、provider timeout/network/rate limit/auth/protocol、context overflow、unknown tool、tool schema/policy/timeout/execution、network blocked、content extract failed、persistence failed、run budget exceeded；终止原因保持同名可审计分类，最终回答单独为 `final_answer`。只有 provider timeout/network/rate limit 默认具备无副作用重试资格。
 - **DeepSeek continuation state 决策**：DeepSeek Responses 按 stateless 请求处理，不发送或推断 `previous_response_id`；只在内存中观察 provider 返回的 response ID，并保留结构化 tool-call state 与推理模型工具链所需的私有 reasoning。`previous_response_id` 只属于其他明确支持该扩展的 provider state，不是 DeepSeek 结论；所有 continuation state 不序列化、不发 UI、不写会话/日志，崩溃后从安全边界重放。
 - **离线与 live 状态**：deterministic fake-provider replay 已覆盖 final-only、single/multiple tools（当前是 controlled completion-order fixture，不声称真实并行）、unknown tool、invalid arguments、tool failure、timeout、model/tool abort 和三类独立预算上限；Responses parser fixture 严格配对 `event:` 与 `data.type`，校验 stream sequence 与终态，并观察 web_search action、function event、usage 和 provider response ID。只有 provider 明确返回 citation/annotation 时才记录来源，source ID 使用不暴露 URL 的确定性 hash，未自造 `web_search_call.sources`。live test 默认 `#[ignore]`，另需显式 `READRAY_RUN_DEEPSEEK_RESPONSES_SPIKE=1`；本次按授权尝试时直接读取现有 `secret_store`，因未配置可用 DeepSeek key 在发出请求前停止（未改变认证、未写用户数据库）。因此离线只能观察 web_search action，来源能力未知，需 live，不能把 DeepSeek 内置 Web Search 记为已满足来源验收。
-- **停点**：任务 0 未新增 migration、生产 Agent loop、工具注册/执行、正式会话/写作适配或 UI；等待协议评审后再进入任务 1。
+- **live 结果（2026-08-17）**：修复 live spike 未加载项目根 `.env` 的问题——`responses_spike.rs` 与既有 live 测试一致，在读取 key 前用 `dotenvy::from_path_override` 加载项目根 `.env`。项目根 `.env` 已配置可用 `DEEPSEEK_API_KEY` 时显式执行一次 spike（`READRAY_RUN_DEEPSEEK_RESPONSES_SPIKE=1`）：请求已真实发出（证明 `.env` 修复生效），但 DeepSeek `POST https://api.deepseek.com/responses` 对当前函数/web_search 请求形状返回 HTTP 400。spike 按设计不读取/打印错误 body，本次结果无法区分是端点路径、请求体形状还是账户/模型作用域原因；因此 function/web_search 行动与 citation/annotation 来源元数据本次未能 live 观测，内置 Web Search 是否满足来源验收仍未确认。该开放问题不阻塞任务 1（Rust Agent Kernel 为纯离线 fake-provider 循环），自然移到任务 3 自动联网纵切时重新验证。
+- **评审结论与停点**：任务 0 已通过协议评审，下一实施入口为任务 1 Rust Agent Kernel。任务 0 未新增 migration、生产 Agent loop、工具注册/执行、正式会话/写作适配或 UI；在任务 1 完成前，不新增 Agent migration、不改正式对话或写作 UI、不向用户真实会话开放 Web Search。
 
 ### 任务 1：Rust Agent Kernel
 
@@ -1095,7 +1096,7 @@ late_event_after_new_run
 5. 更新本文任务状态和必要的恢复文档。
 6. 停止等待用户确认，再进入下一任务。
 
-第一实施入口是“任务 0：协议与 provider spike”。在任务 0 评审通过前，不新增 Agent migration，不改正式对话或写作 UI，不开放 Web Search 给用户真实会话。Writing Coach 必须等通用对话 Runtime、自动联网与长上下文完成各自验收后，再进入任务 6。
+任务 0 协议与 provider spike 已通过评审，当前实施入口是"任务 1：Rust Agent Kernel"。在任务 1 完成并验收前，不新增 Agent migration，不改正式对话或写作 UI，不开放 Web Search 给用户真实会话。Writing Coach 必须等通用对话 Runtime、自动联网与长上下文完成各自验收后，再进入任务 6。
 
 ## 26. 研究来源
 
