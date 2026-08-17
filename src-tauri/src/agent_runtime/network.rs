@@ -11,6 +11,7 @@ use crate::agent_runtime::protocol::{AgentError, AgentErrorKind, SourceMetadata}
 use futures_util::future::BoxFuture;
 use serde_json::json;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr, ToSocketAddrs};
+use std::sync::OnceLock;
 
 /// 单次抓取最大重定向跳数。
 const MAX_REDIRECTS: usize = 5;
@@ -22,6 +23,9 @@ const CONNECT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
 const FETCH_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
 /// 搜索结果数量上限（Wikipedia srlimit）。
 const MAX_WIKIPEDIA_RESULTS: u32 = 5;
+/// 对外部 HTTP(S) 请求统一声明的 User-Agent。
+/// Wikipedia API 官方要求请求必须携带真实 User-Agent，缺少 UA 会返回 403。
+const READRAY_USER_AGENT: &str = "ReadRay/0.1 (English-learning desktop app; contact: local)";
 
 /// 只允许的文本内容类型；`;` 前的媒体类型（小写）必须命中白名单。
 const ALLOWED_CONTENT_TYPES: &[&str] = &[
@@ -274,7 +278,7 @@ impl FetchTransport for ReqwestFetchTransport {
                 .redirect(reqwest::redirect::Policy::none())
                 .connect_timeout(CONNECT_TIMEOUT)
                 .timeout(FETCH_TIMEOUT)
-                .user_agent("ReadRay/0.1 (English-learning desktop app)");
+                .user_agent(READRAY_USER_AGENT);
             if let Some(addr) = fixed_addr {
                 // 把域名固定到已通过保留网段校验的 IP，防 DNS rebinding。
                 builder = builder.resolve(&url_host(&url)?, addr);
@@ -660,6 +664,25 @@ pub(crate) struct SearchResultItem {
     pub snippet: String,
 }
 
+/// Wikipedia API 专用 HTTP 客户端：必须携带 User-Agent，否则 Wikipedia 对无 UA
+/// 的请求返回 403（deepseek_client::shared_http_client 不设 UA，不能复用于搜索）。
+fn wikipedia_http_client() -> Result<&'static reqwest::Client, String> {
+    static WIKIPEDIA_CLIENT: OnceLock<Result<reqwest::Client, String>> = OnceLock::new();
+    match WIKIPEDIA_CLIENT.get_or_init(|| {
+        reqwest::Client::builder()
+            .timeout(WIKIPEDIA_TIMEOUT)
+            .user_agent(READRAY_USER_AGENT)
+            .build()
+            .map_err(|error| format!("ReadRay Wikipedia HTTP 客户端创建失败：{error}"))
+    }) {
+        Ok(client) => Ok(client),
+        Err(error) => Err(error.clone()),
+    }
+}
+
+/// Wikipedia 搜索请求整体超时。
+const WIKIPEDIA_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
+
 /// 搜索 provider 边界：未来接入 Tavily 等 key 服务时只替换实现，
 /// 不改变 Agent loop 与 UI 协议（方案 §14.1）。
 pub(crate) trait SearchProvider: Send + Sync {
@@ -692,7 +715,7 @@ impl SearchProvider for WikipediaSearchProvider {
             "redirects": 1,
         });
         let response = tauri::async_runtime::block_on(async {
-            crate::deepseek_client::shared_http_client()?
+            wikipedia_http_client()?
                 .get(&endpoint)
                 .query(&request_body)
                 .send()
