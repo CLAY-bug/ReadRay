@@ -1,6 +1,8 @@
 //! ModelGateway：屏蔽 provider 协议差异的统一模型边界。
 //!
 //! 真实 DeepSeek gateway 会在后续任务实现；本任务只定义 trait 与假 provider。
+//! 边界：ModelRequest 的输入校验（消息形状、工具与能力一致性）留待真实 provider
+//! 任务实施，本任务由 coordinator 在组装侧保证。
 
 use crate::agent_runtime::coordinator::Cancellation;
 use crate::agent_runtime::protocol::{

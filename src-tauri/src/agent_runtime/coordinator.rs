@@ -4,6 +4,11 @@
 //! SQLite、不注册 Tauri command、不接入正式会话/写作。工具、上下文投影和
 //! provider 差异都通过依赖注入进入，因此可以用 fake ModelGateway 完全离线验证。
 //! 状态机与事件序列约束由 `protocol::validate_event_sequence` 保证。
+//!
+//! 工具失败语义（方案 §8.2/§8.3/§20）：运行期工具失败（ToolExecutionFailed /
+//! ToolTimeout）可恢复——失败结果按原调用顺序回传模型，由模型决定降级，预算与
+//! run 超时是硬兜底；授权/schema 失败（未知工具、策略拒绝、schema 无效、
+//! call.validate 失败）保持 fail-fast，直接 RunFailed 终止。
 
 use crate::agent_runtime::context::{ContextAssembler, RuntimeFacts};
 use crate::agent_runtime::gateway::{ModelGateway, ModelRequest};
@@ -59,7 +64,8 @@ pub(crate) trait AgentEventSink {
 }
 
 /// 防御性 run 身份守卫：拒绝携带其他 run_id 的迟到事件，保证“页面卸载、切换会话
-/// 或请求身份变化后，迟到事件不得更新当前页面”的内核侧约定。
+/// 或请求身份变化后，迟到事件不得更新当前页面”的内核侧约定。接线留给任务 2 的
+/// surface adapter；本任务由测试直接构造。
 pub(crate) struct RunScopedSink<'a> {
     run_id: String,
     inner: &'a mut dyn AgentEventSink,
@@ -155,6 +161,13 @@ impl AgentRunCoordinator {
         })
     }
 
+    /// 驱动一次 Agent run 到明确终止。
+    ///
+    /// 契约：所有声明性失败（provider 错误、未知工具、schema/策略拒绝、参数
+    /// 增量解析失败、工具执行失败、取消、预算/超时）都以 `Ok(outcome)` 加唯一
+    /// 终态 AgentEvent 收尾，事件序列满足 `protocol::validate_event_sequence`；
+    /// 只有内部不变量破坏（sink 拒绝事件、executor 返回不属于本次调用的结果、
+    /// 结果未通过协议级校验）才返回 `Err`。
     pub fn run(
         &mut self,
         request: &RunRequest,
@@ -202,6 +215,7 @@ impl AgentRunCoordinator {
         );
 
         let active_tools = registry.active_tools(&request.capability);
+        // 边界：max_context_bytes 未在本轮强制（上下文预算与 compaction 属后续任务）。
         let mut transcript =
             assembler.initial_messages(&request.user_prompt, &request.runtime_facts, &active_tools);
 
@@ -317,6 +331,8 @@ impl AgentRunCoordinator {
             let turn = match stream_result {
                 Ok(turn) => turn,
                 Err(provider_error) => {
+                    // 边界：瞬态 provider 错误的重试与退避（is_retryable_without_side_effect
+                    // 与 max_transient_retries）留待真实 provider 任务实施，本任务不重试。
                     outcome.termination = provider_error.termination_reason();
                     outcome.error = Some(provider_error.clone());
                     emit!(
@@ -350,17 +366,34 @@ impl AgentRunCoordinator {
                     let Some(raw) = pending_arguments.get(&call.id) else {
                         continue;
                     };
-                    let parsed: Value = serde_json::from_str(raw).map_err(|_| {
-                        agent_error(
-                            AgentErrorKind::ProviderProtocolError,
-                            "tool call 参数增量无法解析为 JSON。",
-                        )
-                    })?;
+                    let parsed: Value = match serde_json::from_str(raw) {
+                        Ok(parsed) => parsed,
+                        Err(_) => {
+                            let failure = agent_error(
+                                AgentErrorKind::ProviderProtocolError,
+                                "tool call 参数增量无法解析为 JSON。",
+                            );
+                            outcome.termination = failure.termination_reason();
+                            outcome.error = Some(failure.clone());
+                            emit!(
+                                Some(turn_id),
+                                AgentEventPayload::RunFailed { error: failure },
+                            );
+                            return Ok(outcome);
+                        }
+                    };
                     if !parsed.is_object() {
-                        return Err(agent_error(
+                        let failure = agent_error(
                             AgentErrorKind::ProviderProtocolError,
                             "tool call 参数增量不是 JSON object。",
-                        ));
+                        );
+                        outcome.termination = failure.termination_reason();
+                        outcome.error = Some(failure.clone());
+                        emit!(
+                            Some(turn_id),
+                            AgentEventPayload::RunFailed { error: failure },
+                        );
+                        return Ok(outcome);
                     }
                     call.arguments = parsed;
                 }
@@ -399,10 +432,18 @@ impl AgentRunCoordinator {
             for call in &calls {
                 if let Err(validation) = call.validate() {
                     if outcome.tool_calls >= budget.max_tool_calls {
-                        return Err(agent_error(
+                        outcome.termination = TerminationReason::RunBudgetExceeded;
+                        outcome.error = Some(agent_error(
                             AgentErrorKind::RunBudgetExceeded,
                             "工具调用数达到预算上限。",
                         ));
+                        emit!(
+                            Some(turn_id),
+                            AgentEventPayload::RunTruncated {
+                                reason: TerminationReason::RunBudgetExceeded,
+                            }
+                        );
+                        return Ok(outcome);
                     }
                     outcome.tool_calls += 1;
                     let failure = agent_error(AgentErrorKind::ToolSchemaInvalid, validation);
@@ -420,10 +461,18 @@ impl AgentRunCoordinator {
                 match policy.authorize(call, *registry, &request.capability) {
                     Err(failure) => {
                         if outcome.tool_calls >= budget.max_tool_calls {
-                            return Err(agent_error(
+                            outcome.termination = TerminationReason::RunBudgetExceeded;
+                            outcome.error = Some(agent_error(
                                 AgentErrorKind::RunBudgetExceeded,
                                 "工具调用数达到预算上限。",
                             ));
+                            emit!(
+                                Some(turn_id),
+                                AgentEventPayload::RunTruncated {
+                                    reason: TerminationReason::RunBudgetExceeded,
+                                }
+                            );
+                            return Ok(outcome);
                         }
                         outcome.tool_calls += 1;
                         outcome.termination = failure.termination_reason();
@@ -510,12 +559,24 @@ impl AgentRunCoordinator {
                 );
                 outcome.tool_calls += 1;
                 let started = time.now_unix_ms();
+                // 边界：tool_timeout_ms 由执行器以 ToolTimeout 错误表达，内核暂不实施
+                // 墙钟强制（留给异步 executor 落地）；run 总超时是硬兜底。
                 match definition.execute(call, started, &budget) {
                     Err(failure) => {
-                        outcome.termination = failure.termination_reason();
-                        outcome.error = Some(failure.clone());
                         let now = time.now_unix_ms();
                         let result = ToolResult::failure(call, failure.clone(), started, now);
+                        if matches!(
+                            failure.kind,
+                            AgentErrorKind::ToolExecutionFailed | AgentErrorKind::ToolTimeout
+                        ) {
+                            // 运行期工具失败可恢复：失败结果按原调用顺序回传模型，
+                            // 由模型决定诚实降级（方案 §8.2/§20 tool_error_then_recover）。
+                            results_by_id.insert(call.id.clone(), result.clone());
+                            emit!(Some(turn_id), AgentEventPayload::ToolCallFailed { result },);
+                            continue;
+                        }
+                        outcome.termination = failure.termination_reason();
+                        outcome.error = Some(failure.clone());
                         emit!(Some(turn_id), AgentEventPayload::ToolCallFailed { result },);
                         emit!(
                             Some(turn_id),
@@ -994,69 +1055,157 @@ mod tests {
     }
 
     #[test]
-    fn tool_execution_failure_has_clear_termination() {
-        let failing = crate::agent_runtime::tool::ToolDefinition::new(
-            "get_date",
-            "返回当前本地日期。",
-            json!({}),
-            RiskLevel::TrustedLocalReadOnly,
-            |_, _, _| {
-                Err(agent_error(
-                    AgentErrorKind::ToolExecutionFailed,
-                    "fake 工具确定性失败",
-                ))
-            },
-        )
-        .expect("failing 工具定义必须有效");
+    fn tool_error_then_recover_reaches_final_answer() {
+        for kind in [
+            AgentErrorKind::ToolExecutionFailed,
+            AgentErrorKind::ToolTimeout,
+        ] {
+            let kind_for_tool = kind.clone();
+            let failing = crate::agent_runtime::tool::ToolDefinition::new(
+                "get_date",
+                "返回当前本地日期。",
+                json!({}),
+                RiskLevel::TrustedLocalReadOnly,
+                move |_, _, _| Err(agent_error(kind_for_tool.clone(), "fake 工具确定性失败")),
+            )
+            .expect("failing 工具定义必须有效");
+            let (outcome, events, fake) = run(
+                "run-test-1",
+                FakeScenario::ToolErrorThenRecover,
+                RunBudget::first_version(),
+                vec![failing],
+                ToolExecutionOrder::CallOrder,
+                CapabilityPolicy::default(),
+                &Cancellation::new(),
+                steady_clock(),
+            );
+            assert_eq!(
+                outcome.termination,
+                TerminationReason::FinalAnswer,
+                "kind={kind:?}"
+            );
+            assert_eq!(
+                outcome.final_text.as_deref(),
+                Some("recovered final answer"),
+                "kind={kind:?}"
+            );
+            assert_eq!(outcome.tool_calls, 1, "kind={kind:?}");
+            // 模型在下一轮看到了失败结果（Tool 消息 is_error=true，错误分类一致）。
+            let tool_messages: Vec<&ToolResult> = fake.requests[1]
+                .messages
+                .iter()
+                .filter_map(|message| match message {
+                    ProviderMessage::Tool { result } => Some(result),
+                    _ => None,
+                })
+                .collect();
+            assert_eq!(tool_messages.len(), 1, "kind={kind:?}");
+            assert!(tool_messages[0].is_error, "kind={kind:?}");
+            assert_eq!(tool_messages[0].tool_call_id, "call-1");
+            assert_eq!(
+                tool_messages[0].error.as_ref().unwrap().kind,
+                kind,
+                "kind={kind:?}"
+            );
+            assert!(validate_event_sequence(&events, &RunBudget::first_version()).is_ok());
+        }
+    }
+
+    #[test]
+    fn invalid_arguments_delta_terminates_with_run_failed() {
         let (outcome, events, _) = run(
             "run-test-1",
-            FakeScenario::SingleToolThenFinal,
+            FakeScenario::InvalidArgumentsDelta,
             RunBudget::first_version(),
-            vec![failing],
+            vec![date_tool()],
             ToolExecutionOrder::CallOrder,
             CapabilityPolicy::default(),
             &Cancellation::new(),
             steady_clock(),
         );
-        assert_eq!(outcome.termination, TerminationReason::ToolExecutionFailed);
+        assert_eq!(
+            outcome.termination,
+            TerminationReason::ProviderProtocolError
+        );
         assert_eq!(
             outcome.error.as_ref().unwrap().kind,
-            AgentErrorKind::ToolExecutionFailed
+            AgentErrorKind::ProviderProtocolError
         );
+        assert!(matches!(
+            events.last().map(|event| &event.payload),
+            Some(AgentEventPayload::RunFailed { .. })
+        ));
         assert!(validate_event_sequence(&events, &RunBudget::first_version()).is_ok());
     }
 
     #[test]
-    fn tool_timeout_has_clear_termination() {
-        let timed_out = crate::agent_runtime::tool::ToolDefinition::new(
-            "get_date",
-            "返回当前本地日期。",
-            json!({}),
-            RiskLevel::TrustedLocalReadOnly,
-            |_, _, _| {
-                Err(agent_error(
-                    AgentErrorKind::ToolTimeout,
-                    "fake 工具确定性超时",
-                ))
-            },
-        )
-        .expect("timeout 工具定义必须有效");
+    fn call_validate_failure_after_budget_exhaustion_truncates() {
+        let mut budget = RunBudget::first_version();
+        budget.max_tool_calls = 1;
+        budget.max_parallel_tools = 1;
         let (outcome, events, _) = run(
             "run-test-1",
-            FakeScenario::SingleToolThenFinal,
-            RunBudget::first_version(),
-            vec![timed_out],
+            FakeScenario::ValidThenInvalidArguments,
+            budget,
+            vec![date_tool()],
             ToolExecutionOrder::CallOrder,
             CapabilityPolicy::default(),
             &Cancellation::new(),
             steady_clock(),
         );
-        assert_eq!(outcome.termination, TerminationReason::ToolTimeout);
+        assert_eq!(outcome.termination, TerminationReason::RunBudgetExceeded);
         assert_eq!(
             outcome.error.as_ref().unwrap().kind,
-            AgentErrorKind::ToolTimeout
+            AgentErrorKind::RunBudgetExceeded
         );
-        assert!(validate_event_sequence(&events, &RunBudget::first_version()).is_ok());
+        assert!(matches!(
+            events.last().map(|event| &event.payload),
+            Some(AgentEventPayload::RunTruncated { .. })
+        ));
+        assert!(validate_event_sequence(&events, &budget).is_ok());
+    }
+
+    #[test]
+    fn policy_denied_after_budget_exhaustion_truncates() {
+        let denied = crate::agent_runtime::tool::ToolDefinition::new(
+            "read_web",
+            "读取外部网页。",
+            json!({
+                "type": "object",
+                "properties": { "url": { "type": "string" } },
+                "required": ["url"]
+            }),
+            RiskLevel::ExternalReadOnly,
+            |call, started, _| {
+                Ok(ToolResult::success(
+                    call,
+                    "external",
+                    ToolProvenance::ExternalPage,
+                    started,
+                    started + 1,
+                ))
+            },
+        )
+        .expect("read_web 工具定义必须有效");
+        let mut budget = RunBudget::first_version();
+        budget.max_tool_calls = 1;
+        budget.max_parallel_tools = 1;
+        let (outcome, events, _) = run(
+            "run-test-1",
+            FakeScenario::ValidThenPolicyDenied,
+            budget,
+            vec![date_tool(), denied],
+            ToolExecutionOrder::CallOrder,
+            CapabilityPolicy::default(),
+            &Cancellation::new(),
+            steady_clock(),
+        );
+        assert_eq!(outcome.termination, TerminationReason::RunBudgetExceeded);
+        assert!(matches!(
+            events.last().map(|event| &event.payload),
+            Some(AgentEventPayload::RunTruncated { .. })
+        ));
+        assert!(validate_event_sequence(&events, &budget).is_ok());
     }
 
     #[test]

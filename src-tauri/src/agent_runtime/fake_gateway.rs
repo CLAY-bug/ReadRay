@@ -16,6 +16,7 @@ pub(crate) enum FakeScenario {
     SingleToolThenFinal,
     MultipleToolsThenFinal,
     TextThenToolsThenFinal,
+    ToolErrorThenRecover,
     UnknownTool,
     InvalidArgumentsFormat,
     InvalidSchemaArguments,
@@ -23,6 +24,9 @@ pub(crate) enum FakeScenario {
     GatewayNetworkError,
     LoopCalls,
     AbortDuringModel,
+    InvalidArgumentsDelta,
+    ValidThenInvalidArguments,
+    ValidThenPolicyDenied,
 }
 
 pub(crate) struct FakeGateway {
@@ -69,7 +73,9 @@ fn usage_event() -> ModelEvent {
 
 fn tool_calls_for(scenario: FakeScenario) -> Vec<ToolCall> {
     match scenario {
-        FakeScenario::SingleToolThenFinal => vec![call("call-1", "get_date", json!({}))],
+        FakeScenario::SingleToolThenFinal | FakeScenario::ToolErrorThenRecover => {
+            vec![call("call-1", "get_date", json!({}))]
+        }
         FakeScenario::MultipleToolsThenFinal | FakeScenario::TextThenToolsThenFinal => vec![
             call("call-1", "get_date", json!({})),
             call("call-2", "get_version", json!({})),
@@ -102,6 +108,7 @@ impl ModelGateway for FakeGateway {
             FakeScenario::SingleToolThenFinal
             | FakeScenario::MultipleToolsThenFinal
             | FakeScenario::TextThenToolsThenFinal
+            | FakeScenario::ToolErrorThenRecover
                 if turn == 1 =>
             {
                 if scenario == FakeScenario::TextThenToolsThenFinal {
@@ -125,6 +132,15 @@ impl ModelGateway for FakeGateway {
             | FakeScenario::TextThenToolsThenFinal => {
                 on_event(ModelEvent::TextDelta {
                     text: "final after tools".to_string(),
+                })?;
+                on_event(usage_event())?;
+                on_event(ModelEvent::Completed {
+                    reason: ModelFinishReason::Stop,
+                })?;
+            }
+            FakeScenario::ToolErrorThenRecover => {
+                on_event(ModelEvent::TextDelta {
+                    text: "recovered final answer".to_string(),
                 })?;
                 on_event(usage_event())?;
                 on_event(ModelEvent::Completed {
@@ -188,6 +204,54 @@ impl ModelGateway for FakeGateway {
                 })?;
                 request.cancellation.request();
                 return Ok(ModelTurnOutcome { aborted: true });
+            }
+            FakeScenario::InvalidArgumentsDelta => {
+                on_event(ModelEvent::ToolCall {
+                    call: call("call-1", "get_date", json!({})),
+                })?;
+                on_event(ModelEvent::ToolCallArgumentsDelta {
+                    tool_call_id: "call-1".to_string(),
+                    delta: "{broken".to_string(),
+                })?;
+                on_event(ModelEvent::Completed {
+                    reason: ModelFinishReason::ToolCalls,
+                })?;
+            }
+            FakeScenario::ValidThenInvalidArguments if turn == 1 => {
+                on_event(ModelEvent::ToolCall {
+                    call: call("call-1", "get_date", json!({})),
+                })?;
+                on_event(ModelEvent::Completed {
+                    reason: ModelFinishReason::ToolCalls,
+                })?;
+            }
+            FakeScenario::ValidThenInvalidArguments => {
+                on_event(ModelEvent::ToolCall {
+                    call: call("call-invalid-2", "get_date", json!(["not", "an", "object"])),
+                })?;
+                on_event(ModelEvent::Completed {
+                    reason: ModelFinishReason::ToolCalls,
+                })?;
+            }
+            FakeScenario::ValidThenPolicyDenied if turn == 1 => {
+                on_event(ModelEvent::ToolCall {
+                    call: call("call-1", "get_date", json!({})),
+                })?;
+                on_event(ModelEvent::Completed {
+                    reason: ModelFinishReason::ToolCalls,
+                })?;
+            }
+            FakeScenario::ValidThenPolicyDenied => {
+                on_event(ModelEvent::ToolCall {
+                    call: call(
+                        "call-denied-2",
+                        "read_web",
+                        json!({"url": "https://example.com"}),
+                    ),
+                })?;
+                on_event(ModelEvent::Completed {
+                    reason: ModelFinishReason::ToolCalls,
+                })?;
             }
         }
 
