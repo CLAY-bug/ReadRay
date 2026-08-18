@@ -70,6 +70,10 @@ struct ToolCallState {
 pub(crate) struct DeepSeekChatGateway {
     model: String,
     operation: String,
+    output_json_object: bool,
+    disable_thinking: bool,
+    max_tokens: u16,
+    temperature: f32,
     streamer: Box<dyn ChatCompletionStreamer>,
     record_usage: Box<dyn Fn(&ModelUsage) -> Result<(), String> + Send + Sync>,
     resolve_api_key: Box<dyn Fn() -> Result<String, AgentError> + Send + Sync>,
@@ -78,20 +82,41 @@ pub(crate) struct DeepSeekChatGateway {
 
 impl DeepSeekChatGateway {
     pub(crate) fn new(model: impl Into<String>, app: Option<&AppHandle>) -> Self {
+        Self::for_surface(
+            model,
+            app,
+            "DeepSeek Quick AI Agent",
+            ModelUsageCategory::QuickAi,
+            false,
+        )
+    }
+
+    /// 面向指定业务面的构造：不同 surface（写作 vs 对话）使用各自的使用量分类、
+    /// 诊断操作名与 JSON 输出强制，但共享同一 ModelGateway / DeepSeekChatGateway
+    /// 内核。`output_json_object` 为 true 时请求体带
+    /// `response_format: {"type":"json_object"}`，供写作检查/问答这类依赖结构化
+    /// JSON 的 surface 使用（对话是自由文本，保持 false）。
+    pub(crate) fn for_surface(
+        model: impl Into<String>,
+        app: Option<&AppHandle>,
+        operation: impl Into<String>,
+        category: ModelUsageCategory,
+        output_json_object: bool,
+    ) -> Self {
         let app = app.cloned();
         Self {
             model: model.into(),
-            operation: "DeepSeek Quick AI Agent".to_string(),
+            operation: operation.into(),
+            output_json_object,
+            disable_thinking: false,
+            max_tokens: AGENT_MAX_TOKENS,
+            temperature: AGENT_TEMPERATURE,
             streamer: Box::new(DeepSeekTransport),
             record_usage: Box::new(move |usage| {
                 let Some(app) = &app else {
                     return Ok(());
                 };
-                record_for_app(
-                    app,
-                    ModelUsageCategory::QuickAi,
-                    usage_to_token_usage(usage),
-                )
+                record_for_app(app, category, usage_to_token_usage(usage))
             }),
             resolve_api_key: Box::new(|| {
                 crate::secret_store::deepseek_api_key_state()
@@ -114,6 +139,24 @@ impl DeepSeekChatGateway {
         }
     }
 
+    /// 覆盖本 surface 的生成参数（max_tokens / temperature）。写作面使用与
+    /// 已验证的旧写作请求一致的参数（4096 / 0.2）：推理模型在更大输出预算下
+    /// 可能把预算全烧在 reasoning_content 上导致正文为空。
+    pub(crate) fn with_generation_params(mut self, max_tokens: u16, temperature: f32) -> Self {
+        self.max_tokens = max_tokens;
+        self.temperature = temperature;
+        self
+    }
+
+    /// 关闭思考模式（`thinking: {"type":"disabled"}`）。结构化 JSON 面（写作
+    /// 检查/问答、解释卡）必须关闭：`deepseek-v4-flash` 开启思考时会在长文章
+    /// 分析任务上把全部输出预算烧在 reasoning_content 上，正文为空
+    /// （finish=Length, content_chars=0）。
+    pub(crate) fn with_thinking_disabled(mut self) -> Self {
+        self.disable_thinking = true;
+        self
+    }
+
     #[cfg(test)]
     pub(crate) fn with_streamer(
         model: impl Into<String>,
@@ -123,6 +166,10 @@ impl DeepSeekChatGateway {
         Self {
             model: model.into(),
             operation: "fake-deepseek-gateway".to_string(),
+            output_json_object: false,
+            disable_thinking: false,
+            max_tokens: AGENT_MAX_TOKENS,
+            temperature: AGENT_TEMPERATURE,
             streamer,
             record_usage,
             resolve_api_key: Box::new(|| Ok("test-api-key".to_string())),
@@ -144,7 +191,15 @@ impl ModelGateway for DeepSeekChatGateway {
         on_event: &mut dyn FnMut(ModelEvent) -> Result<(), AgentError>,
     ) -> Result<ModelTurnOutcome, AgentError> {
         let api_key = (self.resolve_api_key)()?;
-        let request_body = build_chat_request_body(&self.model, &request.messages, &request.tools);
+        let request_body = build_chat_request_body(
+            &self.model,
+            &request.messages,
+            &request.tools,
+            self.output_json_object,
+            self.disable_thinking,
+            self.max_tokens,
+            self.temperature,
+        );
         let operation = self.operation.clone();
         let deadline_unix_ms = request.deadline_unix_ms;
         let cancellation = request.cancellation.clone();
@@ -164,6 +219,12 @@ impl ModelGateway for DeepSeekChatGateway {
             let mut tool_states: BTreeMap<usize, ToolCallState> = BTreeMap::new();
             let mut finish_reason = ModelFinishReason::Stop;
             let mut aborted = false;
+            // 写作面诊断：累计 content/reasoning 字符与开头片段，定位"纯推理零
+            // 内容"（模型把输出预算烧在 reasoning_content 上、正文为空）。
+            let mut content_chars: usize = 0;
+            let mut reasoning_chars: usize = 0;
+            let mut content_head = String::new();
+            let mut reasoning_head = String::new();
 
             while let Some(chunk) = stream.next().await {
                 if cancellation.is_requested() {
@@ -183,6 +244,10 @@ impl ModelGateway for DeepSeekChatGateway {
                     )
                 })?;
                 if !chunk.delta.is_empty() {
+                    content_chars += chunk.delta.chars().count();
+                    if content_head.chars().count() < 160 {
+                        content_head.push_str(&chunk.delta);
+                    }
                     on_event(ModelEvent::TextDelta {
                         text: chunk.delta.clone(),
                     })
@@ -190,6 +255,10 @@ impl ModelGateway for DeepSeekChatGateway {
                 }
                 if let Some(reasoning) = chunk.reasoning {
                     // 私有推理只留在内存 continuation，绝不投影为 AgentEvent。
+                    reasoning_chars += reasoning.chars().count();
+                    if reasoning_head.chars().count() < 160 {
+                        reasoning_head.push_str(&reasoning);
+                    }
                     self.continuation.private_reasoning = Some(reasoning.clone());
                     on_event(ModelEvent::ReasoningDelta { text: reasoning })
                         .map_err(propagate_sink_error)?;
@@ -241,6 +310,26 @@ impl ModelGateway for DeepSeekChatGateway {
                         other => ModelFinishReason::Provider(other.to_string()),
                     };
                 }
+            }
+
+            // 写作面（强制 JSON 输出）"正文为空"诊断：finish_reason + 字符统计
+            // 定位"预算烧完（length）"与"模型自行停止（stop）"；成功输出正文时
+            // 不打印，保持日志干净。
+            if self.output_json_object && content_chars == 0 {
+                let head = |text: &str| {
+                    let mut head = text.chars().take(160).collect::<String>();
+                    if text.chars().count() > 160 {
+                        head.push('…');
+                    }
+                    head
+                };
+                eprintln!(
+                    "READRAY_JSON_STREAM_DIAG=finish={finish_reason:?} \
+                     content_chars={content_chars} reasoning_chars={reasoning_chars} \
+                     content_head={:?} reasoning_head={:?}",
+                    head(&content_head),
+                    head(&reasoning_head)
+                );
             }
 
             if aborted {
@@ -319,15 +408,27 @@ pub(crate) fn build_chat_request_body(
     model: &str,
     messages: &[ProviderMessage],
     tools: &[ToolSchema],
+    output_json_object: bool,
+    disable_thinking: bool,
+    max_tokens: u16,
+    temperature: f32,
 ) -> Value {
     let mut body = json!({
         "model": model,
         "messages": messages.iter().map(project_message).collect::<Vec<_>>(),
         "stream": true,
         "stream_options": { "include_usage": true },
-        "max_tokens": AGENT_MAX_TOKENS,
-        "temperature": AGENT_TEMPERATURE,
+        "max_tokens": max_tokens,
+        "temperature": temperature,
     });
+    if output_json_object {
+        body["response_format"] = json!({ "type": "json_object" });
+    }
+    if disable_thinking {
+        // 结构化 JSON 面关闭思考模式（与解释卡路径一致）：推理模型在长文章
+        // 分析任务上会把全部输出预算烧在 reasoning_content 上、正文为空。
+        body["thinking"] = json!({ "type": "disabled" });
+    }
     if !tools.is_empty() {
         body["tools"] = json!(tools.iter().map(project_tool).collect::<Vec<_>>());
     }
@@ -439,8 +540,15 @@ mod tests {
             },
             ProviderMessage::Tool { result },
         ];
-        let body =
-            build_chat_request_body("deepseek-v4-flash", &messages, &[tool_schema("get_date")]);
+        let body = build_chat_request_body(
+            "deepseek-v4-flash",
+            &messages,
+            &[tool_schema("get_date")],
+            false,
+            false,
+            AGENT_MAX_TOKENS,
+            AGENT_TEMPERATURE,
+        );
 
         assert_eq!(body["model"], "deepseek-v4-flash");
         assert_eq!(body["stream"], true);
@@ -473,7 +581,15 @@ mod tests {
             content: "previous answer".into(),
             tool_calls: Vec::new(),
         }];
-        let body = build_chat_request_body("deepseek-v4-flash", &messages, &[]);
+        let body = build_chat_request_body(
+            "deepseek-v4-flash",
+            &messages,
+            &[],
+            false,
+            false,
+            AGENT_MAX_TOKENS,
+            AGENT_TEMPERATURE,
+        );
         let assistant = &body["messages"][0];
         assert_eq!(assistant["role"], "assistant");
         assert_eq!(assistant["content"], "previous answer");
@@ -481,6 +597,72 @@ mod tests {
             assistant.get("tool_calls").is_none(),
             "空 tool_calls 不得投影为 tool_calls 键：{assistant}"
         );
+    }
+
+    #[test]
+    fn request_body_emits_json_object_only_when_requested() {
+        // 回归：写作检查/问答依赖结构化 JSON，必须带 response_format json_object
+        // 强制模型输出正文（推理模型"纯推理零内容"会触发 ProviderProtocolError）；
+        // 对话自由文本面保持不带，避免改变已验证的对话请求形状。
+        let messages = vec![ProviderMessage::User {
+            content: "hello".into(),
+        }];
+        let plain = build_chat_request_body(
+            "deepseek-v4-flash",
+            &messages,
+            &[],
+            false,
+            false,
+            AGENT_MAX_TOKENS,
+            AGENT_TEMPERATURE,
+        );
+        assert!(
+            plain.get("response_format").is_none(),
+            "自由文本请求不应带 response_format：{plain}"
+        );
+        assert!(
+            plain.get("thinking").is_none(),
+            "自由文本请求不应关闭思考模式：{plain}"
+        );
+        let json = build_chat_request_body(
+            "deepseek-v4-flash",
+            &messages,
+            &[],
+            true,
+            true,
+            AGENT_MAX_TOKENS,
+            AGENT_TEMPERATURE,
+        );
+        assert_eq!(
+            json["response_format"],
+            json!({"type": "json_object"}),
+            "JSON 面必须带 response_format：{json}"
+        );
+        assert_eq!(
+            json["thinking"],
+            json!({"type": "disabled"}),
+            "JSON 面必须关闭思考模式：{json}"
+        );
+    }
+
+    #[test]
+    fn request_body_uses_surface_generation_params() {
+        // 写作面使用与已验证旧写作请求一致的生成参数（4096 / 0.2），防止推理
+        // 模型把输出预算全烧在 reasoning_content 上导致正文为空。
+        let messages = vec![ProviderMessage::User {
+            content: "hello".into(),
+        }];
+        let body = build_chat_request_body(
+            "deepseek-v4-flash",
+            &messages,
+            &[],
+            false,
+            false,
+            4_096,
+            0.2,
+        );
+        assert_eq!(body["max_tokens"], json!(4_096));
+        assert_eq!(body["temperature"], json!(0.2_f32));
     }
 
     #[test]
@@ -513,7 +695,15 @@ mod tests {
                 content: "当前 pending 问题".into(),
             },
         ];
-        let body = build_chat_request_body("deepseek-v4-flash", &messages, &[]);
+        let body = build_chat_request_body(
+            "deepseek-v4-flash",
+            &messages,
+            &[],
+            false,
+            false,
+            AGENT_MAX_TOKENS,
+            AGENT_TEMPERATURE,
+        );
         let projected = &body["messages"];
 
         // 只有一条 system（主系统提示词），中间没有第二条 system。

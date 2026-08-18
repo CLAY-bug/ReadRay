@@ -1029,6 +1029,7 @@ pub fn run() {
             writing::continue_writing_document,
             writing::analyze_writing_document,
             writing::ask_writing_question,
+            writing::abort_writing_analysis,
             desktop_lifecycle::request_app_exit,
             desktop_lifecycle::get_pending_app_exit_request,
             desktop_lifecycle::restore_main_window,

@@ -1,4 +1,7 @@
-import type { WritingQuestionCommand } from "./writingRepository";
+import type {
+  WritingQuestionCommand,
+  WritingStreamEvent,
+} from "./writingRepository";
 import type { WritingService } from "./writingService";
 import {
   emptyWritingSnapshot,
@@ -153,7 +156,11 @@ class BrowserPreviewWritingService implements WritingService {
     return true;
   }
 
-  async analyzeDocument(documentId: number, expectedRevision: number) {
+  async analyzeDocument(
+    documentId: number,
+    expectedRevision: number,
+    _onEvent: (event: WritingStreamEvent) => void,
+  ) {
     const record = this.requiredRevision(documentId, expectedRevision);
     const snapshot = record.draftSnapshot;
     if (!snapshot) {
@@ -202,7 +209,10 @@ class BrowserPreviewWritingService implements WritingService {
     return clone(record);
   }
 
-  async askQuestion(request: WritingQuestionCommand) {
+  async askQuestion(
+    request: WritingQuestionCommand,
+    _onEvent: (event: WritingStreamEvent) => void,
+  ) {
     const record = this.requiredRevision(
       request.documentId,
       request.expectedRevision,
@@ -234,6 +244,10 @@ class BrowserPreviewWritingService implements WritingService {
     record.answers.push(answer);
     this.write();
     return clone(answer);
+  }
+
+  async abortAnalysis(_documentId: number) {
+    // 非 Tauri 预览没有真实进行中的检查/问答，中止是无操作。
   }
 
   async completeDocument(documentId: number, expectedRevision: number) {

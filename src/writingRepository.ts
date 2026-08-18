@@ -1,4 +1,4 @@
-import { invoke } from "@tauri-apps/api/core";
+import { Channel, invoke } from "@tauri-apps/api/core";
 import type {
   WritingAgentAnswer,
   WritingAnalysis,
@@ -17,6 +17,14 @@ export type WritingQuestionCommand = {
   selectionText?: string;
   parentAnswerId?: number;
 };
+
+/// 写作流式进度/终态事件（Rust 侧 `WritingStreamEvent` 的镜像）。检查/问答输出
+/// 结构化 JSON，不逐字流式渲染；前端只展示友好进度与终态。
+export type WritingStreamEvent =
+  | { type: "status"; label: string }
+  | { type: "done" }
+  | { type: "stopped" }
+  | { type: "error"; message: string };
 
 export type WritingDocumentSummaryPayload = Omit<
   WritingDocumentSummary,
@@ -73,8 +81,13 @@ export interface WritingRepository {
   analyze(
     documentId: number,
     expectedRevision: number,
+    onEvent: (event: WritingStreamEvent) => void,
   ): Promise<WritingDocumentPayload>;
-  ask(request: WritingQuestionCommand): Promise<WritingAgentAnswerPayload>;
+  ask(
+    request: WritingQuestionCommand,
+    onEvent: (event: WritingStreamEvent) => void,
+  ): Promise<WritingAgentAnswerPayload>;
+  abort(documentId: number): Promise<void>;
   complete(
     documentId: number,
     expectedRevision: number,
@@ -136,16 +149,32 @@ export class TauriWritingRepository implements WritingRepository {
     });
   }
 
-  analyze(documentId: number, expectedRevision: number) {
+  analyze(
+    documentId: number,
+    expectedRevision: number,
+    onEvent: (event: WritingStreamEvent) => void,
+  ) {
+    const channel = new Channel<WritingStreamEvent>(onEvent);
     return this.invokeCommand<WritingDocumentPayload>(
       "analyze_writing_document",
-      { documentId, expectedRevision },
+      { documentId, expectedRevision, channel },
     );
   }
 
-  ask(request: WritingQuestionCommand) {
-    return this.invokeCommand<WritingAgentAnswerPayload>("ask_writing_question", {
-      request,
+  ask(
+    request: WritingQuestionCommand,
+    onEvent: (event: WritingStreamEvent) => void,
+  ) {
+    const channel = new Channel<WritingStreamEvent>(onEvent);
+    return this.invokeCommand<WritingAgentAnswerPayload>(
+      "ask_writing_question",
+      { request, channel },
+    );
+  }
+
+  abort(documentId: number) {
+    return this.invokeCommand<void>("abort_writing_analysis", {
+      documentId,
     });
   }
 

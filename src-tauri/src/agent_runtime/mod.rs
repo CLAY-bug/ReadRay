@@ -18,6 +18,7 @@ pub(crate) mod protocol;
 pub(crate) mod run_repository;
 pub(crate) mod tool;
 pub(crate) mod tool_schema;
+pub(crate) mod writing_surface;
 
 #[cfg(test)]
 pub(crate) mod fake_gateway;

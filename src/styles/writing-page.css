@@ -266,6 +266,16 @@
   animation: rr-writing-breathe 900ms ease-in-out infinite alternate;
 }
 
+.rr-writing-check-stopped {
+  color: var(--rr-writing-muted);
+  font-size: 13px;
+  line-height: 1.2;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 200px;
+}
+
 @keyframes rr-writing-breathe {
   from { opacity: 0.35; transform: scale(0.8); }
   to { opacity: 1; transform: scale(1.2); }

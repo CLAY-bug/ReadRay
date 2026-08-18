@@ -179,6 +179,9 @@ function WritingPage({
     useState<WritingSaveState>("saved");
   const [saveError, setSaveError] = useState<string>();
   const [checking, setChecking] = useState(false);
+  const [checkingLabel, setCheckingLabel] = useState("检查中…");
+  const [checkingStopped, setCheckingStopped] = useState(false);
+  const checkingStoppedRef = useRef(false);
   const [busyAction, setBusyAction] = useState<
     "create" | "open" | "complete" | "continue" | undefined
   >();
@@ -404,6 +407,9 @@ function WritingPage({
   ) {
     localEditGenerationRef.current += 1;
     questionSequenceRef.current.invalidate();
+    setChecking(false);
+    setCheckingStopped(false);
+    checkingStoppedRef.current = false;
     saveCoordinatorRef.current?.register(document);
     activeDocumentRef.current = document;
     setActiveDocument(document);
@@ -815,6 +821,9 @@ function WritingPage({
       return;
     }
     setChecking(true);
+    setCheckingLabel("检查中…");
+    setCheckingStopped(false);
+    checkingStoppedRef.current = false;
     clearOperationError();
     try {
       if (!(await flushActiveDraft())) {
@@ -837,7 +846,13 @@ function WritingPage({
       const analyzed = await runGuardedWritingRequest(
         captured,
         () => currentVisibleIdentity(document.id),
-        service.analyzeDocument(document.id, revision),
+        service.analyzeDocument(document.id, revision, (event) => {
+          if (event.type === "status") {
+            setCheckingLabel(event.label);
+          } else if (event.type === "stopped") {
+            checkingStoppedRef.current = true;
+          }
+        }),
         "写作检查",
         async (result) => {
           if (activeDocumentRef.current?.id === result.id) {
@@ -863,10 +878,28 @@ function WritingPage({
       setAssistOpen(false);
       setMode("review");
     } catch (error) {
-      showOperationError(error, () => void beginReview());
+      if (checkingStoppedRef.current) {
+        // 用户主动放弃：诚实提示可重新检查，不弹阻塞式重试对话框。
+        setOperationError(undefined);
+        operationRetryRef.current = undefined;
+        setCheckingStopped(true);
+      } else {
+        showOperationError(error, () => void beginReview());
+      }
     } finally {
       setChecking(false);
     }
+  }
+
+  function abandonCheck() {
+    const document = activeDocumentRef.current;
+    if (!service || !document || !checking) {
+      return;
+    }
+    // 触发 Rust 侧中止标志；等待 invoke 以 Stopped 收尾。
+    void service.abortAnalysis(document.id).catch(() => {
+      /* 放弃不等待确认 */
+    });
   }
 
   function openAgent({
@@ -912,12 +945,17 @@ function WritingPage({
     const answer = await runGuardedWritingRequest(
       captured,
       () => currentVisibleIdentity(document.id),
-      service.askQuestion({
-        documentId: document.id,
-        expectedRevision: revision,
-        versionId: captured.versionId,
-        ...request,
-      }),
+      service.askQuestion(
+        {
+          documentId: document.id,
+          expectedRevision: revision,
+          versionId: captured.versionId,
+          ...request,
+        },
+        // 问答经共享 Runtime 执行并提供取消/状态能力；助手面板默认保持
+        // 简洁等待，这里暂不消费中间状态。
+        () => {},
+      ),
       "写作问答",
     );
     questionSequenceRef.current.requireCurrent(requestSequence);
@@ -1315,20 +1353,27 @@ function WritingPage({
             </button>
           </span>
           {mode === "draft" ? (
-            <button
-              className={`rr-writing-btn is-secondary${
-                checking ? " is-checking" : ""
-              }`}
-              type="button"
-              disabled={checking}
-              onClick={() => void beginReview()}
-            >
-              <span
-                className="rr-writing-check-dot"
-                aria-hidden="true"
-              />
-              {checking ? "检查中…" : "检查文章"}
-            </button>
+            <>
+              <button
+                className={`rr-writing-btn is-secondary${
+                  checking ? " is-checking" : ""
+                }`}
+                type="button"
+                title={checking ? "停止检查" : undefined}
+                onClick={() => (checking ? abandonCheck() : void beginReview())}
+              >
+                <span
+                  className="rr-writing-check-dot"
+                  aria-hidden="true"
+                />
+                {checking ? checkingLabel : "检查文章"}
+              </button>
+              {checkingStopped && !checking ? (
+                <span className="rr-writing-check-stopped">
+                  检查已停止，可重新检查
+                </span>
+              ) : null}
+            </>
           ) : null}
           {mode === "review" ? (
             <button
