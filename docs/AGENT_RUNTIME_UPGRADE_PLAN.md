@@ -2,7 +2,7 @@
 
 最后更新：2026-08-18
 
-状态：任务 0/1/2/3/4/5 已完成并通过评审（任务 3/4/5 已正式收口，任务 3/4 含真实 Tauri 使用验收）；下一步进入任务 6
+状态：任务 0/1/2/3/4/5/6 全部完成并通过评审（任务 3/4/5/6 已正式收口，任务 3/4 含真实 Tauri 使用验收）；阶段八点五 Agent Runtime 升级完成，等待合入 main
 
 ## 1. 文档定位
 
@@ -1014,6 +1014,25 @@ ReadRay 是文字阅读/学习工具（非 coding agent），对话 token 增长
 - Agent 建议不会被冒充为用户独立写作，也不会自动写入学习者能力证据。
 - 现有写作创建、保存、分析、问答、完成、版本回看和继续修改回归通过。
 
+#### 范围决策（2026-08-18 用户确认）
+
+任务 6 在"接入 Runtime"之外合并两项产品体验收敛（用户对现有写作检查的反馈）：
+
+- **解决"检查慢"**：接入 Runtime 后引入流式进度状态 + 可取消，让用户不再干等。Writing 检查输出仍是结构化 JSON（issues/patterns），**不做逐字流式渲染**——流式的价值在"可取消 + 实时友好状态"，不在"逐字冒字"。同时收紧 prompt（字段长度上限、典型 4-6 个问题）缩短实际输出耗时。
+- **修正检查方式（B(1)，只改 prompt 语义，不动 schema/不迁移）**：检查先抓明显语法问题；表达类问题由模型**从文章内容推断场景**（学术/求职/商务/口语/日常等），给出"一个针对场景的判断 + 一条建议"（reference 字段），**不并列"正式/地道"两个选项**；仅当确有必要时才给表达建议。
+- **不新增"放弃"按钮**：中止能力并入原检查按钮（检查中点击即停止，title 提示"停止检查"），符合用户"不增加按钮"的既有偏好。
+
+#### 实施/评审记录（任务 6，2026-08-18）
+
+- **共享内核接入**：新增 `writing_surface.rs`（WritingSurfaceAdapter，91 行最小适配层：只投影 `[System, User]` 与写作专属空工具集，不复制 loop/gateway/registry）；`writing.rs` 的分析/问答从旧非流式 `post_tracked_chat_completion` 改为经 `AgentRunCoordinator` + `DeepSeekChatGateway::for_surface` + `WritingSurfaceAdapter` 驱动，最终仍收口结构化 JSON，经 `parse_writing_analysis_content_salvage` 校验与 `save_analysis_if_current` 的 expectedRevision 事务保存（写作权威保留）。
+- **JSON 面参数**：gateway 增加 `for_surface(operation, category, output_json_object)` 与 `with_generation_params`/`with_thinking_disabled`；写作面强制 `response_format: json_object` + 关闭思考 + 4096/0.2（与已验证旧参数一致）。真实联调发现：`deepseek-v4-flash` 开启思考时会把全部输出预算烧在 `reasoning_content` 上、正文为空（finish=Length, content_chars=0），故结构化 JSON 面必须关闭思考，并加 `READRAY_JSON_STREAM_DIAG` 诊断日志。
+- **流式状态与取消**：`WritingStreamEvent` 协议（status/done/stopped/error）；`WritingUiSink` 把 AgentEvent 确定性投影为友好进度（"正在检查语法…/正在判断表达是否地道、更正式…/正在整理检查结果…"）；按 document_id 键控 abort flag + `abort_writing_analysis` command；前端检查按钮 checking 时显示进度文案、title"停止检查"、点击中止（删除单独的"放弃"按钮）。
+- **prompt 语义修正（B(1)）**：`writing_analysis_system_prompt` 重写——先抓明显语法问题；表达类由模型推断场景、给单条场景判断建议（不并列两个选项）；强化逐字复制（source/targetText 必须原文逐字、改写只进 reference、找不到精确匹配就放弃该问题、标题不属于检查正文）；输出精炼（字段长度上限）但**不得漏报**（漏报真实问题比多报更糟，学习者草稿典型 4-6 个真实问题，空数组仅当文章确实无可挑剔）；issues 为空或极少时仍给 1-2 条真实可迁移写作要点。
+- **诚实部分成功**：`parse_writing_analysis_content_salvage` 丢弃无法在正文中逐字定位的个别问题（记 `READRAY_WRITING_ANALYSIS_DROPPED` 日志）、保留合法问题保存，避免"一条坏问题整次检查作废"；没有任何合法问题时仍按失败处理（不伪装成功）。
+- **验证**：Rust lib 405/0（新增 13：surface 工具集/能力/transcript、gateway JSON 面参数与思考开关、salvage 三态、prompt 语义断言、digest 稳定性、abort 共享、UI sink 投影、写作流式事件协议）、cargo check 0 警告、cargo fmt 通过；前端 writing 30/30 与其他套件全绿（conversation 38/settings 57/overlay 20/review 50/startup 3）、`pnpm build`、tsc 通过。未运行 live 测试；真实 Tauri 人工验收由用户进行。
+- **评审修复轮（2026-08-18，已复审通过）**：① `parse_writing_analysis_content` 死代码警告——加 `#[cfg(test)]`；② 检查"慢"的 prompt 收紧误伤——初版 "aim for 3 to 5 high-value issues, never padding" 高门槛措辞导致模型对真实文章返回空 issues（用户实测 "What is Love ?" 检查后 0 个问题），改为"漏报比多报糟、典型 4-6 个、空数组仅当无可挑剔（罕见）"并保证空 issues 时仍给 1-2 条可迁移要点；③ 删除检查进行中的"放弃"按钮——中止并入检查按钮（点击停止），不新增按钮。
+- **已知问题（2026-08-18 记录，暂不处理）**：写作检查在真实使用中（示例文章 "What is Love ?"）曾返回 **0 个问题**，用户感知"和没审查一样"。评审修复轮已强化 prompt 措辞（漏报比多报糟 + 空 issues 仍给要点），但**未经真实 Tauri 复验**；若复验仍报 0 个或检查质量/耗时不满意，后续需重新评估关闭思考模式对检查质量的影响（可能需为写作面单独评估 thinking 参数或模型路径）。已作为已知边界记录，不阻塞任务 6 收口。
+
 ## 20. 测试策略
 
 ### 离线单元测试
@@ -1147,7 +1166,7 @@ late_event_after_new_run
 5. 更新本文任务状态和必要的恢复文档。
 6. 停止等待用户确认，再进入下一任务。
 
-任务 0/1/2/3/4/5 已通过评审（任务 3/4/5 已正式收口，任务 3/4 含真实 Tauri 人工验收；任务 5 为预算驱动长上下文投影 + 方案 A 最简折叠兜底，见任务 5 实施记录），当前实施入口为任务 6 Writing Coach 适配。任务 4 完成前不开放 steering/follow-up 与截断继续；"编辑并重新生成"已按 §18.4 覆盖式语义正式开放（不物理覆盖旧问题/旧回答），截断继续已由任务 5 的诚实截断提示 + 折叠兜底承接。Web Search 已通过 Wikipedia provider 开放给真实会话（覆盖范围以工具描述为准）。Writing Coach 必须等通用对话 Runtime、自动联网与长上下文完成各自验收后再进入（任务 6 入口即此）。
+任务 0/1/2/3/4/5/6 已全部通过评审并正式收口（任务 3/4 含真实 Tauri 人工验收；任务 5 为预算驱动长上下文投影 + 方案 A 最简折叠兜底；任务 6 Writing Coach 已接入共享 Runtime 并保留写作权威，见实施记录），**阶段八点五 Agent Runtime 升级全部完成**。任务 4 的"编辑并重新生成"已按 §18.4 覆盖式语义正式开放（不物理覆盖旧问题/旧回答）；Web Search 已通过 Wikipedia provider 开放给真实会话（覆盖范围以工具描述为准）；Writing Coach 检查/问答已复用同一 Runtime 内核（写作专属空工具集，默认不联网）。已知问题：写作检查曾返回 0 个问题（见任务 6 实施记录），待后续真实复验与处理，不阻塞整体合入 main。
 
 ## 26. 研究来源
 
