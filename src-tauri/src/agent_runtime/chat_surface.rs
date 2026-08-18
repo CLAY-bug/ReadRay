@@ -21,14 +21,33 @@ use crate::agent_runtime::tool::{
     CapabilityPolicy, RiskLevel, ToolDefinition, ToolRegistry, ToolSchema,
 };
 use crate::conversations::{
-    ConversationRole, ConversationSnapshot, ConversationStore, PreparedTurn,
+    ConversationMessage, ConversationRole, ConversationSnapshot, ConversationStore, PreparedTurn,
 };
 use crate::learning_records::unix_time_ms;
 use serde_json::{json, Value};
 use std::sync::atomic::{AtomicU64, Ordering};
 
-/// 与既有 Quick AI 上下文窗口一致（quick_ai.rs 私有常量）。
-const MAX_CONTEXT_MESSAGES: usize = 40;
+/// 长上下文投影预算（任务 5，方案 A）。
+///
+/// 把固定 40 条消息窗口改为 token/字符预算驱动：为每条消息估算 token（字符数
+/// 除以 4 的近似），从尾部向前累积完整尾部，直到接近 `CONTEXT_BUDGET_TOKENS`
+/// 为止；投影永远从尾部向下保留、始终包含当前 pending user。真正的折叠兜底只在
+/// 对话逼近窗口上限（1M 留足余量）时才触发，把最旧一段折叠成
+/// `CompactionSummary` 极简摘要插入投影；摘要只存在投影/内存层，不落库、不进
+/// 学习者记忆，原始消息永不删除。
+///
+/// DeepSeek V4 上下文窗口为 1M tokens；正常阅读型对话增长慢，几乎吃不满窗口，
+/// 因此这里只做"让用户永远感受不到限制"的最简兜底，不做完整 compaction 子系统。
+const DEEPSEEK_WINDOW_TOKENS: u64 = 1_000_000;
+/// 窗口安全余量：为非历史部分（系统提示词、工具 schema、预算未消化的输出、
+/// 估计误差）留足空间，避免投影把真实窗口撑爆。
+const WINDOW_SAFETY_MARGIN_TOKENS: u64 = 50_000;
+/// 投影总 token 预算 = 窗口 − 余量。
+const CONTEXT_BUDGET_TOKENS: u64 = DEEPSEEK_WINDOW_TOKENS - WINDOW_SAFETY_MARGIN_TOKENS;
+/// 折叠摘要最多保留折叠段里最近几条 user 消息的简短摘录。
+const COMPACTION_SUMMARY_MAX_USER_EXCERPTS: usize = 3;
+/// 每条 user 摘录的最大字符数。
+const COMPACTION_SUMMARY_EXCERPT_CHARS: usize = 160;
 
 pub(crate) enum ChatPreparedTurn {
     Pending {
@@ -204,37 +223,192 @@ impl ChatSurfaceAdapter {
         )
     }
 
-    /// 会话快照 → provider 消息投影（system + 最近完整尾部，从 user 开始）。
+    /// 会话快照 → provider 消息投影。
+    ///
+    /// 预算驱动的长上下文投影（任务 5，方案 A）：
+    /// 1. 系统提示词 + 完整历史在预算内 → 直接投影全部（正常对话几乎都走这里）；
+    /// 2. 超出预算 → 从尾部向前累积能放下的最近完整尾部，永远保留当前 pending
+    ///    user、永不从开头断；
+    /// 3. 折叠兜底 → 被丢弃的最旧一段折叠成一条 `CompactionSummary` 极简摘要插入
+    ///    投影，对话无缝继续；折叠只影响本投影，不写回用户可见 transcript。
+    ///
+    /// 折叠摘要生成失败时安全回退为"投影当前能放下的最近完整尾部"。
     pub(crate) fn transcript(
         &self,
         snapshot: &ConversationSnapshot,
         facts: &RuntimeFacts,
         active_tools: &[ToolSchema],
     ) -> Vec<ProviderMessage> {
-        let mut messages = vec![ProviderMessage::System {
+        let system = ProviderMessage::System {
             content: ContextAssembler::default().system_prompt(facts, active_tools),
-        }];
+        };
+        let system_tokens = estimate_message_tokens(&system);
         let history = &snapshot.messages;
-        let mut start = history.len().saturating_sub(MAX_CONTEXT_MESSAGES);
-        if matches!(
-            history.get(start).map(|message| message.role),
-            Some(ConversationRole::Assistant)
-        ) {
-            start += 1;
+
+        // 正常快速路径：完整历史 + 系统在预算内，直接全部投影。
+        let full_history_tokens: u64 = history
+            .iter()
+            .map(|message| estimate_text_tokens(&message.content))
+            .sum();
+        let remaining = CONTEXT_BUDGET_TOKENS.saturating_sub(system_tokens);
+        if full_history_tokens <= remaining {
+            return project_history(vec![system], history, 0);
         }
-        for message in &history[start..] {
-            match message.role {
-                ConversationRole::User => messages.push(ProviderMessage::User {
-                    content: message.content.clone(),
-                }),
-                ConversationRole::Assistant => messages.push(ProviderMessage::Assistant {
-                    content: message.content.clone(),
-                    tool_calls: Vec::new(),
-                }),
+
+        // 超出预算：先取预算内最近完整尾部（始终含 pending user、从 user 起）。
+        let (tail_start, tail_tokens) = max_suffix_fitting(history, remaining);
+        let folded = &history[..tail_start];
+
+        // 折叠兜底（方案 A）：把最旧一段折叠成极简摘要插入投影。方案三——摘要
+        // 作为一条 user 历史消息（措辞标"供参考、以当前对话为准"，不抬成权威），
+        // 在其后补一条空 assistant 保证 user/assistant 交替合法，末尾仍是 pending user。
+        match build_compaction_summary(folded) {
+            Ok(summary) => {
+                let summary_tokens = estimate_message_tokens(&summary);
+                // 摘要几乎不占预算；系统 + 摘要 + 配对 assistant + 尾部仍须落在
+                // 预算内，否则安全回退为只投影最近完整尾部。
+                let tail_remaining = remaining.saturating_sub(summary_tokens + 2);
+                if tail_tokens <= tail_remaining {
+                    let mut messages = Vec::with_capacity(3 + (history.len() - tail_start));
+                    messages.push(system);
+                    messages.push(summary);
+                    // 空 assistant：作为摘要 user 的配对（project_message 对空
+                    // tool_calls 按任务 3 约定省略该键），使后续 history user 不孤悬。
+                    messages.push(ProviderMessage::Assistant {
+                        content: String::new(),
+                        tool_calls: Vec::new(),
+                    });
+                    return project_history(messages, history, tail_start);
+                } else {
+                    // 摘要+配对+尾部仍超预算：安全回退为只投影能放下的最近完整尾部。
+                    return project_history(vec![system], history, tail_start);
+                }
             }
+            // 折叠失败安全回退：投影当前能放下的最近完整尾部，不假装成功。
+            Err(_) => project_history(vec![system], history, tail_start),
         }
-        messages
     }
+}
+
+/// 估算一段文本的 token 数：字符数除以 4 的近似（向上取整，保守不低估）。
+fn estimate_text_tokens(content: &str) -> u64 {
+    let chars = content.chars().count() as u64;
+    chars.div_ceil(4)
+}
+
+/// 估算一条 provider 消息的 token 数（内容 + 角色开销近似）。
+fn estimate_message_tokens(message: &ProviderMessage) -> u64 {
+    let content_tokens: u64 = match message {
+        ProviderMessage::System { content }
+        | ProviderMessage::User { content }
+        | ProviderMessage::CompactionSummary { content } => estimate_text_tokens(content),
+        ProviderMessage::Assistant {
+            content,
+            tool_calls,
+        } => {
+            let call_tokens: u64 = tool_calls
+                .iter()
+                .map(|call| {
+                    serde_json::to_vec(&call.arguments)
+                        .map(|bytes| bytes.len() as u64 / 4)
+                        .unwrap_or(0)
+                })
+                .sum();
+            estimate_text_tokens(content) + call_tokens
+        }
+        ProviderMessage::Tool { result } => estimate_text_tokens(&result.content),
+    };
+    // 每条消息少量的角色/结构开销；返回下限为 1，避免全空内容被记为 0。
+    content_tokens + 1
+}
+
+/// 从尾部向前累积，返回能放进 `budget` 的最长完整后缀的起始下标与总 token。
+///
+/// 始终包含最后一条（当前 pending user）；当预算切到的边界落在 assistant 上时，
+/// 丢弃这条孤悬的 assistant，让后缀从 user 开始，保证不破坏 user/assistant 交替。
+fn max_suffix_fitting(history: &[ConversationMessage], budget: u64) -> (usize, u64) {
+    let mut start = history.len();
+    let mut used: u64 = 0;
+    for (index, message) in history.iter().enumerate().rev() {
+        let tokens = estimate_text_tokens(&message.content) + 1;
+        if index == history.len() - 1 {
+            // pending user 永远保留，即使它单独就超出预算。
+            start = index;
+            used += tokens;
+            continue;
+        }
+        if used.saturating_add(tokens) <= budget {
+            start = index;
+            used += tokens;
+        } else {
+            break;
+        }
+    }
+    if start + 1 < history.len() && history[start].role == ConversationRole::Assistant {
+        start += 1;
+    }
+    (start, used)
+}
+
+/// 把最旧一段对话折叠成一条 `CompactionSummary` 极简摘要。
+///
+/// 本实现不调用 LLM（完整 compaction 子系统不在任务 5 范围），而是确定性保留
+/// 折叠段里最近几条 user 问题的简短摘录作为连续性锚，并如实说明有 N 条较早消息
+/// 被折叠——不编造语义总结、不与学习者记忆混用。返回 `Result` 以支持折叠失败
+/// 时的安全回退（任务 5 要求 6）。
+fn build_compaction_summary(folded: &[ConversationMessage]) -> Result<ProviderMessage, String> {
+    if folded.is_empty() {
+        return Err("没有可折叠的最旧消息段。".to_string());
+    }
+    let user_excerpts: Vec<String> = folded
+        .iter()
+        .filter(|message| message.role == ConversationRole::User)
+        .rev()
+        .take(COMPACTION_SUMMARY_MAX_USER_EXCERPTS)
+        .map(|message| {
+            let mut excerpt: String = message
+                .content
+                .chars()
+                .take(COMPACTION_SUMMARY_EXCERPT_CHARS)
+                .collect();
+            if message.content.chars().count() > COMPACTION_SUMMARY_EXCERPT_CHARS {
+                excerpt.push('…');
+            }
+            excerpt
+        })
+        .collect();
+    if user_excerpts.is_empty() {
+        return Err("折叠段没有可保留的用户问题摘录。".to_string());
+    }
+    let mut content = format!(
+        "（较早对话的折叠摘要，仅供回顾参考，以当前对话为准。）较早对话中共 {} 条\
+         消息已压缩成一个摘要；如需更早的细节请直接说明。最近的问题包括：",
+        folded.len()
+    );
+    for (index, excerpt) in user_excerpts.iter().enumerate() {
+        content.push_str(&format!("\n{}. {}", index + 1, excerpt));
+    }
+    Ok(ProviderMessage::CompactionSummary { content })
+}
+
+/// 把 `history[start..]` 投影进 messages（system/summary 已在 messages 前部）。
+fn project_history(
+    mut messages: Vec<ProviderMessage>,
+    history: &[ConversationMessage],
+    start: usize,
+) -> Vec<ProviderMessage> {
+    for message in &history[start..] {
+        match message.role {
+            ConversationRole::User => messages.push(ProviderMessage::User {
+                content: message.content.clone(),
+            }),
+            ConversationRole::Assistant => messages.push(ProviderMessage::Assistant {
+                content: message.content.clone(),
+                tool_calls: Vec::new(),
+            }),
+        }
+    }
+    messages
 }
 
 /// 运行环境事实：UTC 日历时间（诚实标注，不做假时区）、应用版本。
@@ -533,7 +707,6 @@ fn civil_from_days(days_since_epoch: i64) -> (i64, i64, i64) {
 mod tests {
     use super::*;
     use crate::agent_runtime::protocol::AgentErrorKind;
-    use crate::conversations::ConversationMessage;
     use crate::learning_records::open_database;
     use std::fs;
     use std::path::{Path, PathBuf};
@@ -589,8 +762,23 @@ mod tests {
         let _ = fs::remove_dir_all(root);
     }
 
+    fn snapshot_with(history: Vec<ConversationMessage>) -> ConversationSnapshot {
+        ConversationSnapshot {
+            id: 1,
+            title: None,
+            model: "deepseek-v4-flash".to_string(),
+            origin: crate::conversations::ConversationOrigin::Main,
+            created_at_unix_ms: 1,
+            updated_at_unix_ms: 1,
+            messages: history,
+        }
+    }
+
     #[test]
-    fn transcript_projects_system_history_and_truncates_from_user() {
+    fn transcript_projects_all_when_fits_budget_system_first_and_ends_on_pending() {
+        // 正常对话（远小于 1M 窗口）：预算内完整历史全部投影，不做任何截断，
+        // 系统提示词在前、末尾保留当前 pending user。这正是任务要修"从开头断"
+        // 的回归：不再从固定 40 条处截断。
         let (root, path) = test_database_path();
         let mut history = Vec::new();
         for sequence in 1..=41_i64 {
@@ -601,15 +789,49 @@ mod tests {
             };
             history.push(message(role, &format!("message-{sequence}"), sequence));
         }
-        let snapshot = ConversationSnapshot {
-            id: 1,
-            title: None,
-            model: "deepseek-v4-flash".to_string(),
-            origin: crate::conversations::ConversationOrigin::Main,
-            created_at_unix_ms: 1,
-            updated_at_unix_ms: 1,
-            messages: history,
-        };
+        let transcript = adapter(&path).transcript(&snapshot_with(history), &facts(), &[]);
+
+        assert!(matches!(
+            &transcript[0],
+            ProviderMessage::System { content }
+                if content.starts_with("你是 ReadRay")
+        ));
+        // 完整历史全部保留：第一条就是 message-1，不再从 message-3 起截断。
+        assert!(matches!(
+            &transcript[1],
+            ProviderMessage::User { content } if content == "message-1"
+        ));
+        assert!(matches!(
+            transcript.last(),
+            Some(ProviderMessage::User { content }) if content == "message-41"
+        ));
+        // 系统 + 41 条 + （若有折叠摘要）。此处未超预算，不应出现任何摘要。
+        assert!(!transcript
+            .iter()
+            .any(|m| matches!(m, ProviderMessage::CompactionSummary { .. })));
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn transcript_folds_oldest_section_and_keeps_complete_tail_with_pending_user() {
+        // 长对话逼近窗口上限：最旧一段被折叠为 CompactionSummary，投影保留系统
+        // + 摘要 + 能放下的最近完整尾部，末尾仍是当前 pending user；摘要只出现
+        // 在投影中，不写回 snapshot（snapshot 消息数不变）。
+        let (root, path) = test_database_path();
+        let mut history = Vec::new();
+        // 大量长消息把完整历史推到预算之外；每条 ~40k 字符 ≈ 1 万 token。
+        let big = "x".repeat(40_000);
+        // 奇数条保证最后一条（pending）是 user，符合真实会话"末尾为待答问题"。
+        let count = 201_i64;
+        for sequence in 1..=count {
+            let role = if sequence % 2 == 1 {
+                ConversationRole::User
+            } else {
+                ConversationRole::Assistant
+            };
+            history.push(message(role, &format!("{big}-{sequence}"), sequence));
+        }
+        let snapshot = snapshot_with(history.clone());
         let transcript = adapter(&path).transcript(&snapshot, &facts(), &[]);
 
         assert!(matches!(
@@ -617,16 +839,104 @@ mod tests {
             ProviderMessage::System { content }
                 if content.starts_with("你是 ReadRay")
         ));
-        assert!(matches!(
-            &transcript[1],
-            ProviderMessage::User { content } if content == "message-3"
-        ));
+        // 折叠摘要出现，并且措辞诚实、明确标"仅供参考/以当前对话为准"（方案三：
+        // 不把较早内容抬成权威背景），不含与学习者记忆的混用。
+        let summaries: Vec<_> = transcript
+            .iter()
+            .filter(|m| matches!(m, ProviderMessage::CompactionSummary { .. }))
+            .collect();
+        assert_eq!(summaries.len(), 1, "只应有一条折叠摘要");
+        let ProviderMessage::CompactionSummary { content } = &summaries[0] else {
+            unreachable!()
+        };
+        assert!(content.contains("折叠摘要"));
+        assert!(content.contains("较早对话"));
+        assert!(content.contains("仅供回顾参考"));
+        assert!(content.contains("以当前对话为准"));
+        // 方案三 alternation：摘要（user 语义）后紧跟一条空 assistant 配对，使
+        // 后续 history user 不孤悬；末尾始终是当前 pending user。
+        let summary_index = transcript
+            .iter()
+            .position(|m| matches!(m, ProviderMessage::CompactionSummary { .. }))
+            .unwrap();
+        assert!(
+            matches!(
+                transcript.get(summary_index + 1),
+                Some(ProviderMessage::Assistant { tool_calls, .. }) if tool_calls.is_empty()
+            ),
+            "折叠摘要后必须有一条空 assistant 配对以维持 user/assistant 交替"
+        );
         assert!(matches!(
             transcript.last(),
-            Some(ProviderMessage::User { content }) if content == "message-41"
+            Some(ProviderMessage::User { content })
+                if content.ends_with(format!("-{count}").as_str())
         ));
-        assert!(transcript.len() <= MAX_CONTEXT_MESSAGES + 1);
+        // 投影内 user/assistant 严格交替（方案三验收：合法序列）。
+        let roles: Vec<&str> = transcript
+            .iter()
+            .skip(1)
+            .map(|m| match m {
+                ProviderMessage::User { .. } | ProviderMessage::CompactionSummary { .. } => "user",
+                ProviderMessage::Assistant { .. } => "assistant",
+                ProviderMessage::System { .. } | ProviderMessage::Tool { .. } => unreachable!(),
+            })
+            .collect();
+        for pair in roles.windows(2) {
+            assert_ne!(
+                pair[0], pair[1],
+                "user/assistant 必须交替：找到相邻 {pair:?}"
+            );
+        }
+        // 原始 snapshot 完整未删改：所有消息仍在（折叠只影响投影）。
+        assert_eq!(snapshot.messages.len(), count as usize);
         let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn transcript_keeps_pending_user_even_when_it_alone_exceeds_budget() {
+        // 任务要求 6 的兜底之一：pending user 永不丢失，即使它单独就超出预算。
+        let (root, path) = test_database_path();
+        let mut history = Vec::new();
+        history.push(message(ConversationRole::User, "旧的用户消息", 1));
+        // 最后一条 pending user 超大（超出整个剩余预算）。
+        let huge = "u".repeat(CONTEXT_BUDGET_TOKENS as usize * 3);
+        history.push(message(ConversationRole::User, &huge, 3));
+        let transcript = adapter(&path).transcript(&snapshot_with(history), &facts(), &[]);
+        assert!(matches!(
+            transcript.last(),
+            Some(ProviderMessage::User { content }) if *content == huge
+        ));
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn compaction_summary_build_failure_safely_falls_back_to_tail_only() {
+        // 折叠摘要生成失败（这里直接调用底层函数验证 Err 分支）：调用方会安全
+        // 回退为只投影最近完整尾部，不假装成功。空折叠段 → Err。
+        assert!(build_compaction_summary(&[]).is_err());
+        // 只有 assistant 没有 user 的折叠段 → 无摘录 → Err。
+        let only_assistant = vec![message(ConversationRole::Assistant, "只有回答", 2)];
+        assert!(build_compaction_summary(&only_assistant).is_err());
+        // 正常折叠段 → Ok，摘录保留最近几条 user。
+        let folded = vec![
+            message(ConversationRole::Assistant, "较早回答", 2),
+            message(ConversationRole::User, "较早的问题", 3),
+            message(ConversationRole::User, "更早的问题", 1),
+        ];
+        let summary = build_compaction_summary(&folded).unwrap();
+        let ProviderMessage::CompactionSummary { content } = &summary else {
+            panic!("必须生成 CompactionSummary")
+        };
+        assert!(content.contains("较早的问题"));
+        assert!(content.contains("更早的问题"));
+    }
+
+    #[test]
+    fn token_estimator_approximates_chars_over_four() {
+        assert_eq!(estimate_text_tokens("abcd"), 1);
+        assert_eq!(estimate_text_tokens("abc"), 1); // 向上取整
+        assert_eq!(estimate_text_tokens("abcde"), 2);
+        assert_eq!(estimate_text_tokens(""), 0);
     }
 
     #[test]

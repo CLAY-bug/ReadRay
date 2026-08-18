@@ -371,6 +371,13 @@ fn project_message(message: &ProviderMessage) -> Value {
             "tool_call_id": result.tool_call_id,
             "content": result.content,
         }),
+        // 折叠摘要（方案三）投影为一条 user 消息：不引入主系统提示词之外的
+        // 第二条 system（避开中间 system 的 shape 风险），也不把较早的过时内容
+        // 抬成全局权威背景。它由 transcript() 与配对 assistant 一起保证合法的
+        // user/assistant 交替。
+        ProviderMessage::CompactionSummary { content } => {
+            json!({ "role": "user", "content": content })
+        }
     }
 }
 
@@ -474,6 +481,86 @@ mod tests {
             assistant.get("tool_calls").is_none(),
             "空 tool_calls 不得投影为 tool_calls 键：{assistant}"
         );
+    }
+
+    #[test]
+    fn folded_summary_projects_as_single_system_user_history_and_valid_alternation() {
+        // 方案三验收（任务 5 收口）：折叠摘要投影为 user 历史消息，而不是第二条
+        // system。最终 provider 消息数组必须——只有一条 system（主系统提示词）、
+        // 摘要以 user 角色呈现且措辞含"供回顾参考/以当前对话为准"、末尾是 pending
+        // user、user/assistant 严格交替。
+        let messages = vec![
+            ProviderMessage::System {
+                content: "你是 ReadRay 的英语学习助手。".into(),
+            },
+            ProviderMessage::CompactionSummary {
+                content: "（较早对话的折叠摘要，仅供回顾参考，以当前对话为准。）较早对话中共 4 条消息已压缩成一个摘要。最近的问题包括：\n1. 原来的问题".into(),
+            },
+            // transcript() 在折叠分支插入的空 assistant 配对（空 tool_calls，键省略）。
+            ProviderMessage::Assistant {
+                content: String::new(),
+                tool_calls: Vec::new(),
+            },
+            ProviderMessage::User {
+                content: "最近的问题".into(),
+            },
+            ProviderMessage::Assistant {
+                content: "最近的回答".into(),
+                tool_calls: Vec::new(),
+            },
+            // 末尾 pending user。
+            ProviderMessage::User {
+                content: "当前 pending 问题".into(),
+            },
+        ];
+        let body = build_chat_request_body("deepseek-v4-flash", &messages, &[]);
+        let projected = &body["messages"];
+
+        // 只有一条 system（主系统提示词），中间没有第二条 system。
+        let system_count = projected
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|m| m["role"] == "system")
+            .count();
+        assert_eq!(system_count, 1, "投影只能有一条 system：{projected}");
+
+        // 折叠摘要是 user 角色，不是 system。
+        let summary = &projected[1];
+        assert_eq!(summary["role"], "user");
+        assert!(
+            summary["content"]
+                .as_str()
+                .unwrap()
+                .contains("以供回顾参考")
+                || summary["content"]
+                    .as_str()
+                    .unwrap()
+                    .contains("以当前对话为准"),
+            "摘要措辞必须明确标注仅供参考、以当前对话为准：{summary}"
+        );
+
+        // 末尾是 pending user。
+        assert_eq!(
+            projected[projected.as_array().unwrap().len() - 1]["role"],
+            "user"
+        );
+        assert_eq!(
+            projected[projected.as_array().unwrap().len() - 1]["content"],
+            "当前 pending 问题"
+        );
+
+        // user/assistant 严格交替（跳过首条 system）。
+        let roles: Vec<&str> = projected
+            .as_array()
+            .unwrap()
+            .iter()
+            .skip(1)
+            .map(|m| m["role"].as_str().unwrap())
+            .collect();
+        for pair in roles.windows(2) {
+            assert_ne!(pair[0], pair[1], "user/assistant 必须交替：{projected:?}");
+        }
     }
 
     struct FakeStreamer {

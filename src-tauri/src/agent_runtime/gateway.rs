@@ -27,6 +27,13 @@ pub(crate) enum ProviderMessage {
     Tool {
         result: ToolResult,
     },
+    /// 长上下文兜底（任务 5，方案 A / 方案三）：被折叠的最旧一段对话的极简摘要。
+    /// 它只存在投影/内存层——不写回用户可见 transcript、不落库、不进学习者记忆。
+    /// 投影时作为一条**真实的 user 历史消息**（而非 system）提供给模型，措辞明确
+    /// 标为"供回顾参考、以当前对话为准"，避免把过时内容抬成全局权威背景。
+    CompactionSummary {
+        content: String,
+    },
 }
 
 /// 单次模型请求。每轮请求都携带完整 transcript 与活动工具；provider 按 stateless

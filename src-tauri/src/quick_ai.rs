@@ -2305,6 +2305,9 @@ mod tests {
                 ProviderMessage::User { content } => ("user".into(), content.clone()),
                 ProviderMessage::Assistant { content, .. } => ("assistant".into(), content.clone()),
                 ProviderMessage::Tool { .. } => ("tool".into(), String::new()),
+                // 折叠摘要作为 user 历史消息呈现（任务 5 方案三；该测试的短
+                // 上下文不会触发折叠，分支保持"应到而不到"）。
+                ProviderMessage::CompactionSummary { content } => ("user".into(), content.clone()),
             })
             .collect();
         assert_eq!(rendered.len(), 2);
