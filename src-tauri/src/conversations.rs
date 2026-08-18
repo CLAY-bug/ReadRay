@@ -486,12 +486,24 @@ impl ConversationStore {
             && role_from_storage(&tail.role)? == ConversationRole::User
             && tail.superseded_by_id.is_none();
         if has_pending_edit {
-            // 该轮已有编辑 pending 行（失败后重试）：内容一致才复用，避免把
-            // 其他轮次的 pending 用户行误当作本次编辑。
+            // 该轮已有编辑 pending 行（失败后重试或再次修改）：pending 行是本次
+            // 编辑自己产生的、尚无回答的行，直接覆盖内容（无历史价值，不违反
+            // 审计）；严格身份判定（tail=target.sequence+1 的未替代 user 行）已
+            // 排除其他轮次的 pending 用户行。
             if tail.content != normalized_content {
-                return Err("Quick AI 编辑内容与待完成的问题不一致。".to_string());
+                let updated = transaction
+                    .execute(
+                        "UPDATE quick_ai_messages SET content = ?1 WHERE id = ?2",
+                        params![normalized_content, tail.id],
+                    )
+                    .map_err(|error| format!("Quick AI 编辑 pending 行内容更新失败：{error}"))?;
+                if updated != 1 {
+                    return Err("Quick AI 编辑 pending 行不存在。".to_string());
+                }
             }
-            drop(transaction);
+            transaction
+                .commit()
+                .map_err(|error| format!("Quick AI 编辑 pending 行内容事务无法提交：{error}"))?;
             return Ok(RegenerationTurn::Ready {
                 snapshot: self.get_required(conversation_id)?,
                 user_message_id: tail.id,
@@ -1900,11 +1912,20 @@ pub(crate) mod tests {
         };
         assert_eq!(retried, first_edit, "重试必须复用同一编辑 pending 行");
 
-        // 编辑内容变化（第二次编辑同一 pending 行）：拒绝，避免错改其他轮次行。
-        let mismatch = store
+        // 编辑内容变化（第二次编辑同一 pending 行）：覆盖该行内容并复用同一行
+        // （pending 行是本次编辑产生、尚无回答，覆盖无历史价值损失）。
+        let RegenerationTurn::Ready {
+            user_message_id: revised,
+            ..
+        } = store
             .prepare_regeneration(conversation.id, 1, "再次修改的问题", old_assistant)
-            .unwrap_err();
-        assert!(mismatch.contains("不一致"));
+            .unwrap()
+        else {
+            panic!("再次编辑必须 Ready");
+        };
+        assert_eq!(revised, first_edit, "再次编辑必须复用同一 pending 行");
+        let revised_snapshot = store.get_required(conversation.id).unwrap();
+        assert_eq!(revised_snapshot.messages[2].content, "再次修改的问题");
 
         // 空编辑内容被拒绝。
         let empty = store
@@ -1925,7 +1946,7 @@ pub(crate) mod tests {
             )
             .unwrap();
         assert_eq!(completed.messages.len(), 2);
-        assert_eq!(completed.messages[0].content, "编辑后的问题");
+        assert_eq!(completed.messages[0].content, "再次修改的问题");
         assert_eq!(completed.messages[1].content, "编辑后的回答");
         drop(store);
         let _ = fs::remove_dir_all(root);

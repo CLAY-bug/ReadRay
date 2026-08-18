@@ -2,7 +2,7 @@
 
 最后更新：2026-08-17
 
-状态：任务 0/1/2/3 已完成并通过评审（任务 3 已正式收口，含真实 Tauri 使用验收）；任务 4 已实现并通过自动验证，待调度者复审与真实 Tauri 验收
+状态：任务 0/1/2/3/4 已完成并通过评审（任务 3/4 已正式收口，含真实 Tauri 使用验收）；下一步进入任务 5
 
 ## 1. 文档定位
 
@@ -953,6 +953,7 @@ Runtime 与网络纵切稳定后，再开放：
 - **截断诚实提示**：coordinator 捕获最终回答轮的 `ModelFinishReason::Length` → `RunOutcome.truncated`（仅改 coordinator.rs，未动 protocol.rs 冻结协议）；回答照常持久化并携带 truncated 标志，前端消息显示"回答可能不完整"轻微提示（重启后仍可回看），移除"继续生成"按钮；预算截断（RunBudgetExceeded）保持不落答案、pending 可重试，文案改为友好版"回答未完成"。
 - **来源持久化回看**：运行期经 SourceCollectingSink 从 SourcesUpdated 事件按 source_id 去重累积，随 complete/complete_regeneration 事务写入 assistant 行 `sources_json`；快照 `get()` 解析并返回 `sources`（camelCase 与前端 AgentSource 同构），损坏 blob 只记日志降级为无来源，不阻断会话加载；重启与历史对话来源卡片直接可回看。
 - **验证**：Rust lib 387/0（基线 372 + 新增 15：migration v21、编辑端到端/幂等/transcript 排除旧问旧答/来源随新回答落库/截断标志持久化/快照过滤与导出一致性/序列交替/pending 编辑行重试复用）；前端 conversation 38/38（编辑参数传递、未提交 pending、模糊成功、hover 入口与菜单移除静态断言、来源/截断映射）、overlay 20/review 50/writing 30/settings 57/startup 3 全绿；`pnpm build`、cargo fmt/check --all-targets、git diff --check 全通过；浏览器预览（vite preview + fixture）实测最后一条输入 hover 编辑按钮 → 行内编辑 → 发送后回答原地替换、菜单仅剩导出/删除、无控制台错误。未运行 live 测试；真实 Tauri/DeepSeek 人工验收（编辑并重新生成真实回答、截断提示、重启回看来源）留待停点。
+- **评审修复轮（2026-08-18，已复审通过）**：pending 编辑行内容一致性从"拒绝不同内容"改为"覆盖更新"——第一次编辑后 run 失败（pending 行留在库中），用户再次编辑成不同内容时，pending 行 UPDATE 覆盖其 content 并复用同一行（pending 行是本次编辑产生、尚无回答，覆盖无历史价值损失；严格身份判定 tail=target.sequence+1 的未替代 user 行已排除其他轮次 pending 行）；更新对应测试与快照断言。用户已完成真实 Tauri 人工验收：最后一条输入 hover 出现编辑按钮、行内编辑并发送后回答原地替换、来源随历史回看可用、"回答可能不完整"截断提示正确。任务 4 正式收口，下一步进入任务 5。
 
 ### 任务 5：长上下文与 compaction
 
@@ -1127,7 +1128,7 @@ late_event_after_new_run
 5. 更新本文任务状态和必要的恢复文档。
 6. 停止等待用户确认，再进入下一任务。
 
-任务 0/1/2/3 已通过评审（任务 3 已正式收口），任务 4（日常使用交互）已实现并通过自动验证，当前待调度者复审与真实 Tauri 人工验收。任务 4 完成前不开放 steering/follow-up 与截断继续；重新生成已按 §18.4 覆盖式语义正式开放（不物理覆盖旧回答）。Web Search 已通过 Wikipedia provider 开放给真实会话（覆盖范围以工具描述为准）。Writing Coach 必须等通用对话 Runtime、自动联网与长上下文完成各自验收后，再进入任务 6。
+任务 0/1/2/3/4 已通过评审（任务 3/4 已正式收口），当前实施入口为任务 5 长上下文与 compaction。任务 4 完成前不开放 steering/follow-up 与截断继续；"编辑并重新生成"已按 §18.4 覆盖式语义正式开放（不物理覆盖旧问题/旧回答），截断继续归任务 5。Web Search 已通过 Wikipedia provider 开放给真实会话（覆盖范围以工具描述为准）。Writing Coach 必须等通用对话 Runtime、自动联网与长上下文完成各自验收后，再进入任务 6。
 
 ## 26. 研究来源
 
