@@ -13,7 +13,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use tauri::{AppHandle, Manager};
 
 const DATABASE_FILE_NAME: &str = "readray.sqlite3";
-const DATABASE_SCHEMA_VERSION: i64 = 19;
+const DATABASE_SCHEMA_VERSION: i64 = 21;
 const LEARNING_TARGET_CANONICALIZATION_VERSION: i64 = 1;
 const REVIEW_DAY_UNIX_MS: i64 = 24 * 60 * 60 * 1_000;
 pub const EXPLANATION_CARD_SCHEMA_VERSION: i64 = 2;
@@ -691,6 +691,105 @@ CREATE INDEX idx_learning_target_review_states_due
   ON learning_target_review_states(next_review_at_unix_ms, learning_target_id);
 "#;
 
+/// 阶段八点五任务 2：Agent run/step/source 概念表（AGENT_RUNTIME_UPGRADE_PLAN §16.2）。
+/// 只新增表，不改写既有业务表；run 状态迁移由 repository 校验（§16.3），
+/// completed 只能对应已持久化的最终 assistant。Writing 字段仅预留权威扩展位，
+/// 任务 6 之前不得写入。
+const MIGRATION_20: &str = r#"
+CREATE TABLE agent_runs (
+  run_id TEXT PRIMARY KEY,
+  surface_kind TEXT NOT NULL CHECK (
+    surface_kind IN ('main_conversation', 'quick_ai_overlay', 'writing_coach')
+  ),
+  authority_kind TEXT NOT NULL CHECK (authority_kind IN ('conversation', 'writing')),
+  conversation_id INTEGER,
+  expected_user_sequence INTEGER,
+  user_message_id INTEGER,
+  writing_document_id INTEGER,
+  writing_version_id INTEGER,
+  retry_of_run_id TEXT REFERENCES agent_runs(run_id) ON DELETE SET NULL,
+  provider TEXT NOT NULL,
+  model TEXT NOT NULL,
+  status TEXT NOT NULL CHECK (status IN (
+    'prepared', 'model_streaming', 'tool_running', 'synthesizing',
+    'completed', 'stopped', 'failed', 'truncated'
+  )),
+  termination_reason TEXT,
+  started_at_unix_ms INTEGER NOT NULL,
+  updated_at_unix_ms INTEGER NOT NULL,
+  completed_at_unix_ms INTEGER,
+  CHECK (
+    (authority_kind = 'conversation'
+      AND conversation_id IS NOT NULL AND conversation_id > 0
+      AND expected_user_sequence IS NOT NULL AND expected_user_sequence > 0
+      AND user_message_id IS NOT NULL AND user_message_id > 0
+      AND writing_document_id IS NULL AND writing_version_id IS NULL)
+    OR
+    (authority_kind = 'writing'
+      AND writing_document_id IS NOT NULL AND writing_document_id > 0
+      AND conversation_id IS NULL AND expected_user_sequence IS NULL
+      AND user_message_id IS NULL)
+  ),
+  CHECK ((status = 'completed') = (completed_at_unix_ms IS NOT NULL))
+);
+
+CREATE INDEX idx_agent_runs_conversation
+  ON agent_runs(conversation_id, expected_user_sequence, started_at_unix_ms DESC);
+CREATE INDEX idx_agent_runs_retry_of ON agent_runs(retry_of_run_id);
+
+CREATE TABLE agent_steps (
+  run_id TEXT NOT NULL REFERENCES agent_runs(run_id) ON DELETE CASCADE,
+  step_sequence INTEGER NOT NULL CHECK (step_sequence > 0),
+  turn_index INTEGER,
+  kind TEXT NOT NULL,
+  status TEXT NOT NULL,
+  tool_call_id TEXT,
+  tool_name TEXT,
+  input_json TEXT,
+  result_json TEXT,
+  error_code TEXT,
+  started_at_unix_ms INTEGER NOT NULL,
+  completed_at_unix_ms INTEGER,
+  PRIMARY KEY (run_id, step_sequence)
+);
+
+CREATE INDEX idx_agent_steps_run ON agent_steps(run_id, step_sequence);
+
+CREATE TABLE agent_sources (
+  source_id TEXT PRIMARY KEY,
+  run_id TEXT NOT NULL REFERENCES agent_runs(run_id) ON DELETE CASCADE,
+  tool_call_id TEXT NOT NULL,
+  title TEXT NOT NULL,
+  url TEXT NOT NULL,
+  site_name TEXT,
+  published_at TEXT,
+  retrieved_at_unix_ms INTEGER NOT NULL,
+  content_type TEXT,
+  metadata_json TEXT
+);
+
+CREATE INDEX idx_agent_sources_run ON agent_sources(run_id);
+"#;
+
+/// 阶段八点五任务 4：重新生成替代关系、来源随回答落库与截断标志。
+/// 一次集中追加三列（不零碎改 schema）：superseded_by_id 记录重新生成对旧
+/// assistant 的替代链（旧行保留可审计，可见快照/导出只取未被替代的当前回答）；
+/// sources_json 保存回答引用的结构化来源（数据小，重启与历史回看直接来自本行，
+/// 不从 run/step 审计表重建）；truncated 标记 finish_reason=length 的诚实截断
+/// 提示（回答照常持久化，UI 只显示轻微提示）。
+const MIGRATION_21: &str = r#"
+ALTER TABLE quick_ai_messages
+  ADD COLUMN superseded_by_id INTEGER
+  REFERENCES quick_ai_messages(id) ON DELETE SET NULL;
+
+ALTER TABLE quick_ai_messages
+  ADD COLUMN sources_json TEXT;
+
+ALTER TABLE quick_ai_messages
+  ADD COLUMN truncated INTEGER NOT NULL DEFAULT 0
+  CHECK (truncated IN (0, 1));
+"#;
+
 const MIGRATIONS: &[(i64, &str)] = &[
     (1, MIGRATION_1),
     (2, MIGRATION_2),
@@ -710,7 +809,9 @@ const MIGRATIONS: &[(i64, &str)] = &[
     (16, MIGRATION_16),
     (17, MIGRATION_17),
     (18, MIGRATION_18),
-    (DATABASE_SCHEMA_VERSION, MIGRATION_19),
+    (DATABASE_SCHEMA_VERSION - 2, MIGRATION_19),
+    (DATABASE_SCHEMA_VERSION - 1, MIGRATION_20),
+    (DATABASE_SCHEMA_VERSION, MIGRATION_21),
 ];
 
 #[derive(Clone, Debug, Serialize)]
@@ -5596,6 +5697,370 @@ INSERT INTO review_card_generation_failures (
             Err(error) => error,
         };
         assert!(error.contains("数据库目录无法创建"));
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn migration_v20_creates_agent_tables_with_invariants() {
+        let (root, path) = test_database_path();
+        fs::create_dir_all(&root).unwrap();
+        let connection = open_database(&path).unwrap();
+        let version: i64 = connection
+            .query_row("SELECT MAX(version) FROM schema_migrations", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        assert_eq!(version, DATABASE_SCHEMA_VERSION);
+        let table_count: i64 = connection
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master
+                 WHERE type = 'table' AND name IN ('agent_runs', 'agent_steps', 'agent_sources')",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(table_count, 3);
+
+        // 权威身份约束：conversation 必须三件套齐全，writing 字段必须为空。
+        let conversation_insert = connection.execute(
+            "INSERT INTO agent_runs (
+               run_id, surface_kind, authority_kind, conversation_id,
+               expected_user_sequence, user_message_id, provider, model, status,
+               started_at_unix_ms, updated_at_unix_ms
+             ) VALUES ('run-1', 'main_conversation', 'conversation', 1, 3, 9,
+                       'deepseek', 'deepseek-v4-flash', 'prepared', 100, 100)",
+            [],
+        );
+        assert!(conversation_insert.is_ok());
+        let incomplete_authority = connection.execute(
+            "INSERT INTO agent_runs (
+               run_id, surface_kind, authority_kind, conversation_id,
+               expected_user_sequence, provider, model, status,
+               started_at_unix_ms, updated_at_unix_ms
+             ) VALUES ('run-bad', 'quick_ai_overlay', 'conversation', 1, 3,
+                       'deepseek', 'deepseek-v4-flash', 'prepared', 100, 100)",
+            [],
+        );
+        assert!(incomplete_authority.is_err());
+        let mixed_authority = connection.execute(
+            "INSERT INTO agent_runs (
+               run_id, surface_kind, authority_kind, conversation_id,
+               expected_user_sequence, user_message_id, writing_document_id,
+               provider, model, status, started_at_unix_ms, updated_at_unix_ms
+             ) VALUES ('run-mixed', 'writing_coach', 'conversation', 1, 3, 9, 7,
+                       'deepseek', 'deepseek-v4-flash', 'prepared', 100, 100)",
+            [],
+        );
+        assert!(mixed_authority.is_err());
+
+        // completed 必须带 completed_at；终态之外不得带 completed_at。
+        let completed_without_time = connection.execute(
+            "INSERT INTO agent_runs (
+               run_id, surface_kind, authority_kind, conversation_id,
+               expected_user_sequence, user_message_id, provider, model, status,
+               started_at_unix_ms, updated_at_unix_ms
+             ) VALUES ('run-2', 'quick_ai_overlay', 'conversation', 2, 1, 5,
+                       'deepseek', 'deepseek-v4-flash', 'completed', 100, 100)",
+            [],
+        );
+        assert!(completed_without_time.is_err());
+        let prepared_with_time = connection.execute(
+            "INSERT INTO agent_runs (
+               run_id, surface_kind, authority_kind, conversation_id,
+               expected_user_sequence, user_message_id, provider, model, status,
+               started_at_unix_ms, updated_at_unix_ms, completed_at_unix_ms
+             ) VALUES ('run-3', 'quick_ai_overlay', 'conversation', 2, 1, 5,
+                       'deepseek', 'deepseek-v4-flash', 'prepared', 100, 100, 200)",
+            [],
+        );
+        assert!(prepared_with_time.is_err());
+        let invalid_status = connection.execute(
+            "INSERT INTO agent_runs (
+               run_id, surface_kind, authority_kind, conversation_id,
+               expected_user_sequence, user_message_id, provider, model, status,
+               started_at_unix_ms, updated_at_unix_ms
+             ) VALUES ('run-4', 'quick_ai_overlay', 'conversation', 2, 1, 5,
+                       'deepseek', 'deepseek-v4-flash', 'awaiting_approval', 100, 100)",
+            [],
+        );
+        assert!(invalid_status.is_err());
+
+        // 删除会话 run 不级联（run 保留审计），删除 run 级联清理 steps/sources。
+        connection
+            .execute(
+                "INSERT INTO agent_steps (
+                   run_id, step_sequence, turn_index, kind, status,
+                   started_at_unix_ms
+                 ) VALUES ('run-1', 1, 1, 'turn', 'ok', 100)",
+                [],
+            )
+            .unwrap();
+        connection
+            .execute(
+                "INSERT INTO agent_sources (
+                   source_id, run_id, tool_call_id, title, url,
+                   retrieved_at_unix_ms
+                 ) VALUES ('source-1', 'run-1', 'call-1', 'T', 'https://example.com', 100)",
+                [],
+            )
+            .unwrap();
+        let step_count: i64 = connection
+            .query_row(
+                "SELECT COUNT(*) FROM agent_steps WHERE run_id = 'run-1'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(step_count, 1);
+        drop(connection);
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn migration_v20_upgrades_v19_database_keeping_existing_data() {
+        let (root, path) = test_database_path();
+        fs::create_dir_all(&root).unwrap();
+        let connection = Connection::open(&path).unwrap();
+        connection
+            .execute_batch(
+                "CREATE TABLE schema_migrations (
+                   version INTEGER PRIMARY KEY,
+                   applied_at_unix_ms INTEGER NOT NULL
+                 );",
+            )
+            .unwrap();
+        for &(version, sql) in MIGRATIONS.iter().take(19) {
+            connection.execute_batch(sql).unwrap();
+            connection
+                .execute(
+                    "INSERT INTO schema_migrations (version, applied_at_unix_ms)
+                     VALUES (?1, ?2)",
+                    params![version, version * 100],
+                )
+                .unwrap();
+        }
+        // 旧库里的既有业务数据必须原样保留。
+        connection
+            .execute(
+                "INSERT INTO quick_ai_conversations (
+                   title, model, origin, created_at_unix_ms, updated_at_unix_ms
+                 ) VALUES ('旧对话', 'deepseek-v4-flash', 'main', 100, 100)",
+                [],
+            )
+            .unwrap();
+        connection
+            .execute(
+                "INSERT INTO quick_ai_messages (
+                   conversation_id, role, content, sequence, created_at_unix_ms
+                 ) VALUES (1, 'user', '旧消息', 1, 100)",
+                [],
+            )
+            .unwrap();
+        drop(connection);
+
+        let upgraded = open_database(&path).unwrap();
+        let version: i64 = upgraded
+            .query_row("SELECT MAX(version) FROM schema_migrations", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        assert_eq!(version, DATABASE_SCHEMA_VERSION);
+        let agent_table_count: i64 = upgraded
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master
+                 WHERE type = 'table' AND name IN ('agent_runs', 'agent_steps', 'agent_sources')",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(agent_table_count, 3);
+        let preserved_message: String = upgraded
+            .query_row(
+                "SELECT content FROM quick_ai_messages WHERE conversation_id = 1",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(preserved_message, "旧消息");
+        let preserved_conversation: i64 = upgraded
+            .query_row(
+                "SELECT COUNT(*) FROM quick_ai_conversations WHERE title = '旧对话'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(preserved_conversation, 1);
+        drop(upgraded);
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn migration_v21_creates_message_metadata_columns_with_invariants() {
+        let (root, path) = test_database_path();
+        fs::create_dir_all(&root).unwrap();
+        let connection = open_database(&path).unwrap();
+        let version: i64 = connection
+            .query_row("SELECT MAX(version) FROM schema_migrations", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        assert_eq!(version, DATABASE_SCHEMA_VERSION);
+
+        // 三列一次落地：替代关系、来源 JSON、截断标志。
+        let columns: Vec<(String, String, Option<String>, Option<i64>)> = {
+            let mut statement = connection
+                .prepare(
+                    "SELECT name, type, dflt_value, \"notnull\"
+                     FROM pragma_table_info('quick_ai_messages')
+                     WHERE name IN ('superseded_by_id', 'sources_json', 'truncated')",
+                )
+                .unwrap();
+            statement
+                .query_map([], |row| {
+                    Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?))
+                })
+                .unwrap()
+                .map(Result::unwrap)
+                .collect()
+        };
+        assert_eq!(columns.len(), 3, "v21 必须存在三列：{columns:?}");
+        let by_name = |name: &str| {
+            columns
+                .iter()
+                .find(|(column, _, _, _)| column == name)
+                .expect("列必须存在")
+        };
+        assert_eq!(by_name("superseded_by_id").1, "INTEGER");
+        assert_eq!(by_name("sources_json").1, "TEXT");
+        assert_eq!(by_name("truncated").1, "INTEGER");
+        assert_eq!(
+            by_name("truncated").2.as_deref(),
+            Some("0"),
+            "truncated 默认 0"
+        );
+        assert_eq!(by_name("truncated").3, Some(1), "truncated NOT NULL");
+
+        // 默认值：新行 superseded/sources 为 NULL、truncated 为 0。
+        connection
+            .execute(
+                "INSERT INTO quick_ai_conversations (
+                   title, model, origin, created_at_unix_ms, updated_at_unix_ms
+                 ) VALUES ('新对话', 'deepseek-v4-flash', 'main', 100, 100)",
+                [],
+            )
+            .unwrap();
+        connection
+            .execute(
+                "INSERT INTO quick_ai_messages (
+                   conversation_id, role, content, sequence, created_at_unix_ms
+                 ) VALUES (1, 'user', '新消息', 1, 100)",
+                [],
+            )
+            .unwrap();
+        let (superseded_by_id, sources_json, truncated): (Option<i64>, Option<String>, i64) =
+            connection
+                .query_row(
+                    "SELECT superseded_by_id, sources_json, truncated
+                     FROM quick_ai_messages WHERE conversation_id = 1",
+                    [],
+                    |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+                )
+                .unwrap();
+        assert!(superseded_by_id.is_none());
+        assert!(sources_json.is_none());
+        assert_eq!(truncated, 0);
+
+        // CHECK 约束：truncated 只接受 0/1；超范围与非法文本拒绝。
+        assert!(connection
+            .execute(
+                "INSERT INTO quick_ai_messages (
+                   conversation_id, role, content, sequence, created_at_unix_ms, truncated
+                 ) VALUES (1, 'assistant', 'bad', 2, 100, 2)",
+                [],
+            )
+            .is_err());
+        assert!(connection
+            .execute(
+                "INSERT INTO quick_ai_messages (
+                   conversation_id, role, content, sequence, created_at_unix_ms, truncated
+                 ) VALUES (1, 'assistant', 'ok', 2, 100, 1)",
+                [],
+            )
+            .is_ok());
+        drop(connection);
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn migration_v21_upgrades_v20_database_keeping_existing_data() {
+        let (root, path) = test_database_path();
+        fs::create_dir_all(&root).unwrap();
+        let connection = Connection::open(&path).unwrap();
+        connection
+            .execute_batch(
+                "CREATE TABLE schema_migrations (
+                   version INTEGER PRIMARY KEY,
+                   applied_at_unix_ms INTEGER NOT NULL
+                 );",
+            )
+            .unwrap();
+        for &(version, sql) in MIGRATIONS.iter().take(20) {
+            connection.execute_batch(sql).unwrap();
+            connection
+                .execute(
+                    "INSERT INTO schema_migrations (version, applied_at_unix_ms)
+                     VALUES (?1, ?2)",
+                    params![version, version * 100],
+                )
+                .unwrap();
+        }
+        // 旧库里的既有会话与消息必须原样保留，升级后新列得到默认值。
+        connection
+            .execute(
+                "INSERT INTO quick_ai_conversations (
+                   title, model, origin, created_at_unix_ms, updated_at_unix_ms
+                 ) VALUES ('v20 对话', 'deepseek-v4-flash', 'main', 100, 100)",
+                [],
+            )
+            .unwrap();
+        connection
+            .execute(
+                "INSERT INTO quick_ai_messages (
+                   conversation_id, role, content, sequence, created_at_unix_ms
+                 ) VALUES (1, 'user', 'v20 消息', 1, 100)",
+                [],
+            )
+            .unwrap();
+        drop(connection);
+
+        let upgraded = open_database(&path).unwrap();
+        let version: i64 = upgraded
+            .query_row("SELECT MAX(version) FROM schema_migrations", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        assert_eq!(version, DATABASE_SCHEMA_VERSION);
+        let preserved: String = upgraded
+            .query_row(
+                "SELECT content FROM quick_ai_messages WHERE conversation_id = 1",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(preserved, "v20 消息");
+        let (superseded_by_id, sources_json, truncated): (Option<i64>, Option<String>, i64) =
+            upgraded
+                .query_row(
+                    "SELECT superseded_by_id, sources_json, truncated
+                     FROM quick_ai_messages WHERE conversation_id = 1",
+                    [],
+                    |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+                )
+                .unwrap();
+        assert!(superseded_by_id.is_none(), "旧消息没有被标记为已替代");
+        assert!(sources_json.is_none(), "旧消息没有来源 JSON");
+        assert_eq!(truncated, 0, "旧消息默认非截断");
+        drop(upgraded);
         let _ = fs::remove_dir_all(root);
     }
 }

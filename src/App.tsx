@@ -6,7 +6,7 @@ import {
   useState,
   type CSSProperties,
 } from "react";
-import { invoke } from "@tauri-apps/api/core";
+import { Channel, invoke } from "@tauri-apps/api/core";
 import { emit, listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { readText, writeText } from "@tauri-apps/plugin-clipboard-manager";
@@ -740,13 +740,20 @@ function OverlayApp() {
         lastMessage?.role === "user" &&
         lastMessage.content.trim() === content
           ? lastMessage.sequence
-          : (lastMessage?.sequence ?? 0) + 1;
+          : (lastMessage?.sequence ?? 0) +
+            (lastMessage?.role === "user" ? 2 : 1);
+      // Agent 链路（与主应用对话一致）：overlay 也通过 ChatSurfaceAdapter 走
+      // send_quick_ai_message_agent，使联网能力对 overlay 可用。overlay 保持
+      // 非流式 UI，Channel 只用于满足命令签名，增量事件被丢弃，最终以返回的
+      // 权威快照对齐。
+      const channel = new Channel(() => undefined);
       const updatedConversation = await invoke<QuickAiConversation>(
-        "send_quick_ai_message",
+        "send_quick_ai_message_agent",
         {
           conversationId: targetConversation.id,
           expectedUserSequence,
           content,
+          channel,
         },
       );
       notifyQuickAiConversationUpdated();

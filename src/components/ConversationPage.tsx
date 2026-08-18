@@ -1,10 +1,10 @@
 import { useCallback, useEffect, useId, useLayoutEffect, useRef, useState, type CSSProperties, type FormEvent, type ReactNode } from "react";
 import { writeText } from "@tauri-apps/plugin-clipboard-manager";
 import type {
+  AgentSource,
   ConversationAssistantMessage,
   ConversationOperationIdentity,
   ConversationInline,
-  ConversationMessage,
   ConversationMemoryCitation,
   ConversationRequest,
   ConversationService,
@@ -19,6 +19,7 @@ import {
 import { deliverConversationExport } from "../conversationExportDelivery";
 import MainAppIcon from "./MainAppIcon";
 import { MarkdownContent } from "./MarkdownContent";
+import { AgentSourceList } from "./AgentSourceList";
 import {
   shouldSendMultilineMessage,
   type SendShortcut,
@@ -41,7 +42,7 @@ type ConversationPageProps = {
 };
 
 type GenerationState = {
-  phase: "generating" | "complete" | "stopped" | "truncated" | "failed";
+  phase: "generating" | "complete" | "stopped" | "failed";
   prompt: string;
   text: string;
   errorMessage?: string;
@@ -52,6 +53,10 @@ type GenerationState = {
   mode: "append" | "regenerate";
   replaceAssistantMessageId?: string;
   retryKind: "request" | "generation";
+  /** 本轮 Agent 工具来源（任务 3）：按 sourceId 去重累积。 */
+  sources: AgentSource[];
+  /** 当前工具状态文案（任务 3）："正在搜索相关资料…"等。 */
+  toolLabel?: string;
 };
 
 const USER_CLAMP_LINES = 5;
@@ -74,11 +79,37 @@ function InlineContent({ content }: { content: ConversationInline[] }) {
   });
 }
 
-function UserMessage({ message }: { message: ConversationUserMessage }) {
+function UserMessage({
+  message,
+  editable,
+  editing,
+  sendShortcut,
+  onEdit,
+  onSubmitEdit,
+  onCancelEdit,
+}: {
+  message: ConversationUserMessage;
+  editable: boolean;
+  editing: boolean;
+  sendShortcut: SendShortcut;
+  onEdit: (message: ConversationUserMessage) => void;
+  onSubmitEdit: (message: ConversationUserMessage, content: string) => void;
+  onCancelEdit: () => void;
+}) {
   const copyRef = useRef<HTMLDivElement>(null);
+  const editRef = useRef<HTMLTextAreaElement>(null);
   const [isOverflowing, setIsOverflowing] = useState(false);
   const [expanded, setExpanded] = useState(false);
+  const [editDraft, setEditDraft] = useState("");
   const copyId = useId();
+
+  useAutoResizeTextarea(editRef, editDraft);
+
+  useEffect(() => {
+    if (editing) {
+      setEditDraft(message.content);
+    }
+  }, [editing, message.content]);
 
   useLayoutEffect(() => {
     const copy = copyRef.current;
@@ -111,6 +142,61 @@ function UserMessage({ message }: { message: ConversationUserMessage }) {
       window.clearTimeout(measureTimer);
     };
   }, [message.content]);
+
+  if (editing) {
+    return (
+      <article className="rr-conversation-message is-user">
+        <form
+          className="rr-conversation-user-edit"
+          onSubmit={(event) => {
+            event.preventDefault();
+            const content = editDraft.trim();
+            if (!content) {
+              return;
+            }
+            onSubmitEdit(message, content);
+          }}
+        >
+          <textarea
+            ref={editRef}
+            rows={1}
+            autoFocus
+            value={editDraft}
+            aria-label="编辑问题"
+            placeholder="编辑你的问题…"
+            onChange={(event) => setEditDraft(event.target.value)}
+            onKeyDown={(event) => {
+              if (
+                shouldSendMultilineMessage(
+                  {
+                    key: event.key,
+                    shiftKey: event.shiftKey,
+                    ctrlKey: event.ctrlKey,
+                    isComposing: event.nativeEvent.isComposing,
+                  },
+                  sendShortcut,
+                )
+              ) {
+                event.preventDefault();
+                event.currentTarget.form?.requestSubmit();
+              } else if (event.key === "Escape" && !event.nativeEvent.isComposing) {
+                event.preventDefault();
+                onCancelEdit();
+              }
+            }}
+          />
+          <div className="rr-conversation-user-edit-actions">
+            <button type="submit" disabled={!editDraft.trim()}>
+              发送
+            </button>
+            <button type="button" onClick={onCancelEdit}>
+              取消
+            </button>
+          </div>
+        </form>
+      </article>
+    );
+  }
 
   const lineHeight = copyRef.current
     ? Number.parseFloat(getComputedStyle(copyRef.current).lineHeight) || 26
@@ -149,6 +235,29 @@ function UserMessage({ message }: { message: ConversationUserMessage }) {
       {message.meta ? (
         <div className="rr-conversation-user-meta">{message.meta}</div>
       ) : null}
+      {editable ? (
+        <button
+          className="rr-conversation-user-edit-button"
+          type="button"
+          aria-label="编辑问题并重新生成"
+          title="编辑问题并重新生成"
+          onClick={() => onEdit(message)}
+        >
+          <svg
+            width="13"
+            height="13"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="1.9"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+            aria-hidden="true"
+          >
+            <path d="M17 3a2.85 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z" />
+          </svg>
+        </button>
+      ) : null}
     </article>
   );
 }
@@ -177,12 +286,14 @@ function renderAnswerText(
 function AssistantMessage({
   message,
   onOpenMemory,
+  onOpenSource,
 }: {
   message: ConversationAssistantMessage;
   onOpenMemory: (
     citation: ConversationMemoryCitation,
     trigger: HTMLButtonElement,
   ) => void;
+  onOpenSource: (source: AgentSource) => void;
 }) {
   const [copied, setCopied] = useState(false);
   const copyTimerRef = useRef<number | undefined>(undefined);
@@ -265,6 +376,21 @@ function AssistantMessage({
             </button>
           </div>
         ) : null}
+        {message.sources && message.sources.length > 0 ? (
+          <div className="rr-conversation-answer-footnote">
+            <AgentSourceList
+              sources={message.sources}
+              onOpen={onOpenSource}
+            />
+          </div>
+        ) : null}
+        {message.truncated ? (
+          <div className="rr-conversation-generation-row">
+            <span className="rr-conversation-message-meta">
+              回答可能不完整
+            </span>
+          </div>
+        ) : null}
       </div>
       <button
         className="rr-conversation-assistant-copy-button"
@@ -329,8 +455,10 @@ function formatGenerationElapsed(elapsedMs: number) {
 
 function ConversationGenerationIndicator({
   onStop,
+  label,
 }: {
   onStop?: () => void;
+  label?: string;
 }) {
   const [elapsedMs, setElapsedMs] = useState(0);
 
@@ -354,7 +482,7 @@ function ConversationGenerationIndicator({
         ))}
       </span>
       <span className="rr-conversation-generation-label" aria-live="polite">
-        正在生成
+        {label ?? "正在生成"}
       </span>
       <span
         className="rr-conversation-generation-elapsed"
@@ -380,22 +508,30 @@ function GenerationMessage({
   canStop,
   onStop,
   onRetry,
+  onOpenSource,
 }: {
   state: GenerationState;
   canStop: boolean;
   onStop: () => void;
   onRetry: () => void;
+  onOpenSource: (source: AgentSource) => void;
 }) {
+  const sourcesBlock =
+    state.sources.length > 0 ? (
+      <div className="rr-conversation-answer-footnote">
+        <AgentSourceList sources={state.sources} onOpen={onOpenSource} />
+      </div>
+    ) : null;
+
   if (state.phase === "failed") {
     return (
       <article className="rr-conversation-message is-assistant">
         <div className="rr-conversation-assistant-copy">
           {state.text ? <MarkdownContent text={state.text} /> : null}
+          {sourcesBlock}
           <div className="rr-conversation-answer-kicker">生成中断</div>
           <p className="rr-conversation-error-copy">
-            {state.errorMessage
-              ? `${state.errorMessage} 你的输入仍然保留，可以直接重试。`
-              : "暂时无法完成回答。你的输入仍然保留，可以直接重试。"}
+            {state.errorMessage ?? "暂时无法回答，请重试。"}
           </p>
           <button
             className="rr-conversation-quiet-button"
@@ -413,23 +549,12 @@ function GenerationMessage({
     <article className="rr-conversation-message is-assistant">
       <div className="rr-conversation-assistant-copy">
         {state.text ? <MarkdownContent text={state.text} streaming /> : null}
+        {sourcesBlock}
         {state.phase === "generating" ? (
           <ConversationGenerationIndicator
             onStop={canStop ? onStop : undefined}
+            label={state.toolLabel}
           />
-        ) : state.phase === "truncated" ? (
-          <div className="rr-conversation-generation-row">
-            <span className="rr-conversation-message-meta">
-              回答达到长度上限被截断
-            </span>
-            <button
-              className="rr-conversation-quiet-button"
-              type="button"
-              onClick={onRetry}
-            >
-              继续生成
-            </button>
-          </div>
         ) : state.phase === "stopped" ? (
           <div className="rr-conversation-generation-row">
             <span className="rr-conversation-message-meta">已停止</span>
@@ -462,6 +587,7 @@ function ConversationPage({
   const [lastExportedMessageCount, setLastExportedMessageCount] = useState(0);
   const [menuOpen, setMenuOpen] = useState(false);
   const [renameDraft, setRenameDraft] = useState<string | null>(null);
+  const [editingUserMessageId, setEditingUserMessageId] = useState<string | null>(null);
   const [deleteConfirmationOpen, setDeleteConfirmationOpen] = useState(false);
   const [managementBusy, setManagementBusy] = useState<
     "rename" | "delete" | null
@@ -482,6 +608,8 @@ function ConversationPage({
   const requestKeyRef = useRef(request.key);
   const timerRef = useRef<number | undefined>(undefined);
   const generationTokenRef = useRef(0);
+  const generationSourcesRef = useRef<AgentSource[]>([]);
+  const generationToolLabelRef = useRef<string | undefined>(undefined);
   const toastTimerRef = useRef<number | undefined>(undefined);
   const messageIdRef = useRef(0);
   const scrollAnimationRef = useRef<number | undefined>(undefined);
@@ -623,6 +751,10 @@ function ConversationPage({
           },
         ],
         markdown: replyText,
+        sources:
+          generationSourcesRef.current.length > 0
+            ? [...generationSourcesRef.current]
+            : undefined,
       };
 
       setThread((current) => {
@@ -650,7 +782,12 @@ function ConversationPage({
       stopTimer();
       let chunkIndex = state.nextChunkIndex;
       let replyText = state.text;
-      const runningState = { ...state, phase: "generating" as const };
+      const runningState = {
+        ...state,
+        phase: "generating" as const,
+        sources: [...generationSourcesRef.current],
+        toolLabel: generationToolLabelRef.current,
+      };
       setGeneration(runningState);
 
       if (chunkIndex >= state.chunks.length) {
@@ -681,6 +818,8 @@ function ConversationPage({
           phase: "generating",
           text: replyText,
           nextChunkIndex: chunkIndex,
+          sources: [...generationSourcesRef.current],
+          toolLabel: generationToolLabelRef.current,
         });
       }, 520);
     },
@@ -711,7 +850,12 @@ function ConversationPage({
         mode,
         replaceAssistantMessageId,
         retryKind: "generation",
+        sources: [],
       };
+      // 来源与工具状态以 ref 为权威累积（React state 投影可能在后续
+      // setGeneration 中被旧 pendingState 覆盖），每轮生成开始时重置。
+      generationSourcesRef.current = [];
+      generationToolLabelRef.current = undefined;
       setGeneration(pendingState);
 
       try {
@@ -725,6 +869,7 @@ function ConversationPage({
           messages: structuredClone(messages),
           prompt,
           mode,
+          replaceAssistantMessageId,
           onStreamDelta: (delta) => {
             if (generationToken !== generationTokenRef.current) {
               return;
@@ -733,6 +878,34 @@ function ConversationPage({
               current
                 ? { ...current, phase: "generating", text: current.text + delta }
                 : current,
+            );
+          },
+          onSourcesUpdated: (sources) => {
+            if (generationToken !== generationTokenRef.current) {
+              return;
+            }
+            for (const source of sources) {
+              if (
+                !generationSourcesRef.current.some(
+                  (known) => known.sourceId === source.sourceId,
+                )
+              ) {
+                generationSourcesRef.current.push(source);
+              }
+            }
+            setGeneration((current) =>
+              current
+                ? { ...current, sources: [...generationSourcesRef.current] }
+                : current,
+            );
+          },
+          onToolState: (label) => {
+            if (generationToken !== generationTokenRef.current) {
+              return;
+            }
+            generationToolLabelRef.current = label;
+            setGeneration((current) =>
+              current ? { ...current, toolLabel: label } : current,
             );
           },
         });
@@ -756,13 +929,23 @@ function ConversationPage({
         }
         if (service.capabilities.delivery === "streaming") {
           updateThread(reply.persistedThread!);
-          if (reply.status === "truncated") {
-            setGeneration({
-              ...pendingState,
-              phase: "truncated",
-              text: reply.chunks[0] ?? "",
-            });
-            return;
+          // 任务 4：finish_reason=length 的回答照常持久化；"回答可能不完整"
+          // 提示来自 assistant 消息的 truncated 标志（重启后仍可回看），
+          // 不再使用瞬态"继续生成"行。
+          if (generationSourcesRef.current.length > 0) {
+            const mergedThread = {
+              ...reply.persistedThread!,
+              messages: [...reply.persistedThread!.messages],
+            };
+            const lastIndex = mergedThread.messages.length - 1;
+            const last = mergedThread.messages[lastIndex];
+            if (lastIndex >= 0 && last.role === "assistant") {
+              mergedThread.messages[lastIndex] = {
+                ...last,
+                sources: [...generationSourcesRef.current],
+              };
+              updateThread(mergedThread);
+            }
           }
           setGeneration(null);
           return;
@@ -788,13 +971,13 @@ function ConversationPage({
         if (generationToken !== generationTokenRef.current) {
           return;
         }
+        // 任务 4：UI 永不展示技术错误原文；技术细节只进 console 与 Rust 日志。
         console.error("ReadRay 对话生成失败：", error);
         stopTimer();
         setGeneration({
           ...pendingState,
           phase: "failed",
-          errorMessage:
-            error instanceof Error ? error.message : String(error),
+          errorMessage: "暂时无法回答，请重试。",
         });
       }
     },
@@ -818,6 +1001,7 @@ function ConversationPage({
     setLastExportedMessageCount(0);
     setMenuOpen(false);
     setRenameDraft(null);
+    setEditingUserMessageId(null);
     setDeleteConfirmationOpen(false);
     setManagementBusy(null);
     setManagementError("");
@@ -845,6 +1029,7 @@ function ConversationPage({
                 userMessageId: nextThread.pendingTurn.userMessageId,
                 mode: "append",
                 retryKind: "generation",
+                sources: [],
               });
             }
           }
@@ -901,6 +1086,7 @@ function ConversationPage({
         if (ignore || requestToken !== generationTokenRef.current) {
           return;
         }
+        // 任务 4：UI 只显示友好文案；打开失败的技术细节只进 console 日志。
         console.error("ReadRay 对话打开失败：", error);
         if (request.kind === "prompt") {
           setDraft(request.prompt);
@@ -909,14 +1095,14 @@ function ConversationPage({
           phase: "failed",
           prompt: request.kind === "prompt" ? request.prompt : "",
           text: "",
-          errorMessage:
-            error instanceof Error ? error.message : String(error),
+          errorMessage: "暂时无法回答，请重试。",
           chunks: [],
           nextChunkIndex: 0,
           assistantMessageId: "",
           userMessageId: "",
           mode: "append",
           retryKind: "request",
+          sources: [],
         });
       }
     };
@@ -1115,7 +1301,9 @@ function ConversationPage({
     event.preventDefault();
     const prompt = draft.trim();
     const currentThread = threadRef.current;
-    if (!prompt || !currentThread || generation) {
+    // 只有真正生成中阻塞发送；失败/停止/截断态不锁死 composer——用户直接
+    // 输入新消息即进入新一轮（旧失败轮次按失败保留，pending 语义不变）。
+    if (!prompt || !currentThread || generation?.phase === "generating") {
       inputRef.current?.focus();
       return;
     }
@@ -1139,50 +1327,51 @@ function ConversationPage({
     void requestReply(nextThread, prompt, userMessage.id, "append");
   };
 
-  const regenerate = () => {
-    if (!service.capabilities.canRegenerate) {
-      setMenuOpen(false);
-      notify("真实 Quick AI 暂不支持重新生成回答");
-      return;
-    }
-    const currentThread = threadRef.current;
-    if (!currentThread) {
-      setMenuOpen(false);
-      return;
-    }
-
-    const assistantIndex = currentThread.messages.length - 1;
-    if (
-      assistantIndex < 0 ||
-      currentThread.messages[assistantIndex].role !== "assistant"
-    ) {
-      setMenuOpen(false);
-      notify("当前对话还没有可重新生成的回答");
-      return;
-    }
-
-    let userMessage: ConversationUserMessage | null = null;
-    for (let index = assistantIndex - 1; index >= 0; index -= 1) {
-      const message: ConversationMessage = currentThread.messages[index];
-      if (message.role === "user") {
-        userMessage = message;
-        break;
+  const openUserMessageEdit = useCallback(
+    (userMessage: ConversationUserMessage) => {
+      if (generation || editingUserMessageId) {
+        return;
       }
-    }
-    if (!userMessage) {
       setMenuOpen(false);
-      notify("未找到这一轮回答对应的问题");
-      return;
-    }
+      setEditingUserMessageId(userMessage.id);
+    },
+    [editingUserMessageId, generation],
+  );
 
-    void requestReply(
-      currentThread,
-      userMessage.content,
-      userMessage.id,
-      "regenerate",
-      currentThread.messages[assistantIndex].id,
-    );
-  };
+  const cancelUserMessageEdit = useCallback(() => {
+    setEditingUserMessageId(null);
+  }, []);
+
+  const submitUserMessageEdit = useCallback(
+    (userMessage: ConversationUserMessage, content: string) => {
+      const currentThread = threadRef.current;
+      if (!currentThread || generation) {
+        return;
+      }
+      const userIndex = currentThread.messages.findIndex(
+        (message) => message.id === userMessage.id,
+      );
+      const assistant = currentThread.messages
+        .slice(userIndex + 1)
+        .find((message) => message.role === "assistant");
+      if (!assistant) {
+        setEditingUserMessageId(null);
+        notify("未找到这一轮回答对应的问题");
+        return;
+      }
+      setEditingUserMessageId(null);
+      // 编辑并重新生成（任务 4 修复轮）：携带编辑后的问题与该轮旧回答目标；
+      // 新问题行替代旧问题行、新回答替代旧回答（方案 B，后端落库）。
+      void requestReply(
+        currentThread,
+        content,
+        userMessage.id,
+        "regenerate",
+        assistant.id,
+      );
+    },
+    [generation, notify, requestReply],
+  );
 
   const exportConversation = async () => {
     const currentThread = threadRef.current;
@@ -1362,17 +1551,49 @@ function ConversationPage({
     );
   };
 
+  const openSource = useCallback(
+    (source: AgentSource) => {
+      void service.openSource(source.url).catch((error) => {
+        console.error("ReadRay 来源打开失败：", error);
+        notify("来源打开失败");
+      });
+    },
+    [service],
+  );
+
+  // 编辑并重新生成（任务 4 修复轮）：仅最后一条用户输入展示入口——线程以
+  // assistant 结尾且其前一条是 user；生成中与编辑中不展示。
+  const lastMessage = thread?.messages[thread.messages.length - 1];
+  const previousMessage = thread?.messages[thread.messages.length - 2];
+  const editableUserMessageId =
+    !generation &&
+    !editingUserMessageId &&
+    lastMessage?.role === "assistant" &&
+    previousMessage?.role === "user"
+      ? previousMessage.id
+      : null;
+
   const messageContent: ReactNode = (
     <>
       {thread?.messages.length ? (
         thread.messages.map((message) =>
           message.role === "user" ? (
-            <UserMessage message={message} key={message.id} />
+            <UserMessage
+              message={message}
+              key={message.id}
+              editable={message.id === editableUserMessageId}
+              editing={message.id === editingUserMessageId}
+              sendShortcut={sendShortcut}
+              onEdit={openUserMessageEdit}
+              onSubmitEdit={submitUserMessageEdit}
+              onCancelEdit={cancelUserMessageEdit}
+            />
           ) : (
             <AssistantMessage
               message={message}
               key={message.id}
               onOpenMemory={openMemoryDrawer}
+              onOpenSource={openSource}
             />
           ),
         )
@@ -1385,6 +1606,7 @@ function ConversationPage({
           canStop={service.capabilities.canStop}
           onStop={stopGeneration}
           onRetry={retryOrContinueGeneration}
+          onOpenSource={openSource}
         />
       ) : null}
     </>
@@ -1464,23 +1686,6 @@ function ConversationPage({
             </button>
             {menuOpen ? (
               <div className="rr-conversation-more-menu" role="menu">
-                <button
-                  className="rr-conversation-menu-item"
-                  type="button"
-                  role="menuitem"
-                  disabled={
-                    generation !== null ||
-                    !service.capabilities.canRegenerate
-                  }
-                  title={
-                    service.capabilities.canRegenerate
-                      ? undefined
-                      : "真实 Quick AI 暂不支持重新生成"
-                  }
-                  onClick={regenerate}
-                >
-                  重新生成回答
-                </button>
                 <button
                   className="rr-conversation-menu-item"
                   type="button"
@@ -1573,7 +1778,7 @@ function ConversationPage({
                 className="rr-main-send"
                 type="submit"
                 aria-label="发送"
-                disabled={!draft.trim() || generation !== null}
+                disabled={!draft.trim() || generation?.phase === "generating"}
               >
                 <MainAppIcon name="send-up" />
               </button>

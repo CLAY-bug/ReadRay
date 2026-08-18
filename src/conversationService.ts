@@ -17,7 +17,6 @@ import type {
 const STREAMING_DELIVERY_CAPABILITIES = {
   delivery: "streaming",
   canStop: true,
-  canRegenerate: false,
   canExport: true,
 } as const;
 
@@ -117,6 +116,12 @@ function mapMessage(
     // 真实回答保留原始 Markdown 文本，页面渲染层优先走白名单渲染；
     // blocks 字段继续存在以兼容既有协议与 fixture 路径。
     markdown: message.content,
+    // 任务 4：来源随 assistant 消息落库，重启与历史回看直接可用；
+    // 截断标志驱动"回答可能不完整"的轻微提示。
+    sources: message.sources && message.sources.length > 0
+      ? message.sources
+      : undefined,
+    truncated: message.truncated === true,
     sequence: message.sequence,
   } satisfies ConversationAssistantMessage;
 }
@@ -149,8 +154,13 @@ export type RepositoryConversationServiceOptions = {
 
 function expectedUserSequence(request: ConversationGenerationRequest) {
   const pendingUser = request.messages[request.messages.length - 1];
+  if (pendingUser?.role !== "user") {
+    throw new Error("当前对话缺少待发送的用户消息。");
+  }
+  // 编辑并重新生成：尾 user 是"该轮身份"的旧问题行，编辑后的内容在 prompt
+  // 中（与旧问题必然不同），因此不做内容匹配；sequence 即该轮身份。
   if (
-    pendingUser?.role !== "user" ||
+    request.mode !== "regenerate" &&
     pendingUser.content.trim() !== request.prompt.trim()
   ) {
     throw new Error("当前对话缺少待发送的用户消息。");
@@ -172,15 +182,16 @@ function expectedUserSequence(request: ConversationGenerationRequest) {
       (maximum, message) => Math.max(maximum, message.sequence ?? 0),
       0,
     );
-  const sequence = previousSequence + 1;
+  // 上一条历史消息仍是 user（上一轮 pending 未完成，失败/中断）时，新消息
+  // 开启新轮次并跳过待完成的 assistant 位置（previousSequence + 2）；
+  // 否则正常连续追加（previousSequence + 1）。两种结果都必须保持奇数。
+  const previousIsPendingUser =
+    request.messages[request.messages.length - 2]?.role === "user";
+  const sequence = previousSequence + (previousIsPendingUser ? 2 : 1);
   if (sequence % 2 === 0) {
     throw new Error("当前对话历史不是可追加用户消息的完整版本。");
   }
   return sequence;
-}
-
-function errorMessage(error: unknown) {
-  return error instanceof Error ? error.message : String(error);
 }
 
 function exportFileName(title: string) {
@@ -206,10 +217,45 @@ function turnAt(
   ) {
     return null;
   }
-  const assistantMessage = snapshot.messages.find(
-    (message) => message.sequence === userSequence + 1,
-  );
+  // 当前回答 = 该 user 之后最后一条 assistant。重新生成后 sequence 存在间隙
+  // （旧回答 seq+1 被替代、新回答在更后的偶数位），不能假设恰好位于
+  // userSequence + 1；被替代的旧回答已被 Rust 快照过滤。
+  const assistantMessage = [...snapshot.messages]
+    .reverse()
+    .find(
+      (message) => message.role === "assistant" && message.sequence > userSequence,
+    );
   return { userMessage, assistantMessage };
+}
+
+function parseReplaceMessageId(messageId: string | undefined) {
+  if (!messageId) {
+    return null;
+  }
+  const match = /^quick-ai-message-(\d+)$/.exec(messageId);
+  if (!match) {
+    throw new Error("重新生成目标回答 ID 无效。");
+  }
+  const id = Number(match[1]);
+  if (!Number.isSafeInteger(id) || id <= 0) {
+    throw new Error("重新生成目标回答 ID 无效。");
+  }
+  return id;
+}
+
+/// 编辑并重新生成（任务 4 修复轮）：当前回答 = thread 中最后一条 assistant。
+/// 编辑提交后可见快照只含 [编辑后的问题, 新回答]，旧问题行与旧回答已被 Rust
+/// 快照过滤；编辑未提交时旧回答仍是 thread 中最后一条 assistant。
+function lastAssistantMessage(
+  thread: ConversationThread,
+): ConversationAssistantMessage | undefined {
+  for (let index = thread.messages.length - 1; index >= 0; index -= 1) {
+    const message = thread.messages[index];
+    if (message.role === "assistant") {
+      return message;
+    }
+  }
+  return undefined;
 }
 
 export class RepositoryConversationService implements ConversationService {
@@ -286,18 +332,24 @@ export class RepositoryConversationService implements ConversationService {
   }
 
   async generateReply(request: ConversationGenerationRequest) {
-    if (request.mode !== "append") {
-      throw new Error("真实 Quick AI 暂不支持重新生成回答。");
-    }
-
     const conversationId = requireConversationId(request.conversationId);
+    const replaceMessageId = parseReplaceMessageId(
+      request.replaceAssistantMessageId,
+    );
+    if (request.mode === "regenerate" && replaceMessageId === null) {
+      throw new Error("重新生成必须指定目标回答。");
+    }
+    if (request.mode === "append" && replaceMessageId !== null) {
+      throw new Error("追加回答不能携带重新生成目标。");
+    }
     const userSequence = expectedUserSequence(request);
+
     let snapshot: QuickAiConversation;
     let updateNotified = false;
     let streamed = false;
     let streamedText = "";
     let stoppedByUser = false;
-    let truncated = false;
+    let eventTruncated = false;
     try {
       snapshot = await this.repository.sendStreaming(
         conversationId,
@@ -311,9 +363,14 @@ export class RepositoryConversationService implements ConversationService {
           } else if (event.type === "stopped") {
             stoppedByUser = true;
           } else if (event.type === "truncated") {
-            truncated = true;
+            eventTruncated = true;
+          } else if (event.type === "sources_updated") {
+            request.onSourcesUpdated?.(event.sources);
+          } else if (event.type === "tool_state") {
+            request.onToolState?.(event.label);
           }
         },
+        replaceMessageId,
       );
     } catch (sendError) {
       this.onConversationUpdated?.();
@@ -322,36 +379,76 @@ export class RepositoryConversationService implements ConversationService {
       if (!recovered) {
         throw sendError;
       }
-      const recoveredTurn = turnAt(recovered, userSequence, request.prompt);
-      if (!recoveredTurn) {
-        throw sendError;
+      const recoveredThread = mapQuickAiConversation(recovered);
+      if (replaceMessageId !== null) {
+        // 编辑并重新生成（任务 4 修复轮）：目标旧回答仍是当前回答 → 编辑未提交，
+        // 保持失败可重试；目标已被替代 → 新回答已落库，按成功收尾返回权威快照。
+        const currentAssistant = lastAssistantMessage(recoveredThread);
+        if (
+          !currentAssistant ||
+          currentAssistant.id === request.replaceAssistantMessageId
+        ) {
+          return {
+            status: "pending" as const,
+            persistedThread: recoveredThread,
+            errorMessage: stoppedByUser
+              ? "回答已停止，已保留你的问题，可以直接重试。"
+              : "暂时无法回答，请重试。",
+          };
+        }
+        snapshot = recovered;
+      } else {
+        const recoveredTurn = turnAt(recovered, userSequence, request.prompt);
+        if (!recoveredTurn) {
+          throw sendError;
+        }
+        if (!recoveredTurn.assistantMessage) {
+          return {
+            status: "pending" as const,
+            persistedThread: recoveredThread,
+            errorMessage: stoppedByUser
+              ? "回答已停止，已保留你的问题，可以直接重试。"
+              : "暂时无法回答，请重试。",
+          };
+        }
+        snapshot = recovered;
       }
-      if (!recoveredTurn.assistantMessage) {
-        const persistedThread = mapQuickAiConversation(recovered);
-        return {
-          status: "pending" as const,
-          persistedThread,
-          errorMessage: stoppedByUser
-            ? "回答已停止，已保留你的问题，可以直接重试。"
-            : errorMessage(sendError),
-        };
-      }
-      snapshot = recovered;
     }
     const persistedThread = mapQuickAiConversation(snapshot);
-    const completedTurn = turnAt(snapshot, userSequence, request.prompt);
-    const assistantMessage = completedTurn?.assistantMessage;
-    if (assistantMessage?.role !== "assistant") {
+    // 编辑并重新生成：当前回答 = 最后一条 assistant（旧问/旧答已被快照过滤）；
+    // 普通追加：该轮 user 之后最后一条 assistant（重新生成后 sequence 有间隙，
+    // 不能假设恰好位于 userSequence + 1）。
+    if (replaceMessageId !== null) {
+      const editedAssistant = lastAssistantMessage(persistedThread);
+      if (editedAssistant?.role !== "assistant") {
+        throw new Error("Quick AI 已返回会话，但目标轮次仍没有助手回答。");
+      }
+      if (!updateNotified) {
+        this.onConversationUpdated?.();
+      }
+      // 任务 4：finish_reason=length 的截断以落库标志为准（历史回看一致）。
+      const truncated = eventTruncated || editedAssistant.truncated === true;
+      return {
+        status: truncated ? ("truncated" as const) : ("complete" as const),
+        assistantMessageId: editedAssistant.id,
+        chunks: streamed ? [streamedText] : [editedAssistant.markdown ?? ""],
+        persistedThread,
+      };
+    }
+    const appendedAssistant = turnAt(snapshot, userSequence, request.prompt)?.assistantMessage;
+    if (appendedAssistant?.role !== "assistant") {
       throw new Error("Quick AI 已返回会话，但目标轮次仍没有助手回答。");
     }
-
     if (!updateNotified) {
       this.onConversationUpdated?.();
     }
+    // 任务 4：finish_reason=length 的截断以落库标志为准（历史回看一致）；
+    // 事件标志保留兼容旧路径。
+    const truncated = eventTruncated || appendedAssistant.truncated === true;
     return {
       status: truncated ? ("truncated" as const) : ("complete" as const),
-      assistantMessageId: `quick-ai-message-${assistantMessage.id}`,
-      chunks: streamed ? [streamedText] : [assistantMessage.content],
+      assistantMessageId: `quick-ai-message-${appendedAssistant.id}`,
+      chunks: streamed ? [streamedText] : [appendedAssistant.content],
       persistedThread,
     };
   }
@@ -360,6 +457,10 @@ export class RepositoryConversationService implements ConversationService {
     await this.repository.abortStreaming(
       requireConversationId(conversationId),
     );
+  }
+
+  async openSource(url: string): Promise<void> {
+    await this.repository.openSource(url);
   }
 
   async exportConversation(

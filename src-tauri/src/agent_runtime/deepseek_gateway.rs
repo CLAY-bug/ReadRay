@@ -1,0 +1,1030 @@
+//! DeepSeekChatGateway：基于既有 chat/completions 传输的真实 ModelGateway。
+//!
+//! 复用 `deepseek_client::shared_http_client` 与 SSE 流解析，不引入第二个 HTTP
+//! 客户端。HTTP 流通过 `ChatCompletionStreamer` 注入：生产使用真实传输，测试
+//! 使用确定性 fake 流，因此本模块可以完全离线验证。流式 tool_calls 按 OpenAI
+//! 格式跨分片累积 id/name/arguments，流结束后输出完整 `ToolCall`。Responses
+//! API 因 spike 返回 400 未经确认，不作为本任务依据。
+
+use crate::agent_runtime::gateway::{
+    ModelGateway, ModelRequest, ModelTurnOutcome, ProviderMessage,
+};
+use crate::agent_runtime::protocol::{
+    AgentError, AgentErrorKind, ModelEvent, ModelFinishReason, ModelUsage,
+    ProviderContinuationState, ToolCall,
+};
+use crate::agent_runtime::tool::ToolSchema;
+use crate::deepseek_client::{
+    parse_model_token_usage_value, stream_chat_completion_events, StreamChunk,
+};
+use crate::model_usage::{record_for_app, ModelTokenUsage, ModelUsageCategory};
+use futures_util::future::BoxFuture;
+use futures_util::StreamExt;
+use serde_json::{json, Value};
+use std::collections::BTreeMap;
+use std::time::{SystemTime, UNIX_EPOCH};
+use tauri::AppHandle;
+
+/// 与既有 Quick AI 请求保持一致的生成参数（quick_ai.rs 私有常量）。
+const AGENT_MAX_TOKENS: u16 = 8_192;
+const AGENT_TEMPERATURE: f32 = 0.5;
+
+pub(crate) type StreamChunkStream =
+    futures_util::stream::BoxStream<'static, Result<StreamChunk, String>>;
+
+/// 可注入的 chat/completions SSE 传输边界。
+pub(crate) trait ChatCompletionStreamer: Send + Sync {
+    fn request_stream(
+        &self,
+        operation: &str,
+        request_body: &Value,
+        api_key: &str,
+    ) -> BoxFuture<'static, Result<StreamChunkStream, String>>;
+}
+
+pub(crate) struct DeepSeekTransport;
+
+impl ChatCompletionStreamer for DeepSeekTransport {
+    fn request_stream(
+        &self,
+        operation: &str,
+        request_body: &Value,
+        api_key: &str,
+    ) -> BoxFuture<'static, Result<StreamChunkStream, String>> {
+        let operation = operation.to_string();
+        let request_body = request_body.clone();
+        let api_key = api_key.to_string();
+        Box::pin(
+            async move { stream_chat_completion_events(&operation, &request_body, &api_key).await },
+        )
+    }
+}
+
+#[derive(Default)]
+struct ToolCallState {
+    id: Option<String>,
+    name: Option<String>,
+    arguments: String,
+}
+
+pub(crate) struct DeepSeekChatGateway {
+    model: String,
+    operation: String,
+    output_json_object: bool,
+    disable_thinking: bool,
+    max_tokens: u16,
+    temperature: f32,
+    streamer: Box<dyn ChatCompletionStreamer>,
+    record_usage: Box<dyn Fn(&ModelUsage) -> Result<(), String> + Send + Sync>,
+    resolve_api_key: Box<dyn Fn() -> Result<String, AgentError> + Send + Sync>,
+    continuation: ProviderContinuationState,
+}
+
+impl DeepSeekChatGateway {
+    pub(crate) fn new(model: impl Into<String>, app: Option<&AppHandle>) -> Self {
+        Self::for_surface(
+            model,
+            app,
+            "DeepSeek Quick AI Agent",
+            ModelUsageCategory::QuickAi,
+            false,
+        )
+    }
+
+    /// 面向指定业务面的构造：不同 surface（写作 vs 对话）使用各自的使用量分类、
+    /// 诊断操作名与 JSON 输出强制，但共享同一 ModelGateway / DeepSeekChatGateway
+    /// 内核。`output_json_object` 为 true 时请求体带
+    /// `response_format: {"type":"json_object"}`，供写作检查/问答这类依赖结构化
+    /// JSON 的 surface 使用（对话是自由文本，保持 false）。
+    pub(crate) fn for_surface(
+        model: impl Into<String>,
+        app: Option<&AppHandle>,
+        operation: impl Into<String>,
+        category: ModelUsageCategory,
+        output_json_object: bool,
+    ) -> Self {
+        let app = app.cloned();
+        Self {
+            model: model.into(),
+            operation: operation.into(),
+            output_json_object,
+            disable_thinking: false,
+            max_tokens: AGENT_MAX_TOKENS,
+            temperature: AGENT_TEMPERATURE,
+            streamer: Box::new(DeepSeekTransport),
+            record_usage: Box::new(move |usage| {
+                let Some(app) = &app else {
+                    return Ok(());
+                };
+                record_for_app(app, category, usage_to_token_usage(usage))
+            }),
+            resolve_api_key: Box::new(|| {
+                crate::secret_store::deepseek_api_key_state()
+                    .map_err(|error| agent_error(AgentErrorKind::ProviderAuthFailed, error))?
+                    .into_key()
+                    .ok_or_else(|| {
+                        agent_error(
+                            AgentErrorKind::ProviderAuthFailed,
+                            "未配置 DeepSeek API Key，无法执行 Agent 请求。",
+                        )
+                    })
+            }),
+            continuation: ProviderContinuationState {
+                provider: "deepseek-chat-completions".to_string(),
+                response_id: None,
+                tool_call_state: None,
+                private_reasoning: None,
+                provider_extensions: None,
+            },
+        }
+    }
+
+    /// 覆盖本 surface 的生成参数（max_tokens / temperature）。写作面使用与
+    /// 已验证的旧写作请求一致的参数（4096 / 0.2）：推理模型在更大输出预算下
+    /// 可能把预算全烧在 reasoning_content 上导致正文为空。
+    pub(crate) fn with_generation_params(mut self, max_tokens: u16, temperature: f32) -> Self {
+        self.max_tokens = max_tokens;
+        self.temperature = temperature;
+        self
+    }
+
+    /// 关闭思考模式（`thinking: {"type":"disabled"}`）。结构化 JSON 面（写作
+    /// 检查/问答、解释卡）必须关闭：`deepseek-v4-flash` 开启思考时会在长文章
+    /// 分析任务上把全部输出预算烧在 reasoning_content 上，正文为空
+    /// （finish=Length, content_chars=0）。
+    pub(crate) fn with_thinking_disabled(mut self) -> Self {
+        self.disable_thinking = true;
+        self
+    }
+
+    #[cfg(test)]
+    pub(crate) fn with_streamer(
+        model: impl Into<String>,
+        streamer: Box<dyn ChatCompletionStreamer>,
+        record_usage: Box<dyn Fn(&ModelUsage) -> Result<(), String> + Send + Sync>,
+    ) -> Self {
+        Self {
+            model: model.into(),
+            operation: "fake-deepseek-gateway".to_string(),
+            output_json_object: false,
+            disable_thinking: false,
+            max_tokens: AGENT_MAX_TOKENS,
+            temperature: AGENT_TEMPERATURE,
+            streamer,
+            record_usage,
+            resolve_api_key: Box::new(|| Ok("test-api-key".to_string())),
+            continuation: ProviderContinuationState {
+                provider: "deepseek-chat-completions".to_string(),
+                response_id: None,
+                tool_call_state: None,
+                private_reasoning: None,
+                provider_extensions: None,
+            },
+        }
+    }
+}
+
+impl ModelGateway for DeepSeekChatGateway {
+    fn stream_model(
+        &mut self,
+        request: ModelRequest,
+        on_event: &mut dyn FnMut(ModelEvent) -> Result<(), AgentError>,
+    ) -> Result<ModelTurnOutcome, AgentError> {
+        let api_key = (self.resolve_api_key)()?;
+        let request_body = build_chat_request_body(
+            &self.model,
+            &request.messages,
+            &request.tools,
+            self.output_json_object,
+            self.disable_thinking,
+            self.max_tokens,
+            self.temperature,
+        );
+        let operation = self.operation.clone();
+        let deadline_unix_ms = request.deadline_unix_ms;
+        let cancellation = request.cancellation.clone();
+
+        tauri::async_runtime::block_on(async move {
+            let mut stream = Box::pin(
+                self.streamer
+                    .request_stream(&operation, &request_body, &api_key)
+                    .await
+                    .map_err(|error| {
+                        agent_error(
+                            AgentErrorKind::ProviderNetwork,
+                            format!("{operation} 请求失败：{error}"),
+                        )
+                    })?,
+            );
+            let mut tool_states: BTreeMap<usize, ToolCallState> = BTreeMap::new();
+            let mut finish_reason = ModelFinishReason::Stop;
+            let mut aborted = false;
+            // 写作面诊断：累计 content/reasoning 字符与开头片段，定位"纯推理零
+            // 内容"（模型把输出预算烧在 reasoning_content 上、正文为空）。
+            let mut content_chars: usize = 0;
+            let mut reasoning_chars: usize = 0;
+            let mut content_head = String::new();
+            let mut reasoning_head = String::new();
+
+            while let Some(chunk) = stream.next().await {
+                if cancellation.is_requested() {
+                    aborted = true;
+                    break;
+                }
+                if now_unix_ms() >= deadline_unix_ms {
+                    return Err(agent_error(
+                        AgentErrorKind::ProviderTimeout,
+                        "模型请求超过 run 总超时。",
+                    ));
+                }
+                let chunk = chunk.map_err(|error| {
+                    agent_error(
+                        AgentErrorKind::ProviderNetwork,
+                        format!("{operation} 流式响应读取失败：{error}"),
+                    )
+                })?;
+                if !chunk.delta.is_empty() {
+                    content_chars += chunk.delta.chars().count();
+                    if content_head.chars().count() < 160 {
+                        content_head.push_str(&chunk.delta);
+                    }
+                    on_event(ModelEvent::TextDelta {
+                        text: chunk.delta.clone(),
+                    })
+                    .map_err(propagate_sink_error)?;
+                }
+                if let Some(reasoning) = chunk.reasoning {
+                    // 私有推理只留在内存 continuation，绝不投影为 AgentEvent。
+                    reasoning_chars += reasoning.chars().count();
+                    if reasoning_head.chars().count() < 160 {
+                        reasoning_head.push_str(&reasoning);
+                    }
+                    self.continuation.private_reasoning = Some(reasoning.clone());
+                    on_event(ModelEvent::ReasoningDelta { text: reasoning })
+                        .map_err(propagate_sink_error)?;
+                }
+                if let Some(calls) = chunk.tool_calls {
+                    for delta in calls {
+                        let state = tool_states.entry(delta.index).or_default();
+                        if let Some(id) = delta.id {
+                            state.id = Some(id);
+                        }
+                        if let Some(function) = delta.function {
+                            if let Some(name) = function.name {
+                                state.name = Some(name);
+                            }
+                            if let Some(arguments) = function.arguments {
+                                state.arguments.push_str(&arguments);
+                            }
+                        }
+                    }
+                }
+                if let Some(raw_usage) = chunk.usage {
+                    // "存在但格式非法"的 usage 只记日志并跳过，不杀死 run：
+                    // 统计失败不改变业务结果（与既有链路策略一致）。
+                    let Ok(parsed) = parse_model_token_usage_value(&raw_usage) else {
+                        eprintln!("READRAY_AGENT_USAGE_PARSE_FAILED={raw_usage}");
+                        continue;
+                    };
+                    let usage = ModelUsage {
+                        prompt_tokens: parsed.prompt_tokens,
+                        completion_tokens: parsed.completion_tokens,
+                        total_tokens: parsed.total_tokens,
+                    };
+                    // 使用量尽力记录，统计写入失败不改变模型结果。
+                    if let Err(error) = (self.record_usage)(&usage) {
+                        eprintln!("READRAY_AGENT_USAGE_RECORD_FAILED={error}");
+                    }
+                    on_event(ModelEvent::Usage { usage }).map_err(propagate_sink_error)?;
+                }
+                if let Some(reason) = chunk.finish_reason.as_deref() {
+                    finish_reason = match reason {
+                        "stop" => ModelFinishReason::Stop,
+                        "tool_calls" => ModelFinishReason::ToolCalls,
+                        "length" => {
+                            // 边界：Length 已作为 Completed{Length} 输出，但任务 2
+                            // 协调器会把截断文本按完整回答持久化；截断的继续/UI
+                            // 语义属任务 4，此处只标注不实现。
+                            ModelFinishReason::Length
+                        }
+                        other => ModelFinishReason::Provider(other.to_string()),
+                    };
+                }
+            }
+
+            // 写作面（强制 JSON 输出）"正文为空"诊断：finish_reason + 字符统计
+            // 定位"预算烧完（length）"与"模型自行停止（stop）"；成功输出正文时
+            // 不打印，保持日志干净。
+            if self.output_json_object && content_chars == 0 {
+                let head = |text: &str| {
+                    let mut head = text.chars().take(160).collect::<String>();
+                    if text.chars().count() > 160 {
+                        head.push('…');
+                    }
+                    head
+                };
+                eprintln!(
+                    "READRAY_JSON_STREAM_DIAG=finish={finish_reason:?} \
+                     content_chars={content_chars} reasoning_chars={reasoning_chars} \
+                     content_head={:?} reasoning_head={:?}",
+                    head(&content_head),
+                    head(&reasoning_head)
+                );
+            }
+
+            if aborted {
+                // 取消是内核的 RunStopped 边界：不输出已累积的 tool calls 与 Completed。
+                return Ok(ModelTurnOutcome { aborted });
+            }
+
+            // 流结束后输出累积的完整 tool calls；解析失败属于 provider 协议错误。
+            for (_, state) in tool_states {
+                let id = state.id.ok_or_else(|| {
+                    agent_error(
+                        AgentErrorKind::ProviderProtocolError,
+                        "tool call 增量缺少 id。",
+                    )
+                })?;
+                let name = state.name.ok_or_else(|| {
+                    agent_error(
+                        AgentErrorKind::ProviderProtocolError,
+                        "tool call 增量缺少名称。",
+                    )
+                })?;
+                let arguments: Value = serde_json::from_str(&state.arguments).map_err(|_| {
+                    agent_error(
+                        AgentErrorKind::ProviderProtocolError,
+                        "tool call 参数增量不是合法 JSON。",
+                    )
+                })?;
+                if !arguments.is_object() {
+                    return Err(agent_error(
+                        AgentErrorKind::ProviderProtocolError,
+                        "tool call 参数不是 JSON object。",
+                    ));
+                }
+                on_event(ModelEvent::ToolCall {
+                    call: ToolCall {
+                        id,
+                        name,
+                        arguments,
+                    },
+                })
+                .map_err(propagate_sink_error)?;
+            }
+            on_event(ModelEvent::Completed {
+                reason: finish_reason,
+            })
+            .map_err(propagate_sink_error)?;
+            Ok(ModelTurnOutcome { aborted })
+        })
+    }
+
+    fn continuation(&self) -> &ProviderContinuationState {
+        &self.continuation
+    }
+}
+
+fn propagate_sink_error(error: AgentError) -> AgentError {
+    error
+}
+
+fn now_unix_ms() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as u64
+}
+
+fn usage_to_token_usage(usage: &ModelUsage) -> ModelTokenUsage {
+    ModelTokenUsage {
+        prompt_tokens: usage.prompt_tokens,
+        completion_tokens: usage.completion_tokens,
+        total_tokens: usage.total_tokens,
+    }
+}
+
+pub(crate) fn build_chat_request_body(
+    model: &str,
+    messages: &[ProviderMessage],
+    tools: &[ToolSchema],
+    output_json_object: bool,
+    disable_thinking: bool,
+    max_tokens: u16,
+    temperature: f32,
+) -> Value {
+    let mut body = json!({
+        "model": model,
+        "messages": messages.iter().map(project_message).collect::<Vec<_>>(),
+        "stream": true,
+        "stream_options": { "include_usage": true },
+        "max_tokens": max_tokens,
+        "temperature": temperature,
+    });
+    if output_json_object {
+        body["response_format"] = json!({ "type": "json_object" });
+    }
+    if disable_thinking {
+        // 结构化 JSON 面关闭思考模式（与解释卡路径一致）：推理模型在长文章
+        // 分析任务上会把全部输出预算烧在 reasoning_content 上、正文为空。
+        body["thinking"] = json!({ "type": "disabled" });
+    }
+    if !tools.is_empty() {
+        body["tools"] = json!(tools.iter().map(project_tool).collect::<Vec<_>>());
+    }
+    body
+}
+
+fn project_message(message: &ProviderMessage) -> Value {
+    match message {
+        ProviderMessage::System { content } => {
+            json!({ "role": "system", "content": content })
+        }
+        ProviderMessage::User { content } => json!({ "role": "user", "content": content }),
+        ProviderMessage::Assistant {
+            content,
+            tool_calls,
+        } => {
+            // 空 tool_calls 必须省略该键：DeepSeek 拒绝 `tool_calls: []`
+            // （要求长度 ≥1）。历史 assistant 消息没有工具调用即空数组。
+            let mut projected = json!({ "role": "assistant", "content": content });
+            if !tool_calls.is_empty() {
+                let projected_calls = tool_calls
+                    .iter()
+                    .map(|call| {
+                        json!({
+                            "id": call.id,
+                            "type": "function",
+                            "function": {
+                                "name": call.name,
+                                "arguments": serde_json::to_string(&call.arguments)
+                                    .unwrap_or_default(),
+                            }
+                        })
+                    })
+                    .collect::<Vec<_>>();
+                projected["tool_calls"] = json!(projected_calls);
+            }
+            projected
+        }
+        ProviderMessage::Tool { result } => json!({
+            "role": "tool",
+            "tool_call_id": result.tool_call_id,
+            "content": result.content,
+        }),
+        // 折叠摘要（方案三）投影为一条 user 消息：不引入主系统提示词之外的
+        // 第二条 system（避开中间 system 的 shape 风险），也不把较早的过时内容
+        // 抬成全局权威背景。它由 transcript() 与配对 assistant 一起保证合法的
+        // user/assistant 交替。
+        ProviderMessage::CompactionSummary { content } => {
+            json!({ "role": "user", "content": content })
+        }
+    }
+}
+
+fn project_tool(tool: &ToolSchema) -> Value {
+    json!({
+        "type": "function",
+        "function": {
+            "name": tool.name,
+            "description": tool.description,
+            "parameters": tool.input_schema,
+        }
+    })
+}
+
+fn agent_error(kind: AgentErrorKind, message: impl Into<String>) -> AgentError {
+    AgentError::new(kind, message).expect("gateway 的固定错误消息必须有效")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::agent_runtime::coordinator::Cancellation;
+    use crate::agent_runtime::protocol::{ModelUsage, RunBudget, ToolResult};
+    use crate::deepseek_client::{StreamChunkToolCallDelta, StreamChunkToolCallFunction};
+    use std::sync::Mutex;
+
+    fn tool_schema(name: &str) -> ToolSchema {
+        ToolSchema {
+            name: name.to_string(),
+            description: format!("{name} 描述"),
+            input_schema: json!({ "type": "object" }),
+        }
+    }
+
+    #[test]
+    fn request_body_projects_messages_and_tools() {
+        let call = ToolCall {
+            id: "call-1".into(),
+            name: "get_date".into(),
+            arguments: json!({}),
+        };
+        let result = ToolResult::success(
+            &call,
+            "2026-08-17",
+            crate::agent_runtime::protocol::ToolProvenance::LocalFact,
+            1,
+            2,
+        );
+        let messages = vec![
+            ProviderMessage::System {
+                content: "system".into(),
+            },
+            ProviderMessage::User {
+                content: "hello".into(),
+            },
+            ProviderMessage::Assistant {
+                content: "checking".into(),
+                tool_calls: vec![call.clone()],
+            },
+            ProviderMessage::Tool { result },
+        ];
+        let body = build_chat_request_body(
+            "deepseek-v4-flash",
+            &messages,
+            &[tool_schema("get_date")],
+            false,
+            false,
+            AGENT_MAX_TOKENS,
+            AGENT_TEMPERATURE,
+        );
+
+        assert_eq!(body["model"], "deepseek-v4-flash");
+        assert_eq!(body["stream"], true);
+        assert_eq!(body["stream_options"]["include_usage"], true);
+        assert_eq!(body["max_tokens"], AGENT_MAX_TOKENS);
+        assert_eq!(body["temperature"], AGENT_TEMPERATURE);
+        assert_eq!(body["messages"][0]["role"], "system");
+        assert_eq!(body["messages"][1]["role"], "user");
+        let assistant = &body["messages"][2];
+        assert_eq!(assistant["role"], "assistant");
+        assert_eq!(assistant["tool_calls"][0]["id"], "call-1");
+        assert_eq!(assistant["tool_calls"][0]["function"]["name"], "get_date");
+        assert_eq!(assistant["tool_calls"][0]["function"]["arguments"], "{}");
+        assert_eq!(body["messages"][3]["role"], "tool");
+        assert_eq!(body["messages"][3]["tool_call_id"], "call-1");
+        assert_eq!(body["messages"][3]["content"], "2026-08-17");
+        assert_eq!(body["tools"][0]["function"]["name"], "get_date");
+        assert_eq!(body["tools"][0]["function"]["description"], "get_date 描述");
+        assert_eq!(
+            body["tools"][0]["function"]["parameters"],
+            json!({"type": "object"})
+        );
+    }
+
+    #[test]
+    fn empty_tool_calls_omits_the_key_from_assistant_projection() {
+        // 历史 assistant 消息无工具调用：投影必须省略 tool_calls 键，
+        // 不能输出 `tool_calls: []`（DeepSeek 400：要求数组长度 ≥1）。
+        let messages = vec![ProviderMessage::Assistant {
+            content: "previous answer".into(),
+            tool_calls: Vec::new(),
+        }];
+        let body = build_chat_request_body(
+            "deepseek-v4-flash",
+            &messages,
+            &[],
+            false,
+            false,
+            AGENT_MAX_TOKENS,
+            AGENT_TEMPERATURE,
+        );
+        let assistant = &body["messages"][0];
+        assert_eq!(assistant["role"], "assistant");
+        assert_eq!(assistant["content"], "previous answer");
+        assert!(
+            assistant.get("tool_calls").is_none(),
+            "空 tool_calls 不得投影为 tool_calls 键：{assistant}"
+        );
+    }
+
+    #[test]
+    fn request_body_emits_json_object_only_when_requested() {
+        // 回归：写作检查/问答依赖结构化 JSON，必须带 response_format json_object
+        // 强制模型输出正文（推理模型"纯推理零内容"会触发 ProviderProtocolError）；
+        // 对话自由文本面保持不带，避免改变已验证的对话请求形状。
+        let messages = vec![ProviderMessage::User {
+            content: "hello".into(),
+        }];
+        let plain = build_chat_request_body(
+            "deepseek-v4-flash",
+            &messages,
+            &[],
+            false,
+            false,
+            AGENT_MAX_TOKENS,
+            AGENT_TEMPERATURE,
+        );
+        assert!(
+            plain.get("response_format").is_none(),
+            "自由文本请求不应带 response_format：{plain}"
+        );
+        assert!(
+            plain.get("thinking").is_none(),
+            "自由文本请求不应关闭思考模式：{plain}"
+        );
+        let json = build_chat_request_body(
+            "deepseek-v4-flash",
+            &messages,
+            &[],
+            true,
+            true,
+            AGENT_MAX_TOKENS,
+            AGENT_TEMPERATURE,
+        );
+        assert_eq!(
+            json["response_format"],
+            json!({"type": "json_object"}),
+            "JSON 面必须带 response_format：{json}"
+        );
+        assert_eq!(
+            json["thinking"],
+            json!({"type": "disabled"}),
+            "JSON 面必须关闭思考模式：{json}"
+        );
+    }
+
+    #[test]
+    fn request_body_uses_surface_generation_params() {
+        // 写作面使用与已验证旧写作请求一致的生成参数（4096 / 0.2），防止推理
+        // 模型把输出预算全烧在 reasoning_content 上导致正文为空。
+        let messages = vec![ProviderMessage::User {
+            content: "hello".into(),
+        }];
+        let body = build_chat_request_body(
+            "deepseek-v4-flash",
+            &messages,
+            &[],
+            false,
+            false,
+            4_096,
+            0.2,
+        );
+        assert_eq!(body["max_tokens"], json!(4_096));
+        assert_eq!(body["temperature"], json!(0.2_f32));
+    }
+
+    #[test]
+    fn folded_summary_projects_as_single_system_user_history_and_valid_alternation() {
+        // 方案三验收（任务 5 收口）：折叠摘要投影为 user 历史消息，而不是第二条
+        // system。最终 provider 消息数组必须——只有一条 system（主系统提示词）、
+        // 摘要以 user 角色呈现且措辞含"供回顾参考/以当前对话为准"、末尾是 pending
+        // user、user/assistant 严格交替。
+        let messages = vec![
+            ProviderMessage::System {
+                content: "你是 ReadRay 的英语学习助手。".into(),
+            },
+            ProviderMessage::CompactionSummary {
+                content: "（较早对话的折叠摘要，仅供回顾参考，以当前对话为准。）较早对话中共 4 条消息已压缩成一个摘要。最近的问题包括：\n1. 原来的问题".into(),
+            },
+            // transcript() 在折叠分支插入的空 assistant 配对（空 tool_calls，键省略）。
+            ProviderMessage::Assistant {
+                content: String::new(),
+                tool_calls: Vec::new(),
+            },
+            ProviderMessage::User {
+                content: "最近的问题".into(),
+            },
+            ProviderMessage::Assistant {
+                content: "最近的回答".into(),
+                tool_calls: Vec::new(),
+            },
+            // 末尾 pending user。
+            ProviderMessage::User {
+                content: "当前 pending 问题".into(),
+            },
+        ];
+        let body = build_chat_request_body(
+            "deepseek-v4-flash",
+            &messages,
+            &[],
+            false,
+            false,
+            AGENT_MAX_TOKENS,
+            AGENT_TEMPERATURE,
+        );
+        let projected = &body["messages"];
+
+        // 只有一条 system（主系统提示词），中间没有第二条 system。
+        let system_count = projected
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|m| m["role"] == "system")
+            .count();
+        assert_eq!(system_count, 1, "投影只能有一条 system：{projected}");
+
+        // 折叠摘要是 user 角色，不是 system。
+        let summary = &projected[1];
+        assert_eq!(summary["role"], "user");
+        assert!(
+            summary["content"]
+                .as_str()
+                .unwrap()
+                .contains("以供回顾参考")
+                || summary["content"]
+                    .as_str()
+                    .unwrap()
+                    .contains("以当前对话为准"),
+            "摘要措辞必须明确标注仅供参考、以当前对话为准：{summary}"
+        );
+
+        // 末尾是 pending user。
+        assert_eq!(
+            projected[projected.as_array().unwrap().len() - 1]["role"],
+            "user"
+        );
+        assert_eq!(
+            projected[projected.as_array().unwrap().len() - 1]["content"],
+            "当前 pending 问题"
+        );
+
+        // user/assistant 严格交替（跳过首条 system）。
+        let roles: Vec<&str> = projected
+            .as_array()
+            .unwrap()
+            .iter()
+            .skip(1)
+            .map(|m| m["role"].as_str().unwrap())
+            .collect();
+        for pair in roles.windows(2) {
+            assert_ne!(pair[0], pair[1], "user/assistant 必须交替：{projected:?}");
+        }
+    }
+
+    struct FakeStreamer {
+        chunks: Vec<Result<StreamChunk, String>>,
+        requests: Mutex<Vec<(String, Value)>>,
+    }
+
+    impl FakeStreamer {
+        fn new(chunks: Vec<Result<StreamChunk, String>>) -> Self {
+            Self {
+                chunks,
+                requests: Mutex::new(Vec::new()),
+            }
+        }
+    }
+
+    impl ChatCompletionStreamer for FakeStreamer {
+        fn request_stream(
+            &self,
+            operation: &str,
+            request_body: &Value,
+            _api_key: &str,
+        ) -> BoxFuture<'static, Result<StreamChunkStream, String>> {
+            self.requests
+                .lock()
+                .unwrap()
+                .push((operation.to_string(), request_body.clone()));
+            let chunks = self.chunks.clone();
+            Box::pin(async move {
+                Ok(Box::pin(futures_util::stream::iter(chunks)) as StreamChunkStream)
+            })
+        }
+    }
+
+    fn text_chunk(delta: &str) -> StreamChunk {
+        StreamChunk {
+            delta: delta.to_string(),
+            finish_reason: None,
+            usage: None,
+            reasoning: None,
+            tool_calls: None,
+        }
+    }
+
+    fn finish_chunk(reason: &str, usage: Option<Value>) -> StreamChunk {
+        StreamChunk {
+            delta: String::new(),
+            finish_reason: Some(reason.to_string()),
+            usage,
+            reasoning: None,
+            tool_calls: None,
+        }
+    }
+
+    fn run_gateway(
+        streamer: FakeStreamer,
+        cancel: Option<&Cancellation>,
+    ) -> (
+        Result<ModelTurnOutcome, AgentError>,
+        Vec<ModelEvent>,
+        std::sync::Arc<std::sync::Mutex<Option<ModelUsage>>>,
+    ) {
+        let recorded_usage = std::sync::Arc::new(std::sync::Mutex::new(None));
+        let recorded_for_closure = recorded_usage.clone();
+        let mut gateway = DeepSeekChatGateway::with_streamer(
+            "deepseek-v4-flash",
+            Box::new(streamer),
+            Box::new(move |usage| {
+                *recorded_for_closure.lock().unwrap() = Some(usage.clone());
+                Ok(())
+            }),
+        );
+        let request = ModelRequest {
+            messages: vec![ProviderMessage::User {
+                content: "hi".into(),
+            }],
+            tools: vec![tool_schema("get_date")],
+            budget: RunBudget::first_version(),
+            deadline_unix_ms: now_unix_ms() + 180_000,
+            cancellation: cancel.cloned().unwrap_or_default(),
+        };
+        let mut events = Vec::new();
+        let outcome = gateway.stream_model(request, &mut |event| {
+            events.push(event.clone());
+            Ok(())
+        });
+        (outcome, events, recorded_usage)
+    }
+
+    #[test]
+    fn final_text_stream_produces_text_usage_and_completed() {
+        let streamer = FakeStreamer::new(vec![
+            Ok(text_chunk("final ")),
+            Ok(text_chunk("answer")),
+            Ok(finish_chunk(
+                "stop",
+                Some(json!({
+                    "prompt_tokens": 10,
+                    "completion_tokens": 2,
+                    "total_tokens": 12
+                })),
+            )),
+        ]);
+        let (outcome, events, recorded_usage) = run_gateway(streamer, None);
+
+        let outcome = outcome.expect("gateway 必须成功返回");
+        assert!(!outcome.aborted);
+        assert!(matches!(
+            events.as_slice(),
+            [
+                ModelEvent::TextDelta { .. },
+                ModelEvent::TextDelta { .. },
+                ModelEvent::Usage { .. },
+                ModelEvent::Completed { .. }
+            ]
+        ));
+        assert_eq!(
+            recorded_usage
+                .lock()
+                .unwrap()
+                .as_ref()
+                .unwrap()
+                .total_tokens,
+            12
+        );
+    }
+
+    #[test]
+    fn tool_call_stream_folds_argument_deltas_into_one_call() {
+        let streamer = FakeStreamer::new(vec![
+            Ok(StreamChunk {
+                delta: String::new(),
+                finish_reason: None,
+                usage: None,
+                reasoning: None,
+                tool_calls: Some(vec![StreamChunkToolCallDelta {
+                    index: 0,
+                    id: Some("call_1".into()),
+                    function: Some(StreamChunkToolCallFunction {
+                        name: Some("get_date".into()),
+                        arguments: Some("{\"timezone\":\"Asia".into()),
+                    }),
+                }]),
+            }),
+            Ok(StreamChunk {
+                delta: String::new(),
+                finish_reason: None,
+                usage: None,
+                reasoning: None,
+                tool_calls: Some(vec![StreamChunkToolCallDelta {
+                    index: 0,
+                    id: None,
+                    function: Some(StreamChunkToolCallFunction {
+                        name: None,
+                        arguments: Some("/Shanghai\"}".into()),
+                    }),
+                }]),
+            }),
+            Ok(finish_chunk("tool_calls", None)),
+        ]);
+        let (outcome, events, _) = run_gateway(streamer, None);
+
+        let outcome = outcome.expect("gateway 必须成功返回");
+        assert!(!outcome.aborted);
+        let mut calls = Vec::new();
+        for event in &events {
+            if let ModelEvent::ToolCall { call } = event {
+                calls.push(call.clone());
+            }
+        }
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].id, "call_1");
+        assert_eq!(calls[0].name, "get_date");
+        assert_eq!(calls[0].arguments, json!({"timezone": "Asia/Shanghai"}));
+        assert!(events.iter().any(|event| matches!(
+            event,
+            ModelEvent::Completed {
+                reason: ModelFinishReason::ToolCalls
+            }
+        )));
+    }
+
+    #[test]
+    fn cancellation_stops_streaming_with_aborted_outcome() {
+        let cancellation = Cancellation::new();
+        let cancel_for_stream = cancellation.clone();
+        let streamer = FakeStreamer::new(vec![
+            Ok(text_chunk("partial")),
+            Ok(text_chunk("after cancel")),
+        ]);
+        let recorded_usage = std::sync::Arc::new(std::sync::Mutex::new(None));
+        let recorded_for_closure = recorded_usage.clone();
+        let mut gateway = DeepSeekChatGateway::with_streamer(
+            "deepseek-v4-flash",
+            Box::new(streamer),
+            Box::new(move |usage| {
+                *recorded_for_closure.lock().unwrap() = Some(usage.clone());
+                Ok(())
+            }),
+        );
+        let request = ModelRequest {
+            messages: vec![ProviderMessage::User {
+                content: "hi".into(),
+            }],
+            tools: vec![],
+            budget: RunBudget::first_version(),
+            deadline_unix_ms: now_unix_ms() + 180_000,
+            cancellation: cancellation.clone(),
+        };
+        let mut events = Vec::new();
+        let outcome = gateway.stream_model(request, &mut |event| {
+            events.push(event.clone());
+            if matches!(event, ModelEvent::TextDelta { text } if text == "partial") {
+                cancel_for_stream.request();
+            }
+            Ok(())
+        });
+        let outcome = outcome.expect("取消是正常收尾");
+        assert!(outcome.aborted);
+        assert_eq!(events.len(), 1, "取消后不再继续输出事件");
+    }
+
+    #[test]
+    fn malformed_usage_does_not_kill_the_run() {
+        let streamer = FakeStreamer::new(vec![
+            Ok(text_chunk("answer")),
+            Ok(finish_chunk(
+                "stop",
+                Some(json!({"prompt_tokens": 1, "completion_tokens": 2})),
+            )),
+        ]);
+        let (outcome, events, recorded_usage) = run_gateway(streamer, None);
+
+        // "存在但格式非法"的 usage（缺 total_tokens）只记日志，不终止 run。
+        let outcome = outcome.expect("usage 解析失败不得终止 run");
+        assert!(!outcome.aborted);
+        assert!(events
+            .iter()
+            .any(|event| matches!(event, ModelEvent::Completed { .. })));
+        assert!(!events
+            .iter()
+            .any(|event| matches!(event, ModelEvent::Usage { .. })));
+        assert!(recorded_usage.lock().unwrap().is_none());
+    }
+
+    #[test]
+    fn stream_errors_map_to_provider_network() {
+        let streamer = FakeStreamer::new(vec![Err("connection reset".to_string())]);
+        let (outcome, _, _) = run_gateway(streamer, None);
+        let error = outcome.expect_err("流错误必须映射为 AgentError");
+        assert_eq!(error.kind, AgentErrorKind::ProviderNetwork);
+    }
+
+    #[test]
+    fn malformed_tool_call_arguments_is_provider_protocol_error() {
+        let streamer = FakeStreamer::new(vec![
+            Ok(StreamChunk {
+                delta: String::new(),
+                finish_reason: None,
+                usage: None,
+                reasoning: None,
+                tool_calls: Some(vec![StreamChunkToolCallDelta {
+                    index: 0,
+                    id: Some("call_1".into()),
+                    function: Some(StreamChunkToolCallFunction {
+                        name: Some("get_date".into()),
+                        arguments: Some("{broken".into()),
+                    }),
+                }]),
+            }),
+            Ok(finish_chunk("tool_calls", None)),
+        ]);
+        let (outcome, _, _) = run_gateway(streamer, None);
+        let error = outcome.expect_err("坏参数增量必须报协议错误");
+        assert_eq!(error.kind, AgentErrorKind::ProviderProtocolError);
+    }
+}

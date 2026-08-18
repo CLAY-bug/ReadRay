@@ -29,7 +29,7 @@ function snapshot(messages = [], overrides = {}) {
   };
 }
 
-function message(id, role, content, sequence) {
+function message(id, role, content, sequence, overrides = {}) {
   return {
     id,
     conversationId: 17,
@@ -37,11 +37,13 @@ function message(id, role, content, sequence) {
     content,
     sequence,
     createdAtUnixMs: NOW.getTime(),
+    ...overrides,
   };
 }
 
 // 注入式 repository 的流式实现：把 sendStreaming 转接到 send 语义，
-// 并保留 onEvent 回调以模拟 channel 事件。
+// 并保留 onEvent 回调以模拟 channel 事件。事件先于 send 结果发出，
+// 与真实 channel 在 invoke 期间到达的行为一致（停止/失败时事件仍可达）。
 function withStreaming(repository, options = {}) {
   return {
     ...repository,
@@ -50,12 +52,8 @@ function withStreaming(repository, options = {}) {
       expectedUserSequence,
       content,
       onEvent,
+      replaceMessageId = null,
     ) => {
-      const result = await repository.send(
-        conversationId,
-        expectedUserSequence,
-        content,
-      );
       if (options.emitDelta) {
         for (const piece of options.emitDelta) {
           onEvent({ type: "delta", text: piece });
@@ -67,6 +65,12 @@ function withStreaming(repository, options = {}) {
       if (options.truncated) {
         onEvent({ type: "truncated" });
       }
+      const result = await repository.send(
+        conversationId,
+        expectedUserSequence,
+        content,
+        replaceMessageId,
+      );
       return result;
     },
     abortStreaming:
@@ -768,7 +772,7 @@ test("提交成功但 IPC 与随后读取均失败时再次重试仍使用原 se
   assert.equal(result.persistedThread.messages.length, 2);
 });
 
-test("缺失会话和真实后端不支持的重新生成会明确失败", async () => {
+test("缺失会话明确失败，重新生成必须携带目标回答", async () => {
   const service = new RepositoryConversationService(
     withStreaming({
       create: async () => snapshot(),
@@ -788,8 +792,175 @@ test("缺失会话和真实后端不支持的重新生成会明确失败", async
       prompt: "重生成",
       mode: "regenerate",
     }),
-    /暂不支持重新生成/,
+    /必须指定目标回答/,
   );
+  await assert.rejects(
+    service.generateReply({
+      conversationId: "17",
+      messages: [],
+      prompt: "重生成",
+      mode: "regenerate",
+      replaceAssistantMessageId: "not-a-message-id",
+    }),
+    /目标回答 ID 无效/,
+  );
+  await assert.rejects(
+    service.generateReply({
+      conversationId: "17",
+      messages: [],
+      prompt: "追加",
+      mode: "append",
+      replaceAssistantMessageId: "quick-ai-message-42",
+    }),
+    /不能携带重新生成目标/,
+  );
+});
+
+test("编辑并重新生成复用该轮身份并携带编辑内容与目标回答 ID", async () => {
+  const sent = [];
+  // 编辑提交后的可见快照：旧问题行已被过滤，只剩编辑后的问题与新回答。
+  const regenerated = snapshot([
+    message(45, "user", "编辑后的问题", 3),
+    message(43, "assistant", "重新生成的新回答", 4),
+  ]);
+  const service = new RepositoryConversationService(
+    withStreaming({
+      create: async () => snapshot(),
+      get: async () => snapshot(),
+      send: async (conversationId, expectedUserSequence, content, replaceMessageId) => {
+        sent.push({ conversationId, expectedUserSequence, content, replaceMessageId });
+        return regenerated;
+      },
+    }),
+  );
+
+  const reply = await service.generateReply({
+    conversationId: "17",
+    // 编辑发送：thread 中移除旧回答后，尾 user（该轮身份）保留原 sequence。
+    messages: [
+      {
+        id: "quick-ai-message-41",
+        role: "user",
+        content: "原问题",
+        sequence: 1,
+      },
+    ],
+    prompt: "编辑后的问题",
+    mode: "regenerate",
+    replaceAssistantMessageId: "quick-ai-message-42",
+  });
+
+  assert.deepEqual(sent, [
+    {
+      conversationId: 17,
+      expectedUserSequence: 1,
+      content: "编辑后的问题",
+      replaceMessageId: 42,
+    },
+  ]);
+  assert.equal(reply.status, "complete");
+  // 当前回答 = 可见快照中最后一条 assistant（旧问/旧答已被 Rust 快照过滤）。
+  assert.equal(reply.assistantMessageId, "quick-ai-message-43");
+  assert.equal(reply.persistedThread.messages.length, 2);
+  assert.equal(reply.persistedThread.messages[0].content, "编辑后的问题");
+  assert.equal(reply.persistedThread.messages[0].sequence, 3);
+  assert.equal(reply.persistedThread.messages[1].markdown, "重新生成的新回答");
+  assert.equal(reply.persistedThread.messages[1].sequence, 4);
+});
+
+test("编辑未提交时保持失败可重试（目标旧回答仍是当前回答）", async () => {
+  // 编辑失败后的可见快照：编辑 pending 问题行已落库，旧问+旧答仍可见。
+  const unchanged = snapshot([
+    message(41, "user", "原问题", 1),
+    message(42, "assistant", "旧回答", 2),
+    message(45, "user", "编辑后的问题", 3),
+  ]);
+  const service = new RepositoryConversationService(
+    withStreaming({
+      create: async () => snapshot(),
+      get: async () => unchanged,
+      send: async () => {
+        throw new Error("编辑请求失败");
+      },
+    }),
+  );
+
+  const reply = await service.generateReply({
+    conversationId: "17",
+    messages: [
+      {
+        id: "quick-ai-message-41",
+        role: "user",
+        content: "原问题",
+        sequence: 1,
+      },
+    ],
+    prompt: "编辑后的问题",
+    mode: "regenerate",
+    replaceAssistantMessageId: "quick-ai-message-42",
+  });
+
+  // 目标旧回答仍是当前回答 → 编辑未提交：返回 pending（含编辑 pending 行），可重试。
+  assert.equal(reply.status, "pending");
+  assert.equal(reply.errorMessage, "暂时无法回答，请重试。");
+  assert.equal(reply.persistedThread.messages.length, 3);
+  assert.equal(reply.persistedThread.messages[1].markdown, "旧回答");
+  assert.equal(reply.persistedThread.messages[2].content, "编辑后的问题");
+});
+
+test("编辑模糊成功：恢复快照中目标已被替代时按成功收尾", async () => {
+  const regenerated = snapshot([
+    message(45, "user", "编辑后的问题", 3),
+    message(43, "assistant", "已提交的新回答", 4),
+  ]);
+  const service = new RepositoryConversationService(
+    withStreaming({
+      create: async () => snapshot(),
+      get: async () => regenerated,
+      send: async () => {
+        throw new Error("IPC 回传失败");
+      },
+    }),
+  );
+
+  const reply = await service.generateReply({
+    conversationId: "17",
+    messages: [
+      {
+        id: "quick-ai-message-41",
+        role: "user",
+        content: "原问题",
+        sequence: 1,
+      },
+    ],
+    prompt: "编辑后的问题",
+    mode: "regenerate",
+    replaceAssistantMessageId: "quick-ai-message-42",
+  });
+
+  // 当前回答已是新回答（旧目标被替代）→ 编辑已提交，直接使用权威快照。
+  assert.equal(reply.status, "complete");
+  assert.equal(reply.assistantMessageId, "quick-ai-message-43");
+  assert.equal(reply.persistedThread.messages[1].markdown, "已提交的新回答");
+});
+
+test("最后一条用户输入下方提供编辑并重新生成入口，菜单不再提供重新生成", async () => {
+  const page = await readFile("src/components/ConversationPage.tsx", "utf8");
+  const styles = await readFile("src/styles/conversation-page.css", "utf8");
+
+  // hover 编辑入口与行内编辑表单存在。
+  assert.match(page, /rr-conversation-user-edit-button/);
+  assert.match(page, /aria-label="编辑问题并重新生成"/);
+  assert.match(page, /rr-conversation-user-edit"/);
+  assert.match(page, /aria-label="编辑问题"/);
+  // 仅最后一条输入展示：线程以 assistant 结尾且其前一条是 user。
+  assert.match(page, /editableUserMessageId/);
+  assert.match(page, /lastMessage\?\.role === "assistant"/);
+  // 菜单内不再有"重新生成回答"入口与 canRegenerate 死代码。
+  assert.doesNotMatch(page, /重新生成回答/);
+  assert.doesNotMatch(page, /canRegenerate/);
+  assert.match(styles, /\.rr-conversation-user-edit-button \{/);
+  assert.match(styles, /\.rr-conversation-user-edit \{/);
 });
 
 test("全部会话、重命名和删除只使用数据库 ID 并在成功后刷新", async () => {
@@ -963,7 +1134,9 @@ test("正式导出只提交目标数据库 ID，取消不返回成功，失败�
 test("流式回答达到长度上限时返回 truncated 且保留已生成内容", async () => {
   const saved = snapshot([
     message(101, "user", "超长问题", 1),
-    message(102, "assistant", "已生成的前半部分", 2),
+    message(102, "assistant", "已生成的前半部分", 2, {
+      truncated: true,
+    }),
   ]);
   const service = new RepositoryConversationService(
     withStreaming(
@@ -987,6 +1160,39 @@ test("流式回答达到长度上限时返回 truncated 且保留已生成内容
   assert.equal(reply.assistantMessageId, "quick-ai-message-102");
   assert.deepEqual(reply.chunks, ["已生成的前半部分"]);
   assert.equal(reply.persistedThread.messages.length, 2);
+  // 截断标志随消息落库（历史回看仍显示"回答可能不完整"提示）。
+  assert.equal(
+    reply.persistedThread.messages[1].truncated,
+    true,
+  );
+});
+
+test("截断标志随快照映射为消息级提示（重启回看）", () => {
+  const thread = mapQuickAiConversation(
+    snapshot([
+      message(41, "user", "超长问题", 1),
+      message(42, "assistant", "已生成的前半部分", 2, {
+        truncated: true,
+        sources: [
+          {
+            sourceId: "source-1",
+            title: "Example",
+            url: "https://example.com/article",
+            siteName: "Example",
+            publishedAt: null,
+            retrievedAtUnixMs: 100,
+            contentType: "text/html",
+          },
+        ],
+      }),
+    ]),
+    NOW,
+  );
+
+  assert.equal(thread.messages[1].truncated, true);
+  assert.equal(thread.messages[1].sources.length, 1);
+  assert.equal(thread.messages[1].sources[0].url, "https://example.com/article");
+  assert.equal(thread.messages[1].sources[0].siteName, "Example");
 });
 
 test("流式增量通过 onStreamDelta 转发且完成后返回已保存回答", async () => {
@@ -1040,7 +1246,7 @@ test("用户停止后 assistant 未落库时返回 pending 且可重试", async 
           throw new Error("回答已停止，已保留你的问题，可以直接重试。");
         },
       },
-      { emitDelta: ["部分内容"] },
+      { emitDelta: ["部分内容"], stopped: true },
     ),
   );
 
@@ -1101,7 +1307,7 @@ test("stopGeneration 通过 abort 命令请求后端停止", async () => {
   assert.equal(abortConversationId, 17);
 });
 
-test("正式 service 能力为流式可停止且导出仍可用", async () => {
+test("正式 service 能力为流式可停止且导出可用", async () => {
   const service = new RepositoryConversationService(
     withStreaming({
       create: async () => snapshot(),
@@ -1112,6 +1318,206 @@ test("正式 service 能力为流式可停止且导出仍可用", async () => {
 
   assert.equal(service.capabilities.delivery, "streaming");
   assert.equal(service.capabilities.canStop, true);
-  assert.equal(service.capabilities.canRegenerate, false);
   assert.equal(service.capabilities.canExport, true);
+});
+
+test("Agent 来源与工具状态事件转发给生成回调", async () => {
+  const sources = [
+    {
+      sourceId: "source-1",
+      title: "Rust (programming language)",
+      url: "https://en.wikipedia.org/wiki/Rust_(programming_language)",
+      siteName: "Wikipedia (en)",
+      publishedAt: null,
+      retrievedAtUnixMs: 100,
+      contentType: "text/html",
+    },
+  ];
+  const service = new RepositoryConversationService({
+    create: async () => snapshot(),
+    get: async () => snapshot(),
+    send: async () => snapshot(),
+    sendStreaming: async (
+      conversationId,
+      expectedUserSequence,
+      content,
+      onEvent,
+    ) => {
+      assert.equal(content, "最新 Rust 版本");
+      onEvent({ type: "tool_state", label: "正在搜索相关资料…" });
+      onEvent({ type: "sources_updated", sources });
+      onEvent({ type: "tool_state", label: "正在整理答案…" });
+      onEvent({ type: "done" });
+      return snapshot([
+        message(41, "user", "最新 Rust 版本", 1),
+        message(42, "assistant", "已回答", 2),
+      ]);
+    },
+  });
+
+  const toolLabels = [];
+  let receivedSources = null;
+  const reply = await service.generateReply({
+    conversationId: "17",
+    messages: [
+      {
+        id: "temporary-user",
+        role: "user",
+        content: "最新 Rust 版本",
+      },
+    ],
+    prompt: "最新 Rust 版本",
+    mode: "append",
+    onToolState: (label) => toolLabels.push(label),
+    onSourcesUpdated: (next) => {
+      receivedSources = next;
+    },
+  });
+
+  assert.equal(reply.status, "complete");
+  assert.deepEqual(toolLabels, ["正在搜索相关资料…", "正在整理答案…"]);
+  assert.equal(receivedSources, sources);
+  assert.equal(receivedSources[0].siteName, "Wikipedia (en)");
+});
+
+test("Agent 事件不携带来源或状态时生成不受影响", async () => {
+  const service = new RepositoryConversationService(
+    withStreaming({
+      create: async () => snapshot(),
+      get: async () => snapshot(),
+      send: async () => snapshot([
+        message(41, "user", "普通问题", 1),
+        message(42, "assistant", "普通回答", 2),
+      ]),
+    }),
+  );
+
+  let sourcesCallback = 0;
+  let toolCallback = 0;
+  const reply = await service.generateReply({
+    conversationId: "17",
+    messages: [
+      { id: "temporary-user", role: "user", content: "普通问题" },
+    ],
+    prompt: "普通问题",
+    mode: "append",
+    onSourcesUpdated: () => { sourcesCallback += 1; },
+    onToolState: () => { toolCallback += 1; },
+  });
+
+  assert.equal(reply.status, "complete");
+  assert.equal(sourcesCallback, 0);
+  assert.equal(toolCallback, 0);
+});
+
+test("失败轮次后发送新消息使用跳过 pending 的新 sequence", async () => {
+  let sentSequence = null;
+  const service = new RepositoryConversationService(
+    withStreaming({
+      create: async () => snapshot(),
+      get: async () => snapshot(),
+      send: async (conversationId, expectedUserSequence, content) => {
+        assert.equal(content, "新问题");
+        sentSequence = expectedUserSequence;
+        return snapshot([
+          message(41, "user", "旧问题", 1),
+          message(43, "user", "新问题", 3),
+          message(44, "assistant", "新回答", 4),
+        ]);
+      },
+    }),
+  );
+
+  await service.generateReply({
+    conversationId: "17",
+    messages: [
+      {
+        id: "quick-ai-message-41",
+        role: "user",
+        content: "旧问题",
+        sequence: 1,
+      },
+      { id: "temporary-user", role: "user", content: "新问题" },
+    ],
+    prompt: "新问题",
+    mode: "append",
+  });
+
+  assert.equal(sentSequence, 3, "新消息应跳过待完成的 assistant 位置");
+});
+
+test("正常对话追加保持连续奇数 sequence", async () => {
+  let sentSequence = null;
+  const service = new RepositoryConversationService(
+    withStreaming({
+      create: async () => snapshot(),
+      get: async () => snapshot(),
+      send: async (conversationId, expectedUserSequence, content) => {
+        sentSequence = expectedUserSequence;
+        return snapshot([
+          message(41, "user", "第一问", 1),
+          message(42, "assistant", "第一答", 2),
+          message(43, "user", "第二问", 3),
+          message(44, "assistant", "第二答", 4),
+        ]);
+      },
+    }),
+  );
+
+  await service.generateReply({
+    conversationId: "17",
+    messages: [
+      {
+        id: "quick-ai-message-41",
+        role: "user",
+        content: "第一问",
+        sequence: 1,
+      },
+      {
+        id: "quick-ai-message-42",
+        role: "assistant",
+        content: "第一答",
+        sequence: 2,
+      },
+      { id: "temporary-user", role: "user", content: "第二问" },
+    ],
+    prompt: "第二问",
+    mode: "append",
+  });
+
+  assert.equal(sentSequence, 3, "正常对话连续追加为下一个奇数");
+});
+
+test("失败轮次后重试仍复用原 sequence 且不重复 user", async () => {
+  let sentSequence = null;
+  const service = new RepositoryConversationService(
+    withStreaming({
+      create: async () => snapshot(),
+      get: async () => snapshot(),
+      send: async (conversationId, expectedUserSequence, content) => {
+        sentSequence = expectedUserSequence;
+        return snapshot([
+          message(41, "user", "旧问题", 1),
+          message(42, "assistant", "重试回答", 2),
+        ]);
+      },
+    }),
+  );
+
+  const reply = await service.generateReply({
+    conversationId: "17",
+    messages: [
+      {
+        id: "quick-ai-message-41",
+        role: "user",
+        content: "旧问题",
+        sequence: 1,
+      },
+    ],
+    prompt: "旧问题",
+    mode: "append",
+  });
+
+  assert.equal(sentSequence, 1, "重试复用同一 pending sequence");
+  assert.equal(reply.status, "complete");
 });

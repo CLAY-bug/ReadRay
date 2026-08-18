@@ -15,6 +15,21 @@ import {
 
 const NOW = new Date(2026, 6, 30, 12, 0, 0).getTime();
 
+// Tauri 仓库类的 analyze/ask 会构造真实 `Channel`，其构造函数需要
+// `window.__TAURI_INTERNALS__.transformCallback`。node 测试环境无 window，
+// 这里提供一个最小兼容垫片（只服务于断言参数形状，不真正走 IPC）。
+if (typeof globalThis.window === "undefined") {
+  let shimCallbackId = 0;
+  globalThis.window = {
+    __TAURI_INTERNALS__: {
+      transformCallback(callback, _once = false) {
+        shimCallbackId += 1;
+        return shimCallbackId;
+      },
+    },
+  };
+}
+
 function snapshot(title = "Real title", body = "Real body") {
   return { title, paragraphs: [body] };
 }
@@ -186,20 +201,34 @@ test("Tauri writing repository 使用有类型 commands 与 camelCase 参数", a
   await repository.get(17);
   await repository.saveDraft(17, 2, snapshot("Next", "Next body"));
   await repository.delete(17, 3);
-  await repository.analyze(17, 3);
-  await repository.ask({
-    documentId: 17,
-    expectedRevision: 3,
-    versionId: 21,
-    question: "这里自然吗？",
-    scope: "selection",
-    selectionText: "Next body",
-    parentAnswerId: 9,
-  });
+  await repository.analyze(17, 3, () => {});
+  await repository.ask(
+    {
+      documentId: 17,
+      expectedRevision: 3,
+      versionId: 21,
+      question: "这里自然吗？",
+      scope: "selection",
+      selectionText: "Next body",
+      parentAnswerId: 9,
+    },
+    () => {},
+  );
   await repository.complete(17, 3);
   await repository.continueEditing(17, 4, 21);
 
-  assert.deepEqual(calls, [
+  // analyze/ask 现在携带 Tauri channel（用于进度/取消事件）；channel 无法精确
+  // 比较，单独断言其存在，其余参数按序精确比较。
+  assert.ok(calls[5].args.channel, "analyze 必须携带 channel");
+  assert.ok(calls[6].args.channel, "ask 必须携带 channel");
+  const stripped = calls.map((call) => ({
+    command: call.command,
+    args: call.args === undefined ? undefined : { ...call.args },
+  }));
+  delete stripped[5].args.channel;
+  delete stripped[6].args.channel;
+
+  assert.deepEqual(stripped, [
     { command: "create_writing_document", args: undefined },
     { command: "list_writing_documents", args: { query: "body" } },
     { command: "get_writing_document", args: { documentId: 17 } },

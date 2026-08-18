@@ -8,7 +8,6 @@ use tauri::{
     WindowEvent,
 };
 
-#[cfg(test)]
 mod agent_runtime;
 pub mod conversations;
 pub mod deepseek_client;
@@ -1002,7 +1001,9 @@ pub fn run() {
             quick_ai::export_quick_ai_conversation,
             quick_ai::send_quick_ai_message,
             quick_ai::send_quick_ai_message_streaming,
+            quick_ai::send_quick_ai_message_agent,
             quick_ai::abort_quick_ai_streaming,
+            quick_ai::open_agent_source,
             settings::get_settings_snapshot,
             settings::get_app_preferences,
             settings::update_app_preferences,
@@ -1028,6 +1029,7 @@ pub fn run() {
             writing::continue_writing_document,
             writing::analyze_writing_document,
             writing::ask_writing_question,
+            writing::abort_writing_analysis,
             desktop_lifecycle::request_app_exit,
             desktop_lifecycle::get_pending_app_exit_request,
             desktop_lifecycle::restore_main_window,

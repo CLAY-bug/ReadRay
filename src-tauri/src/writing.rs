@@ -1,11 +1,29 @@
-use crate::deepseek_client::{configured_model, post_tracked_chat_completion};
+use crate::agent_runtime::chat_surface::generate_run_id;
+use crate::agent_runtime::context::{ContextAssembler, RuntimeFacts};
+use crate::agent_runtime::coordinator::{
+    AgentDeps, AgentEventSink, AgentRunCoordinator, Cancellation, RunRequest, SystemTimeSource,
+    ToolExecutionOrder,
+};
+use crate::agent_runtime::deepseek_gateway::DeepSeekChatGateway;
+use crate::agent_runtime::gateway::{ModelGateway, ProviderMessage};
+use crate::agent_runtime::protocol::{
+    AgentError, AgentErrorKind, AgentEvent, AgentEventPayload, AuthorityRef, TerminationReason,
+};
+use crate::agent_runtime::tool::{ToolPolicy, ToolRegistry};
+use crate::agent_runtime::writing_surface::{
+    writing_active_tools, writing_capability, WritingSurfaceAdapter,
+};
+use crate::deepseek_client::configured_model;
 use crate::learning_records::{open_database_for_app, unix_time_ms};
 use crate::model_usage::ModelUsageCategory;
 use rusqlite::{params, Connection, OptionalExtension, Transaction, TransactionBehavior};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::future::Future;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
+use tauri::ipc::Channel;
 use tauri::AppHandle;
 
 const WRITING_ANALYSIS_SCHEMA_VERSION: i64 = 1;
@@ -19,8 +37,186 @@ const WRITING_MAX_PATTERNS: usize = 4;
 const WRITING_MAX_QUESTION_CHARS: usize = 2_000;
 const WRITING_MAX_SELECTION_CHARS: usize = 2_000;
 const WRITING_MAX_CONVERSATION_CONTEXT_ANSWERS: usize = 8;
+/// 写作生成参数与已验证的旧写作请求一致（2026 年生产路径）：推理模型在更大
+/// 输出预算下可能把预算全烧在 reasoning_content 上导致正文为空。
 const WRITING_MAX_TOKENS: u16 = 4_096;
 const WRITING_TEMPERATURE: f32 = 0.2;
+
+/// 写作流式事件协议：Writing 检查/问答不逐字流式渲染结构 JSON，只向用户展示
+/// 友好的进度状态与终态。用户是普通学习者，事件只表达"正在做什么/已完成"，
+/// 不暴露 prompt、工具调用内部或错误原文。
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+#[serde(tag = "type")]
+pub enum WritingStreamEvent {
+    /// 友好进度文案："正在检查语法…" / "正在判断表达方式…" 等。
+    Status { label: String },
+    /// 结果已通过结构校验并进入正式状态（保存完成）。
+    Done,
+    /// 用户主动中断，草稿与已产生内容保留；可重新检查。
+    Stopped,
+    /// 友好失败，不展示技术原文。
+    Error { message: String },
+}
+
+#[derive(Clone)]
+struct WritingStreamSender {
+    channel: Channel<WritingStreamEvent>,
+}
+
+impl WritingStreamSender {
+    fn new(channel: Channel<WritingStreamEvent>) -> Self {
+        Self { channel }
+    }
+
+    fn send(&self, event: WritingStreamEvent) -> bool {
+        self.channel.send(event).is_ok()
+    }
+}
+
+/// 写作请求的中止标志（按 document_id 键控）：检查/问答过程中用户可主动中断。
+static WRITING_ABORT_FLAGS: Mutex<Option<HashMap<i64, Arc<AtomicBool>>>> = Mutex::new(None);
+
+fn writing_abort_flag_for(document_id: i64) -> Arc<AtomicBool> {
+    let mut flags = WRITING_ABORT_FLAGS
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
+    let slots = flags.get_or_insert_with(HashMap::new);
+    if let Some(flag) = slots.get(&document_id) {
+        return flag.clone();
+    }
+    let flag = Arc::new(AtomicBool::new(false));
+    slots.insert(document_id, flag.clone());
+    flag
+}
+
+/// 写作进度阶段文案。Writing 检查/问答共享同一条运行管线，只在文案上有差异。
+#[derive(Clone, Copy)]
+struct WritingStageLabels {
+    start: &'static str,
+    analyzing: &'static str,
+    finishing: &'static str,
+}
+
+/// 把内核 AgentEvent 投影为写作友好进度事件。终端事件（Done/Stopped/Error）
+/// 由调用方在 coordinator 结束后依据真实结果发送，这里只处理中间状态。
+struct WritingUiSink {
+    sender: WritingStreamSender,
+    labels: WritingStageLabels,
+    analyzing_emitted: bool,
+}
+
+impl AgentEventSink for WritingUiSink {
+    fn emit(&mut self, event: AgentEvent) -> Result<(), AgentError> {
+        let Some(projected) =
+            project_writing_ui_event(&event, self.labels, &mut self.analyzing_emitted)
+        else {
+            return Ok(());
+        };
+        if !self.sender.send(projected) {
+            return Err(agent_stream_error("写作流式状态事件无法送达。"));
+        }
+        Ok(())
+    }
+}
+
+/// AgentEvent → 写作友好进度状态的确定性投影（离线可测）。
+fn project_writing_ui_event(
+    event: &AgentEvent,
+    labels: WritingStageLabels,
+    analyzing_emitted: &mut bool,
+) -> Option<WritingStreamEvent> {
+    match &event.payload {
+        AgentEventPayload::TurnStarted { .. } => {
+            if *analyzing_emitted {
+                None
+            } else {
+                Some(WritingStreamEvent::Status {
+                    label: labels.start.to_string(),
+                })
+            }
+        }
+        AgentEventPayload::AssistantTextDelta { .. } => {
+            if *analyzing_emitted {
+                None
+            } else {
+                *analyzing_emitted = true;
+                Some(WritingStreamEvent::Status {
+                    label: labels.analyzing.to_string(),
+                })
+            }
+        }
+        AgentEventPayload::AssistantTextCompleted { .. } => Some(WritingStreamEvent::Status {
+            label: labels.finishing.to_string(),
+        }),
+        AgentEventPayload::ToolCallStarted { call } => {
+            let label = match call.name.as_str() {
+                "web_search" => "正在核实资料…",
+                "fetch_web_page" => "正在读取资料…",
+                _ => return None,
+            };
+            Some(WritingStreamEvent::Status {
+                label: label.to_string(),
+            })
+        }
+        AgentEventPayload::ToolCallCompleted { .. } => Some(WritingStreamEvent::Status {
+            label: labels.finishing.to_string(),
+        }),
+        _ => None,
+    }
+}
+
+fn agent_stream_error(message: impl Into<String>) -> AgentError {
+    AgentError::new(AgentErrorKind::PersistenceFailed, message).expect("固定流事件错误消息必须有效")
+}
+
+/// 运行写作 coordinator 并返回 RunOutcome。Writing 不写 agent_runs 业务审计表
+/// （写作权威仍归 writing_analyses / writing_assistant_answers），因此 sink 只
+/// 转发现进度事件；持久化失败快速失败不伪装成功。
+fn run_writing_coordinator(
+    gateway: &mut dyn ModelGateway,
+    registry: &ToolRegistry,
+    transcript: Vec<ProviderMessage>,
+    run_id: String,
+    authority: AuthorityRef,
+    cancellation: &Cancellation,
+    sender: WritingStreamSender,
+    labels: WritingStageLabels,
+) -> Result<crate::agent_runtime::coordinator::RunOutcome, AgentError> {
+    let capability = writing_capability();
+    let mut ui = WritingUiSink {
+        sender,
+        labels,
+        analyzing_emitted: false,
+    };
+    let mut coordinator = AgentRunCoordinator::new(
+        run_id,
+        authority,
+        crate::agent_runtime::protocol::RunBudget::first_version(),
+    )
+    .map_err(agent_stream_error)?;
+    let request = RunRequest {
+        user_prompt: String::new(),
+        runtime_facts: RuntimeFacts {
+            local_datetime: String::new(),
+            timezone: String::new(),
+            app_version: String::new(),
+        },
+        capability,
+        tool_execution_order: ToolExecutionOrder::CallOrder,
+        initial_messages: Some(transcript),
+    };
+    let mut deps = AgentDeps {
+        gateway,
+        registry,
+        policy: &ToolPolicy,
+        assembler: &ContextAssembler::default(),
+        time: &SystemTimeSource,
+        cancellation,
+        sink: &mut ui,
+    };
+    coordinator.run(&request, &mut deps)
+}
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -1379,102 +1575,189 @@ fn write_conflict(
     }
 }
 
-#[derive(Debug, Deserialize)]
-struct DeepSeekWritingResponse {
-    choices: Vec<DeepSeekWritingChoice>,
-}
-
-#[derive(Debug, Deserialize)]
-struct DeepSeekWritingChoice {
-    finish_reason: Option<String>,
-    message: DeepSeekWritingMessage,
-}
-
-#[derive(Debug, Deserialize)]
-struct DeepSeekWritingMessage {
-    content: Option<String>,
-}
-
-fn extract_model_content(
-    response: DeepSeekWritingResponse,
-    operation: &str,
-) -> Result<String, String> {
-    let choice = response
-        .choices
-        .into_iter()
-        .next()
-        .ok_or_else(|| format!("{operation} 响应缺少 choices[0]。"))?;
-    if choice.finish_reason.as_deref() == Some("length") {
-        return Err(format!("{operation} 响应因长度限制被截断。"));
+/// 对可见正文计算稳定短摘要，用于写入 `AuthorityRef::writing`。写作结果不因
+/// 正文短变化跨轮伪造身份；这里只作事件承载，真实迟到边界仍由
+/// `save_analysis_if_current` / `save_answer_if_current` 的 expectedRevision 在
+/// 事务内强制。
+fn writing_snapshot_digest(snapshot: &WritingSnapshot) -> String {
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    use std::hash::{Hash, Hasher};
+    snapshot.title.hash(&mut hasher);
+    for paragraph in &snapshot.paragraphs {
+        paragraph.hash(&mut hasher);
     }
-    let content = choice
-        .message
-        .content
-        .ok_or_else(|| format!("{operation} 响应缺少 choices[0].message.content。"))?;
-    if content.trim().is_empty() {
-        return Err(format!("{operation} 返回空内容。"));
-    }
-    Ok(content)
+    format!("{:x}", hasher.finish())
 }
 
-async fn request_writing_analysis(
+/// 经共享 Agent Runtime 内核执行写作检查（流式状态 + 可取消）。
+///
+/// 产出 `[System, User]` 上下文（复用 `WritingSurfaceAdapter` 与写作专项系统
+/// 提示词），驱动 `AgentRunCoordinator` + `DeepSeekChatGateway`，最终仍收口为
+/// 结构化 JSON，经 `parse_writing_analysis_content` 校验后才返回给调用方
+/// （`analyze_writing_document_with` 进一步做 expectedRevision 保存）。终端事件
+/// 由本函数依据真实结果发送；中间进度经 `WritingUiSink` 发布。
+async fn request_writing_analysis_via_runtime(
     app: AppHandle,
+    document_id: i64,
+    expected_revision: i64,
+    sender: WritingStreamSender,
+    abort_flag: Arc<AtomicBool>,
     snapshot: WritingSnapshot,
 ) -> Result<WritingAnalysisContent, String> {
-    let request_body = json!({
-        "model": configured_model(),
-        "messages": [
-            {
-                "role": "system",
-                "content": writing_analysis_system_prompt()
-            },
-            {
-                "role": "user",
-                "content": format!(
-                    "请检查下面这篇英文文章。文章 JSON：\n{}",
-                    serde_json::to_string(&snapshot)
-                        .map_err(|error| format!("写作文章无法序列化：{error}"))?
-                )
-            }
-        ],
-        "response_format": { "type": "json_object" },
-        "stream": false,
-        "max_tokens": WRITING_MAX_TOKENS,
-        "temperature": WRITING_TEMPERATURE
-    });
-    let response: DeepSeekWritingResponse = post_tracked_chat_completion(
-        &app,
+    let article_json =
+        serde_json::to_string(&snapshot).map_err(|error| format!("写作文章无法序列化：{error}"))?;
+    let user_content = format!("请检查下面这篇英文文章。文章 JSON：\n{article_json}");
+    let adapter = WritingSurfaceAdapter::new(writing_analysis_system_prompt());
+    let transcript = adapter.transcript(&user_content);
+
+    let labels = WritingStageLabels {
+        start: "正在检查语法…",
+        analyzing: "正在判断表达是否地道、更正式…",
+        finishing: "正在整理检查结果…",
+    };
+    let snapshot_digest = writing_snapshot_digest(&snapshot);
+    let outcome = run_writing_runtime(
+        app,
+        document_id,
+        expected_revision,
+        None,
+        snapshot_digest,
+        sender.clone(),
+        abort_flag,
+        transcript,
+        labels,
         ModelUsageCategory::Writing,
         "DeepSeek 写作检查",
-        &request_body,
     )
     .await?;
-    let content = extract_model_content(response, "DeepSeek 写作检查")?;
-    parse_writing_analysis_content(&snapshot, &content)
+
+    match outcome.termination {
+        TerminationReason::FinalAnswer => {
+            let final_text = outcome.final_text.unwrap_or_default();
+            match parse_writing_analysis_content_salvage(&snapshot, &final_text) {
+                Ok(content) => {
+                    sender.send(WritingStreamEvent::Done);
+                    Ok(content)
+                }
+                Err(error) => {
+                    sender.send(WritingStreamEvent::Error {
+                        message: "检查结果暂时无法解析，请重试。".to_string(),
+                    });
+                    Err(error)
+                }
+            }
+        }
+        TerminationReason::UserAborted => {
+            sender.send(WritingStreamEvent::Stopped);
+            Err("检查已停止，可重新检查。".to_string())
+        }
+        TerminationReason::RunBudgetExceeded => {
+            sender.send(WritingStreamEvent::Error {
+                message: "检查未完成，可重新检查。".to_string(),
+            });
+            Err("检查未完成，已保留你的文章，可重新检查。".to_string())
+        }
+        other => {
+            let message = outcome
+                .error
+                .map(|error| error.message)
+                .unwrap_or_else(|| "Agent run 失败。".to_string());
+            eprintln!("READRAY_WRITING_RUN_FAILED=termination={other:?} error={message}");
+            sender.send(WritingStreamEvent::Error {
+                message: "暂时无法完成检查，请重试。".to_string(),
+            });
+            Err("暂时无法完成检查，请重试。".to_string())
+        }
+    }
+}
+
+/// 共享的写作 Runtime 执行：在 blocking 线程同步驱动 coordinator，返回终态。
+async fn run_writing_runtime(
+    app: AppHandle,
+    document_id: i64,
+    expected_revision: i64,
+    version_id: Option<i64>,
+    digest: String,
+    sender: WritingStreamSender,
+    abort_flag: Arc<AtomicBool>,
+    transcript: Vec<ProviderMessage>,
+    labels: WritingStageLabels,
+    usage_category: ModelUsageCategory,
+    operation: &'static str,
+) -> Result<crate::agent_runtime::coordinator::RunOutcome, String> {
+    abort_flag.store(false, Ordering::Relaxed);
+    let model = configured_model();
+    let cancellation = Cancellation::from_shared(abort_flag.clone());
+    let run_id = generate_run_id(document_id, expected_revision);
+    let authority = AuthorityRef::writing(document_id, expected_revision, digest, 0, version_id, 1);
+    let run_sender = sender.clone();
+    let app_for_run = app.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let mut gateway = DeepSeekChatGateway::for_surface(
+            model,
+            Some(&app_for_run),
+            operation,
+            usage_category,
+            true,
+        )
+        .with_generation_params(WRITING_MAX_TOKENS, WRITING_TEMPERATURE)
+        .with_thinking_disabled();
+        let registry = writing_active_tools();
+        run_writing_coordinator(
+            &mut gateway,
+            &registry,
+            transcript,
+            run_id,
+            authority,
+            &cancellation,
+            run_sender,
+            labels,
+        )
+    })
+    .await
+    .map_err(|error| format!("写作 Runtime 运行失败：{error}"))?
+    .map_err(|error| error.message)
 }
 
 fn writing_analysis_system_prompt() -> &'static str {
     r#"You are ReadRay's English writing coach. Return exactly one JSON object and no Markdown.
 Use concise Chinese explanations. Preserve the writer's voice and do not rewrite the full article.
+This article was written by an English learner and almost certainly contains genuine issues: report the real problems you find.
 Only report high-value issues that materially affect grammar, clarity, naturalness, or reasoning.
-Every source and targetText must be exact, contiguous substrings copied from the submitted body,
-and source must contain targetText (or be exactly equal). Do not report title-only issues.
+First catch clear grammar problems: sentence structure, tense, subject-verb agreement, articles/prepositions, and other objective errors.
+For expression issues (naturalness, formality, idiomaticity), infer the writing scene from the article's content and purpose
+(academic writing, job application, business email, casual/spoken language, daily essay, etc.) rather than requiring the user to declare it.
+For each expression worth adjusting, give ONE scene-based judgment - whether the current wording reads too informal or too formal for that inferred scene -
+and ONE suggested rewrite that fits the scene, carried in "reference". Do not list two parallel alternatives side by side
+(do not mechanically offer both a "formal version" and a "more natural version" together).
+Only suggest an expression change when it genuinely matters for the inferred scene; do not attach a formal/idiomatic comparison to every issue.
+CRITICAL - verbatim copying: "source" and "targetText" must be copied character-for-character, word-for-word from the submitted article,
+including the original spelling and punctuation. Never paraphrase, rephrase, translate, or invent them: your suggested rewrite goes ONLY into
+"reference", never into "source" or "targetText". "targetText" must be a contiguous substring of "source", and "source" a contiguous substring
+of the submitted body. If you cannot find an exact verbatim match, drop that issue instead of fabricating a source. The article title is NOT part
+of the checked body: never use the title in "source" or "targetText", and never report an issue that targets only the title.
+Be thorough: this is feedback for an English learner, so missing a real problem is worse than reporting one extra.
+Report every genuine issue you find - typically 4 to 6 for a learner draft. An empty issues array is allowed only when
+the article is truly flawless, which is rare for a learner draft: treat empty as exceptional, never as a default.
+Keep every field short: "explanation" within about 60 Chinese characters, "hint" within about 40, "deeperHint" within about 80, "reference" within about 60.
 Return at most 8 issues. Return 2 to 4 writing takeaways only when they are supported by
 real issues or high-value transferable lessons visible in this submitted article; fewer or an
-empty array is allowed when the evidence is insufficient. Do not list every good word, phrase,
+empty array is allowed only when the article is truly free of issues. Do not list every good word, phrase,
 or generic strength as a takeaway.
+Even when "issues" is empty or very small, still give 1 or 2 genuine takeaways drawn from real content
+in this article (a transferable word choice, structure, or usage worth reusing), so the learner always gains something.
 Use this exact camelCase schema:
 {
   "issues": [
     {
       "id": "issue-1",
       "category": "问题类别",
-      "source": "原文片段",
+      "source": "原文逐字片段",
       "targetText": "可在文章中精确定位的连续文本",
-      "explanation": "为什么这是问题",
+      "explanation": "为什么这是问题（表达类需说明推断的写作场景）",
       "hint": "只给一步提示",
       "deeperHint": "进一步但不代写的提示",
-      "reference": "简短参考表达"
+      "reference": "针对该场景的一条建议表达（不是并列的多个选项）"
     }
   ],
   "patterns": [
@@ -1487,6 +1770,8 @@ Use this exact camelCase schema:
 }"#
 }
 
+/// 严格校验解析（仅测试引用；生产路径使用 `parse_writing_analysis_content_salvage`）。
+#[cfg(test)]
 fn parse_writing_analysis_content(
     snapshot: &WritingSnapshot,
     content: &str,
@@ -1498,6 +1783,73 @@ fn parse_writing_analysis_content(
     Ok(parsed)
 }
 
+/// 校验失败的容错解析（运行时路径使用）：丢弃无法在正文中定位的个别问题，
+/// 保留合法问题保存。
+///
+/// 关闭思考模式后模型偶发把某个 source/targetText 写成非逐字片段（含标题），
+/// 严格校验会因"一条坏问题"整次检查作废。这里做诚实的部分成功：只保存能通过
+/// 逐字定位校验的问题（前端可高亮），被丢弃的问题 ID 记入诊断日志；没有任何
+/// 合法问题时仍按失败处理（不伪装成功）。合法输入走 `parse_writing_analysis_content`
+/// 的快路径，行为不变。
+fn parse_writing_analysis_content_salvage(
+    snapshot: &WritingSnapshot,
+    content: &str,
+) -> Result<WritingAnalysisContent, String> {
+    let mut parsed: WritingAnalysisContent = serde_json::from_str(content.trim())
+        .map_err(|error| format!("DeepSeek 写作分析不是合法 JSON：{error}"))?;
+    if validate_analysis_content(snapshot, &parsed).is_ok() {
+        return Ok(parsed);
+    }
+    let body = snapshot.paragraphs.join("\n");
+    let mut seen_ids = HashSet::new();
+    let mut kept_issues = Vec::new();
+    for issue in parsed.issues {
+        if seen_ids.insert(issue.id.clone()) && issue_is_locatable(&body, &issue) {
+            kept_issues.push(issue);
+        } else {
+            eprintln!(
+                "READRAY_WRITING_ANALYSIS_DROPPED=issue={} source={:?} targetText={:?}",
+                issue.id, issue.source, issue.target_text
+            );
+        }
+    }
+    let kept_patterns: Vec<WritingPattern> = parsed
+        .patterns
+        .drain(..)
+        .filter(|pattern| {
+            validate_text_field("模式 ID", &pattern.id, 80).is_ok()
+                && validate_text_field("模式标题", &pattern.title, 200).is_ok()
+                && validate_text_field("模式说明", &pattern.description, 1_000).is_ok()
+        })
+        .collect();
+    if kept_issues.is_empty() {
+        return Err("DeepSeek 写作分析校验失败：没有能在正文中定位的问题。".to_string());
+    }
+    let salvaged = WritingAnalysisContent {
+        issues: kept_issues,
+        patterns: kept_patterns,
+    };
+    validate_analysis_content(snapshot, &salvaged)
+        .map_err(|error| format!("DeepSeek 写作分析校验失败：{error}"))?;
+    Ok(salvaged)
+}
+
+/// 单条问题是否可在送检正文中逐字定位（镜像 `validate_analysis_content` 的
+/// 逐字约束与字段约束）。
+fn issue_is_locatable(body: &str, issue: &WritingIssue) -> bool {
+    validate_text_field("问题 ID", &issue.id, 80).is_ok()
+        && validate_text_field("问题类别", &issue.category, 80).is_ok()
+        && validate_text_field("问题原文", &issue.source, 1_000).is_ok()
+        && validate_text_field("问题定位文本", &issue.target_text, 500).is_ok()
+        && validate_text_field("问题说明", &issue.explanation, 1_500).is_ok()
+        && validate_text_field("问题提示", &issue.hint, 800).is_ok()
+        && validate_text_field("进一步提示", &issue.deeper_hint, 1_200).is_ok()
+        && validate_text_field("参考表达", &issue.reference, 1_200).is_ok()
+        && body.contains(&issue.target_text)
+        && body.contains(&issue.source)
+        && (issue.source.contains(&issue.target_text) || issue.target_text.contains(&issue.source))
+}
+
 #[derive(Clone)]
 struct WritingQuestionModelInput {
     snapshot: WritingSnapshot,
@@ -1507,10 +1859,21 @@ struct WritingQuestionModelInput {
     previous_answers: Vec<WritingAgentAnswer>,
 }
 
-async fn request_writing_answer(
+/// 经共享 Agent Runtime 内核执行写作问答（流式状态 + 可取消）。
+///
+/// 复用同一 `WritingSurfaceAdapter` + coordinator + gateway，产出结构化 JSON 回答，
+/// 经 `parse_writing_answer_content` 校验后才返回给调用方（`ask_writing_question_with`
+/// 进一步做 expectedRevision 保存）。终端事件按真实结果发送。
+async fn request_writing_answer_via_runtime(
     app: AppHandle,
+    document_id: i64,
+    expected_revision: i64,
+    version_id: Option<i64>,
+    sender: WritingStreamSender,
+    abort_flag: Arc<AtomicBool>,
     input: WritingQuestionModelInput,
 ) -> Result<WritingAnswerContent, String> {
+    let digest = writing_snapshot_digest(&input.snapshot);
     let context = json!({
         "article": input.snapshot,
         "scope": input.scope_label,
@@ -1525,33 +1888,69 @@ async fn request_writing_answer(
             }
         })).collect::<Vec<_>>(),
     });
-    let request_body = json!({
-        "model": configured_model(),
-        "messages": [
-            {
-                "role": "system",
-                "content": writing_answer_system_prompt()
-            },
-            {
-                "role": "user",
-                "content": serde_json::to_string(&context)
-                    .map_err(|error| format!("写作辅助上下文无法序列化：{error}"))?
-            }
-        ],
-        "response_format": { "type": "json_object" },
-        "stream": false,
-        "max_tokens": WRITING_MAX_TOKENS,
-        "temperature": WRITING_TEMPERATURE
-    });
-    let response: DeepSeekWritingResponse = post_tracked_chat_completion(
-        &app,
+    let user_content = serde_json::to_string(&context)
+        .map_err(|error| format!("写作辅助上下文无法序列化：{error}"))?;
+    let adapter = WritingSurfaceAdapter::new(writing_answer_system_prompt());
+    let transcript = adapter.transcript(&user_content);
+
+    let labels = WritingStageLabels {
+        start: "正在理解你的问题…",
+        analyzing: "正在根据文章组织回答…",
+        finishing: "正在整理回答…",
+    };
+    let outcome = run_writing_runtime(
+        app,
+        document_id,
+        expected_revision,
+        version_id,
+        digest,
+        sender.clone(),
+        abort_flag,
+        transcript,
+        labels,
         ModelUsageCategory::Writing,
         "DeepSeek 写作辅助",
-        &request_body,
     )
     .await?;
-    let content = extract_model_content(response, "DeepSeek 写作辅助")?;
-    parse_writing_answer_content(&content)
+
+    match outcome.termination {
+        TerminationReason::FinalAnswer => {
+            let final_text = outcome.final_text.unwrap_or_default();
+            match parse_writing_answer_content(&final_text) {
+                Ok(content) => {
+                    sender.send(WritingStreamEvent::Done);
+                    Ok(content)
+                }
+                Err(error) => {
+                    sender.send(WritingStreamEvent::Error {
+                        message: "回答暂时无法解析，请重试。".to_string(),
+                    });
+                    Err(error)
+                }
+            }
+        }
+        TerminationReason::UserAborted => {
+            sender.send(WritingStreamEvent::Stopped);
+            Err("回答已停止，可重新提问。".to_string())
+        }
+        TerminationReason::RunBudgetExceeded => {
+            sender.send(WritingStreamEvent::Error {
+                message: "回答未完成，可重新提问。".to_string(),
+            });
+            Err("回答未完成，请重试。".to_string())
+        }
+        other => {
+            let message = outcome
+                .error
+                .map(|error| error.message)
+                .unwrap_or_else(|| "Agent run 失败。".to_string());
+            eprintln!("READRAY_WRITING_RUN_FAILED=termination={other:?} error={message}");
+            sender.send(WritingStreamEvent::Error {
+                message: "暂时无法回答，请重试。".to_string(),
+            });
+            Err("暂时无法回答，请重试。".to_string())
+        }
+    }
 }
 
 fn writing_answer_system_prompt() -> &'static str {
@@ -1741,13 +2140,25 @@ pub async fn analyze_writing_document(
     app: AppHandle,
     document_id: i64,
     expected_revision: i64,
+    channel: Channel<WritingStreamEvent>,
 ) -> Result<WritingDocumentRecord, String> {
     let usage_app = app.clone();
+    let sender = WritingStreamSender::new(channel);
+    let abort_flag = writing_abort_flag_for(document_id);
     analyze_writing_document_with(
         || WritingStore::open_for_app(&app),
         document_id,
         expected_revision,
-        move |snapshot| request_writing_analysis(usage_app, snapshot),
+        move |snapshot| {
+            request_writing_analysis_via_runtime(
+                usage_app,
+                document_id,
+                expected_revision,
+                sender,
+                abort_flag,
+                snapshot,
+            )
+        },
     )
     .await
 }
@@ -1756,14 +2167,37 @@ pub async fn analyze_writing_document(
 pub async fn ask_writing_question(
     app: AppHandle,
     request: WritingQuestionRequest,
+    channel: Channel<WritingStreamEvent>,
 ) -> Result<WritingAgentAnswer, String> {
     let usage_app = app.clone();
+    let sender = WritingStreamSender::new(channel);
+    let abort_flag = writing_abort_flag_for(request.document_id);
+    let document_id = request.document_id;
+    let expected_revision = request.expected_revision;
+    let version_id = request.version_id;
     ask_writing_question_with(
         || WritingStore::open_for_app(&app),
         request,
-        move |input| request_writing_answer(usage_app, input),
+        move |input| {
+            request_writing_answer_via_runtime(
+                usage_app,
+                document_id,
+                expected_revision,
+                version_id,
+                sender,
+                abort_flag,
+                input,
+            )
+        },
     )
     .await
+}
+
+/// 中断一次进行中的写作检查/问答。中断后保留当前草稿与已产生内容，可重试。
+#[tauri::command]
+pub fn abort_writing_analysis(document_id: i64) -> Result<(), String> {
+    writing_abort_flag_for(document_id).store(true, Ordering::Relaxed);
+    Ok(())
 }
 
 #[cfg(test)]
@@ -1967,6 +2401,87 @@ mod tests {
         assert!(parse_writing_analysis_content(&article, &invalid)
             .unwrap_err()
             .contains("不存在于送检正文"));
+    }
+
+    #[test]
+    fn salvage_keeps_locatable_issues_and_drops_invented_or_title_ones() {
+        // 运行时路径的容错：个别问题编造 source/targetText（含标题）时，丢弃
+        // 它们、保留能在正文中逐字定位的问题，避免整次检查作废。
+        let article = snapshot("Title", "This sentence has a real target.");
+        let content = WritingAnalysisContent {
+            issues: vec![
+                WritingIssue {
+                    id: "issue-1".into(),
+                    category: "语法".into(),
+                    source: "has a real target".into(),
+                    target_text: "has a real target".into(),
+                    explanation: "说明".into(),
+                    hint: "提示".into(),
+                    deeper_hint: "进一步".into(),
+                    reference: "参考".into(),
+                },
+                WritingIssue {
+                    id: "issue-2".into(),
+                    category: "语法".into(),
+                    source: "invented fragment".into(),
+                    target_text: "invented fragment".into(),
+                    explanation: "说明".into(),
+                    hint: "提示".into(),
+                    deeper_hint: "进一步".into(),
+                    reference: "参考".into(),
+                },
+                WritingIssue {
+                    id: "issue-3".into(),
+                    category: "标题".into(),
+                    source: "Title".into(),
+                    target_text: "Title".into(),
+                    explanation: "说明".into(),
+                    hint: "提示".into(),
+                    deeper_hint: "进一步".into(),
+                    reference: "参考".into(),
+                },
+            ],
+            patterns: vec![],
+        };
+        let json = serde_json::to_string(&content).unwrap();
+        let salvaged = parse_writing_analysis_content_salvage(&article, &json).unwrap();
+        assert_eq!(salvaged.issues.len(), 1);
+        assert_eq!(salvaged.issues[0].id, "issue-1");
+        // 保存边界还会再跑严格校验：容错结果必须仍然合法。
+        validate_analysis_content(&article, &salvaged).unwrap();
+    }
+
+    #[test]
+    fn salvage_fails_when_no_issue_is_locatable() {
+        let article = snapshot("Title", "This sentence has a real target.");
+        let content = WritingAnalysisContent {
+            issues: vec![WritingIssue {
+                id: "issue-1".into(),
+                category: "语法".into(),
+                source: "totally invented".into(),
+                target_text: "totally invented".into(),
+                explanation: "说明".into(),
+                hint: "提示".into(),
+                deeper_hint: "进一步".into(),
+                reference: "参考".into(),
+            }],
+            patterns: vec![],
+        };
+        let json = serde_json::to_string(&content).unwrap();
+        assert!(parse_writing_analysis_content_salvage(&article, &json)
+            .unwrap_err()
+            .contains("没有能在正文中定位的问题"));
+    }
+
+    #[test]
+    fn salvage_passes_through_valid_analysis_unchanged() {
+        let article = snapshot("Title", "This sentence has a real target.");
+        let expected = valid_analysis("has a real target");
+        let json = serde_json::to_string(&expected).unwrap();
+        assert_eq!(
+            parse_writing_analysis_content_salvage(&article, &json).unwrap(),
+            expected
+        );
     }
 
     #[test]
@@ -2701,5 +3216,159 @@ mod tests {
         assert_eq!(restored_completed.versions[0], version);
         drop(reopened_completed);
         let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn analysis_prompt_demands_scene_based_single_suggestion_not_parallel_options() {
+        // 任务 3 B(1)：检查先抓明显语法问题；表达类问题由模型从内容推断场景，
+        // 给"一个针对场景的判断 + 一条建议"，不并列"正式/地道"两个选项。
+        let prompt = writing_analysis_system_prompt();
+        assert!(prompt.contains("First catch clear grammar problems"));
+        assert!(prompt.contains("infer the writing scene"));
+        assert!(prompt.contains("ONE scene-based judgment"));
+        assert!(prompt.contains("ONE suggested rewrite"));
+        assert!(prompt.contains("Do not list two parallel alternatives"));
+    }
+
+    #[test]
+    fn analysis_prompt_demands_verbatim_source_copying() {
+        // 关闭思考模式后模型容易把建议改写混进 source/或编造片段；prompt 必须
+        // 强制逐字复制原文、改写只进 reference、找不到精确匹配就放弃该问题。
+        let prompt = writing_analysis_system_prompt();
+        assert!(prompt.contains("CRITICAL - verbatim copying"));
+        assert!(prompt.contains("character-for-character"));
+        assert!(prompt.contains("goes ONLY into"));
+        assert!(prompt.contains("drop that issue instead of fabricating a source"));
+        // 标题不属于检查正文：绝不放进 source/targetText（校验器拒绝标题定位）。
+        assert!(prompt.contains("The article title is NOT part"));
+        assert!(prompt.contains("never report an issue that targets only the title"));
+        // 对抗"空结果"倾向：学习者文章几乎一定有真实问题，要如实报告。
+        assert!(prompt.contains("almost certainly contains genuine issues"));
+        assert!(prompt.contains("truly free of issues"));
+        // 输出精炼但不得漏报：漏报真实问题比多报更糟，学习者草稿通常 4-6 个
+        // 真实问题；字段有长度上限（explanation/hint/deeperHint/reference）。
+        assert!(prompt.contains("missing a real problem is worse than reporting one extra"));
+        assert!(prompt.contains("typically 4 to 6 for a learner draft"));
+        assert!(prompt.contains("treat empty as exceptional, never as a default"));
+        assert!(prompt.contains("\"explanation\" within about 60"));
+        assert!(prompt.contains("\"reference\" within about 60"));
+        // 空/极少 issues 时仍给 1-2 条真实可迁移要点：学习者检查后总是有所收获。
+        assert!(prompt.contains("Even when \"issues\" is empty or very small"));
+        assert!(prompt.contains("the learner always gains something"));
+    }
+
+    #[test]
+    fn snapshot_digest_is_stable_and_deterministic() {
+        let article = snapshot("My essay", "Hello world.");
+        let again = snapshot("My essay", "Hello world.");
+        assert_eq!(
+            writing_snapshot_digest(&article),
+            writing_snapshot_digest(&again)
+        );
+        let changed = snapshot("My essay", "Hello world! Changed.");
+        assert_ne!(
+            writing_snapshot_digest(&article),
+            writing_snapshot_digest(&changed)
+        );
+        assert!(!writing_snapshot_digest(&article).is_empty());
+    }
+
+    #[test]
+    fn abort_flag_is_shared_and_abort_set_increments() {
+        let flag_a = writing_abort_flag_for(999_001);
+        let flag_b = writing_abort_flag_for(999_001);
+        assert!(
+            std::sync::Arc::ptr_eq(&flag_a, &flag_b),
+            "同文档中止标志必须共享"
+        );
+        assert!(!flag_a.load(Ordering::Relaxed));
+        abort_writing_analysis(999_001).unwrap();
+        assert!(flag_a.load(Ordering::Relaxed));
+        // 重新检查会清零（在 runtime 入口执行 store(false)）。
+        flag_a.store(false, Ordering::Relaxed);
+        assert!(!flag_a.load(Ordering::Relaxed));
+        let other = writing_abort_flag_for(999_002);
+        assert!(!std::sync::Arc::ptr_eq(&flag_a, &other));
+    }
+
+    #[test]
+    fn writing_ui_sink_projects_friendly_status_only_once_per_stage() {
+        use crate::agent_runtime::protocol::AgentEventPayload;
+
+        let labels = WritingStageLabels {
+            start: "正在检查语法…",
+            analyzing: "正在判断表达是否地道、更正式…",
+            finishing: "正在整理检查结果…",
+        };
+        let mut analysis_started = false;
+
+        // TurnStarted → 起始阶段。
+        let event = AgentEvent::new(
+            "run-1",
+            Some(1),
+            1,
+            AgentEventPayload::TurnStarted { turn_index: 1 },
+        )
+        .expect("事件必须有效");
+        let projected =
+            project_writing_ui_event(&event, labels, &mut analysis_started).expect("应有起始状态");
+        match projected {
+            WritingStreamEvent::Status { label } => assert_eq!(label, "正在检查语法…"),
+            other => panic!("意外事件：{other:?}"),
+        }
+
+        // 首个文本增量 → 分析阶段，且只发一次。
+        let event = AgentEvent::new(
+            "run-1",
+            Some(1),
+            2,
+            AgentEventPayload::AssistantTextDelta {
+                text: "{\"issues\":".into(),
+            },
+        )
+        .expect("事件必须有效");
+        let projected = project_writing_ui_event(&event, labels, &mut analysis_started)
+            .expect("应有分析阶段状态");
+        assert!(
+            matches!(projected, WritingStreamEvent::Status { label } if label.contains("正在判断表达"))
+        );
+        // 第二个增量不再重复发分析阶段。
+        let another_delta = AgentEvent::new(
+            "run-1",
+            Some(1),
+            3,
+            AgentEventPayload::AssistantTextDelta { text: "[".into() },
+        )
+        .expect("事件必须有效");
+        assert!(project_writing_ui_event(&another_delta, labels, &mut analysis_started).is_none());
+
+        // 文本完成 → 整理阶段。
+        let completed = AgentEvent::new(
+            "run-1",
+            Some(1),
+            4,
+            AgentEventPayload::AssistantTextCompleted {
+                text: "full json".into(),
+            },
+        )
+        .expect("事件必须有效");
+        let projected = project_writing_ui_event(&completed, labels, &mut analysis_started)
+            .expect("应有整理阶段状态");
+        assert!(
+            matches!(projected, WritingStreamEvent::Status { label } if label == "正在整理检查结果…")
+        );
+
+        // 其他内部事件（RunStarted）不投影到写作中间状态，终态由调用方处理。
+        let run_started = AgentEvent::new(
+            "run-1",
+            None,
+            5,
+            AgentEventPayload::RunStarted {
+                surface: crate::agent_runtime::protocol::AgentSurface::WritingCoach,
+                authority: AuthorityRef::writing(1, 0, "d", 0, None, 1),
+            },
+        )
+        .expect("事件必须有效");
+        assert!(project_writing_ui_event(&run_started, labels, &mut analysis_started).is_none());
     }
 }

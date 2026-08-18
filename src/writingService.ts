@@ -4,6 +4,7 @@ import type {
   WritingDocumentSummaryPayload,
   WritingQuestionCommand,
   WritingRepository,
+  WritingStreamEvent,
   WritingVersionPayload,
 } from "./writingRepository";
 import {
@@ -35,8 +36,13 @@ export interface WritingService {
   analyzeDocument(
     documentId: number,
     expectedRevision: number,
+    onEvent: (event: WritingStreamEvent) => void,
   ): Promise<WritingDocumentRecord>;
-  askQuestion(request: WritingQuestionCommand): Promise<WritingAgentAnswer>;
+  askQuestion(
+    request: WritingQuestionCommand,
+    onEvent: (event: WritingStreamEvent) => void,
+  ): Promise<WritingAgentAnswer>;
+  abortAnalysis(documentId: number): Promise<void>;
   completeDocument(
     documentId: number,
     expectedRevision: number,
@@ -359,15 +365,22 @@ export class RepositoryWritingService implements WritingService {
     return this.repository.delete(documentId, expectedRevision);
   }
 
-  async analyzeDocument(documentId: number, expectedRevision: number) {
+  async analyzeDocument(
+    documentId: number,
+    expectedRevision: number,
+    onEvent: (event: WritingStreamEvent) => void,
+  ) {
     requireDocumentId(documentId);
     requireRevision(expectedRevision);
     return mapWritingDocument(
-      await this.repository.analyze(documentId, expectedRevision),
+      await this.repository.analyze(documentId, expectedRevision, onEvent),
     );
   }
 
-  async askQuestion(request: WritingQuestionCommand) {
+  async askQuestion(
+    request: WritingQuestionCommand,
+    onEvent: (event: WritingStreamEvent) => void,
+  ) {
     requireDocumentId(request.documentId);
     requireRevision(request.expectedRevision);
     requireQuestionScope(request.scope);
@@ -375,9 +388,14 @@ export class RepositoryWritingService implements WritingService {
       throw new Error("写作辅助问题不能为空。");
     }
     return mapAnswer(
-      await this.repository.ask({ ...request }),
+      await this.repository.ask({ ...request }, onEvent),
       request.documentId,
     );
+  }
+
+  abortAnalysis(documentId: number) {
+    requireDocumentId(documentId);
+    return this.repository.abort(documentId);
   }
 
   async completeDocument(documentId: number, expectedRevision: number) {

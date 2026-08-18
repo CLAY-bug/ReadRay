@@ -1,8 +1,8 @@
 # ReadRay Agent Runtime 升级方案
 
-最后更新：2026-08-17
+最后更新：2026-08-18
 
-状态：任务 0 已完成并通过协议评审，下一步进入任务 1
+状态：任务 0/1/2/3/4/5/6 全部完成并通过评审（任务 3/4/5/6 已正式收口，任务 3/4 含真实 Tauri 使用验收）；阶段八点五 Agent Runtime 升级完成，等待合入 main
 
 ## 1. 文档定位
 
@@ -904,24 +904,56 @@ Runtime 与网络纵切稳定后，再开放：
 - 恶意网页提示无法提升权限或触发禁止工具。
 - 停止后网络和模型都终止，迟到结果不发布。
 
+#### 实施/评审记录（任务 3，2026-08-17）
+
+- **Provider 决策（live spike 证据）**：重跑 Responses spike（`READRAY_RUN_DEEPSEEK_RESPONSES_SPIKE=1`，仅该测试），`POST /responses` 仍返回 HTTP 400；随后在 spike 中补充 chat/completions web_search 变体探测，错误明确为 `tools[0].type: unknown variant 'web_search', expected 'function'`——当前 DeepSeek 端点只接受 function 工具，内置 server-side web_search 不存在，来源要求不满足。经调度者确认采用方案 A：在相同 `web_search` ToolDefinition 后替换为受控 provider，不改变 Agent loop 与 UI 协议。
+- **受控搜索 provider**：`network.rs` 定义 `SearchProvider` trait（可替换，未来 Tavily 等 key 服务只换实现）；任务 3 只实现无 key 的 Wikipedia API provider（zh/en 的 search API，返回条目标题/URL/摘要），工具描述诚实标注"维基百科覆盖，非通用搜索"，覆盖不到时模型必须如实说明，不得用模型记忆冒充已核实事实。
+- **受控抓取 fetch_web_page**：逐跳重新校验 URL 与解析后的全部 IP（防 DNS rebinding），连接固定到已验证 IP；限制重定向 5 跳、响应 2 MiB、连接 10s/整体 30s 超时；只接受文本内容类型白名单；不携带 cookies、拒绝 userinfo 与敏感查询参数；剥离 script/style/iframe/svg/template 与注释；正文始终作为不可信外部数据回传模型。
+- **内核与协议投影**：L1 工具在 `conversation_l1_tools` 注册（web_search/fetch_web_page，ExternalReadOnly），对话 capability 提升到 ExternalReadOnly；coordinator 在工具完成时把 `details.sources` 投影为 SourcesUpdated 事件（先于 ToolCallCompleted）；PersistingSink 改为从 ToolCallCompleted/Failed 提取来源落库并关联 tool_call_id（移除空串落库）。未改 protocol.rs。
+- **前端**：正式对话切换到 `send_quick_ai_message_agent`；QuickAiStreamEvent 扩展 `sources_updated`/`tool_state`；ConversationPage 展示来源卡片（标题/站点/URL，点击走受控 `open_agent_source` command）与"正在搜索/正在读取/正在整理"状态；来源以 ref 为权威累积（修复了来源被后续 setGeneration 覆盖的缺陷）；fixture 增加 `[fixture:sources]` 演示。
+- **验证**：Rust lib 362/0（含网络 15 项、来源事件/落库/投影等新增约 28 项）、前端 conversation 30/30 与其他套件全绿、tsc/vite build、fmt/check/diff 通过；浏览器预览验证来源卡片与工具状态展示。未运行其他 live 测试；真实 Tauri/DeepSeek 人工验收留待停点。
+- **评审修复轮（2026-08-17）**：调度者评审后执行会话逐项修复并通过复审：① 真实使用发现多轮对话 400（历史 assistant 投影为 `tool_calls: []`，DeepSeek 要求长度 ≥1）——`project_message` 空 tool_calls 省略该键；② 失败/中断后 composer 被 `generation !== null` 锁死且无出口——改为仅 generating 阻塞发送，`prepare_turn` 允许尾 pending user 时以 `current_max+2` 开启新轮次（旧 pending 保留可审计、重试复用同 sequence/id、stale 拒绝），不添加"放弃"按钮；③ fetch_web_page 运行时失败归 `NetworkBlocked` 会 fail-fast 杀死 run——改为运行时失败（DNS/传输/非 200/内容类型/重定向超限）归 `ToolExecutionFailed` 可恢复，`NetworkBlocked` 只留安全拒绝（SSRF/私网/凭据/重定向到非 HTTP(S) 协议）；④ Wikipedia 解析失败被当"无结果"——区分三态（非法 JSON/缺列表 → ToolExecutionFailed；空列表 → 无结果）；⑤ `stable_source_id` 收敛为 network.rs 共享实现；⑥ 全局网络权限门（方案 §5.3）本轮只标注边界不实现，未来经 app_preferences 回落 L0。真实使用另暴露并修复：DeepSeek 拒绝无 `type: "object"` 的 function schema、多工具轮次 `ToolRunning→ToolRunning` 自环缺失导致整轮非法迁移、Wikipedia 无 User-Agent 返回 403、模型对"能联网吗"保守回答"不能"（有网络工具时提示词据实声明联网能力）。收口时全量 Rust 372/0、前端 conversation 33/33、build/fmt/check/diff 全绿；用户已完成真实 Tauri 多轮追问、失败后发新消息、联网来源卡片与"能联网吗"人工验收，任务 3 正式收口。
+
+
 ### 任务 4：日常使用交互
 
-目标：消除“必须等待一次回答结束”的 demo 交互。
+目标：让日常使用交互完整自洽——"编辑并重新生成"可用、错误呈现友好、回答来源可回看。面向普通英语学习者，不展示技术内部细节。
 
 工作内容：
 
-- steering/follow-up 或第一版统一排队输入。
-- 重新生成的覆盖式正式实现。
-- 截断后的安全继续。
-- 工具失败的局部可重试与清晰状态。
-- 对话中的工具步骤折叠显示和来源回看。
+- **编辑并重新生成（§18.4，2026-08-17 用户设计确认，替代原"同题重新生成"）**：交互为"最后一条用户输入下方的 hover 小按钮 → 行内编辑该问题 → 发送 → 新回答替代旧回答"；仅对最后一条输入展示。语义：编辑后的问题**以新消息行替代旧问题行**（`superseded_by_id` 指向旧问题，方案 B——复用 v21 通用消息字段，**无新 migration**），新回答替代旧回答（不物理覆盖，旧问题+旧回答均保留在库可审计）；可见快照与导出只取未替代消息；序列保持 user 奇/assistant 偶。同题"重新生成"入口**移除**（输入不变的重掷对概率性 Agent 无价值）；"撤销找回旧回答"本轮不做（方案 B 数据基础保留，未来可选）。menu 内原入口与相关死代码一并清理。
+- 错误呈现友好化：UI 永不展示技术错误原文（错误进 Rust 日志，沿用 `READRAY_AGENT_*` 模式）；整轮失败时页面只显示友好文案（"暂时无法回答，请重试"），pending 轮次语义不变。
+- 来源持久化回看：来源数据随 assistant 消息落库（数据小、最小路径），重启与历史对话中来源卡片仍可回看；不从 run/step 审计表重建。
+- 截断诚实提示：`finish_reason=length` 时回答照常持久化并给出"回答可能不完整"的轻微提示；"继续生成"功能推迟到任务 5 长上下文之后（本任务不做）。
+
+范围决策（2026-08-17 用户确认，与 pi 式交互模型差异）：
+
+- 不做 steering/follow-up/排队输入：ReadRay 是秒级单次交互的学习助手，不需要队列状态机；"生成中禁止发送 + 草稿保留在输入框"即为正确策略，运行中输入不会丢失或污染其他会话。
+- 不做工具步骤折叠展示：普通学习者不需要看工具内部执行细节；只保留友好状态文案（"正在搜索相关资料…"）与来源卡片。
+- 不做工具失败的局部可重试/UI 可识别：工具失败由应用层处理（任务 3 已实现运行期失败回传模型、模型诚实降级）；用户不感知工具内部成败。
 
 验收：
 
-- 运行中追加内容不会丢失或污染其他会话。
-- stop、steer、follow-up 的顺序可复现。
-- 重新生成不破坏原始用户轮次和导出一致性。
-- 页面卸载、切换会话和窗口隐藏后事件身份仍正确。
+- 编辑并重新生成：仅最后一条输入展示入口；编辑后的问题以新消息行替代旧问题行（方案 B，无新 migration），新回答替代旧回答；旧问题+旧回答均保留在库可审计；可见快照与导出只取未替代消息；序列保持 user 奇/assistant 偶；同题"重新生成"入口已移除。
+- 页面卸载、切换会话和窗口隐藏后事件身份仍正确；运行中输入不丢失、不污染其他会话。
+- UI 不出现技术错误原文；失败只展示友好文案，原始错误可在日志中找到。
+- 来源随回答持久化，重启与历史回看可用。
+
+#### 设计变更记录（2026-08-17 用户确认，修复轮依据）
+
+- 原"同题重新生成"改为"**编辑并重新生成**"：交互为最后一条用户输入下方的 hover 小按钮 → 行内编辑 → 发送 → 新回答替代旧回答。理由：输入不变的重掷对概率性 Agent 无价值；用户需要的是改问题再要答案。
+- 编辑后的问题采用**方案 B**：新问题行 `superseded_by_id` 指向旧问题行（复用 v21 通用消息字段，无新 migration）；与回答替代机制一致，原始问题措辞保留可审计。
+- 移除菜单内"重新生成回答"入口及相关死代码；"撤销找回旧回答"本轮不做（数据基础保留，未来可选）。
+
+#### 实施/评审记录（任务 4，2026-08-17）
+
+- **替代关系与落库（SQLite v21，集中一次）**：`quick_ai_messages` 一次追加三列——`superseded_by_id`（替代链，旧行保留可审计）、`sources_json`（来源随 assistant 消息落库，不从 run/step 审计表重建）、`truncated`（finish_reason=length 诚实截断标志）。migration 带新库约束测试与 v20→v21 旧库升级数据保留测试。
+- **编辑并重新生成（2026-08-18 设计变更修复轮，替代原"同题重新生成"）**：交互为"最后一条用户输入下方的 hover 小按钮 → 行内编辑该问题 → 发送 → 新回答替代旧回答"，仅最后一条输入展示入口。方案 B：编辑后的问题**以新消息行替代旧问题行**——新问题行在 prepare 事务中以"当前最大序号的下一个奇数"插入（pending 可重试、崩溃安全），旧问题行与旧回答的"被替代"标记统一在 complete 事务中写入（失败时旧问+旧答仍可见）；替代方向与 v21 一致（**被替代者记录 `superseded_by_id` 指向替代者**，可见快照过滤 `superseded_by_id IS NULL` 自然只取未替代消息，无新 migration、protocol.rs 未动）。新回答取新问题行的下一个偶数，序列保持 user 奇/assistant 偶；run 复用该轮 user 身份（同一 expected_user_sequence，新 run 的 `retry_of_run_id` 指向该轮最近 run）；模型上下文 = 历史（排除该轮旧问题行与旧回答）+ 编辑后的 pending 问题行。幂等：目标必须是该轮当前、未被替代的旧回答；该轮已有编辑 pending 行时重试复用同一行（内容不一致拒绝，避免错改其他轮次 pending 行）；目标已被替代的重复请求幂等返回当前权威快照；编辑内容非空校验。菜单内"重新生成回答"入口与 `canRegenerate` 死代码已移除。
+- **错误呈现友好化**：UI 永不展示技术错误原文——`run_agent_session_core` 各失败分支把终止原因与技术消息写入 `eprintln!("READRAY_AGENT_RUN_FAILED=…")`，只返回友好文案（停止/未完成/暂时无法回答）；`project_ui_event` 的 RunFailed 只投影"暂时无法回答，请重试。"；前端 failed 气泡与打开失败路径同样只显示友好文案，技术细节进 console。
+- **截断诚实提示**：coordinator 捕获最终回答轮的 `ModelFinishReason::Length` → `RunOutcome.truncated`（仅改 coordinator.rs，未动 protocol.rs 冻结协议）；回答照常持久化并携带 truncated 标志，前端消息显示"回答可能不完整"轻微提示（重启后仍可回看），移除"继续生成"按钮；预算截断（RunBudgetExceeded）保持不落答案、pending 可重试，文案改为友好版"回答未完成"。
+- **来源持久化回看**：运行期经 SourceCollectingSink 从 SourcesUpdated 事件按 source_id 去重累积，随 complete/complete_regeneration 事务写入 assistant 行 `sources_json`；快照 `get()` 解析并返回 `sources`（camelCase 与前端 AgentSource 同构），损坏 blob 只记日志降级为无来源，不阻断会话加载；重启与历史对话来源卡片直接可回看。
+- **验证**：Rust lib 387/0（基线 372 + 新增 15：migration v21、编辑端到端/幂等/transcript 排除旧问旧答/来源随新回答落库/截断标志持久化/快照过滤与导出一致性/序列交替/pending 编辑行重试复用）；前端 conversation 38/38（编辑参数传递、未提交 pending、模糊成功、hover 入口与菜单移除静态断言、来源/截断映射）、overlay 20/review 50/writing 30/settings 57/startup 3 全绿；`pnpm build`、cargo fmt/check --all-targets、git diff --check 全通过；浏览器预览（vite preview + fixture）实测最后一条输入 hover 编辑按钮 → 行内编辑 → 发送后回答原地替换、菜单仅剩导出/删除、无控制台错误。未运行 live 测试；真实 Tauri/DeepSeek 人工验收（编辑并重新生成真实回答、截断提示、重启回看来源）留待停点。
+- **评审修复轮（2026-08-18，已复审通过）**：pending 编辑行内容一致性从"拒绝不同内容"改为"覆盖更新"——第一次编辑后 run 失败（pending 行留在库中），用户再次编辑成不同内容时，pending 行 UPDATE 覆盖其 content 并复用同一行（pending 行是本次编辑产生、尚无回答，覆盖无历史价值损失；严格身份判定 tail=target.sequence+1 的未替代 user 行已排除其他轮次 pending 行）；更新对应测试与快照断言。用户已完成真实 Tauri 人工验收：最后一条输入 hover 出现编辑按钮、行内编辑并发送后回答原地替换、来源随历史回看可用、"回答可能不完整"截断提示正确。任务 4 正式收口，下一步进入任务 5。
 
 ### 任务 5：长上下文与 compaction
 
@@ -940,6 +972,25 @@ Runtime 与网络纵切稳定后，再开放：
 - 重启前后模型上下文投影一致。
 - 原始消息与工具步骤永不因压缩删除。
 - 摘要与阶段九学习者记忆没有数据或语义混用。
+
+#### 范围决策（2026-08-18 用户确认，方案 A）
+
+ReadRay 是文字阅读/学习工具（非 coding agent），对话 token 增长慢；且 DeepSeek V4 上下文为 **1M tokens**，正常对话几乎吃不满窗口。因此**不做完整 compaction 子系统**，只做"让用户永远感受不到上下文限制"的最简兜底，方向与计划的"持久化 summary、版本化和重新生成"不同：
+
+- **方案 A**：到达窗口上限时，自动把最旧一段折叠为极简摘要，对话无缝继续，用户无感。
+- **折叠摘要只存在投影/内存层**：不写回用户可见 transcript、不落库、不做 compaction 持久化表、不新增 SQLite migration（`DATABASE_SCHEMA_VERSION` 保持 21）。
+- **折叠时语义**：压缩的可能是已过时内容，不能抬成权威。经用户确认采用**方案三**——折叠摘要作为一条**真实的 user 历史消息**投影（而非并入/新增 system），措辞明确标"较早已折叠、仅供回顾参考、以当前对话为准"，既避开消息数组中第二条 system 的 shape 风险（项目曾因 `tool_calls:[]` 踩过 DeepSeek 400），又不让过时内容获得过高权重。
+- 防御性边界保留：折叠失败安全回退；原始消息永不删除；摘要与阶段九学习者记忆严格隔离。
+
+#### 实施/评审记录（任务 5，2026-08-18）
+
+- **预算驱动投影**：`chat_surface.rs::transcript` 把固定 `MAX_CONTEXT_MESSAGES=40` 改为 token/字符预算驱动——`estimate_text_tokens`（字符数/4 向上取整）为每条消息估算；`max_suffix_fitting` 从尾部向前累积能放下的最近完整后缀，**永远保留当前 pending user、永不从开头断**。预算 = 1M 窗口 − 50k 安全余量（吸收估算误差、系统提示词/工具 schema/未消化输出）。
+- **正常快速路径**：完整历史 + 系统在预算内时直接全量投影（绝大多数真实对话走这里），不再有任何固定截断。
+- **折叠兜底（方案 A + 方案三）**：超出预算时，最旧一段被 `build_compaction_summary` 确定性折叠为 `CompactionSummary`（不调用 LLM，保留最近若干条 user 问题摘录作为连续性锚，如实说明共 N 条较早消息被折叠，不编造语义总结）；投影为一条 user 消息并紧跟一条空 assistant 配对以保证 user/assistant 交替合法；`project_message` 把摘要投影为 `user` 角色（非 system）。折叠后摘要+配对+尾部超预算则安全回退为只投影最近完整尾部；折叠失败（空段/无 user 摘录）同样回退，不假装成功。
+- **持久化与隔离**：摘要只在 `transcript()` 投影层生成，`snapshot.messages` 原始历史完整不删改；无 migration、无 compaction 落库；摘要与阶段九学习者记忆无数据或语义混用（`RuntimeNotice`/`CompactionSummary` 均为投影态）。
+- **共享面**：主应用对话与 Quick AI overlay 都经 `ChatSurfaceAdapter::transcript`（`quick_ai.rs` 正式路径 `send_quick_ai_message_agent`），共享同一预算投影；旧 `send_quick_ai_message`/`_streaming`（含旧 40 条截断）作为受控回退保留，前端正式链路只走 Agent 版本，不受影响。
+- **验证**：Rust lib 392/0（基线 387 + 新增 5：全部投影/折叠/保留 pending/失败回退/token 估算，含方案三投影验收：单条 system、摘要为 user 且措辞标"供回顾参考/以当前对话为准"、末尾 pending、严格 user/assistant 交替）；cargo check 0 警告、cargo fmt 通过。未运行 live 测试；真实 Tauri 长对话人工验收（本场景接近 1M 窗口，日常几乎不会触发）留待整体停点。
+- **评审修复轮（2026-08-18，已复审通过）**：初版把折叠摘要投影为第二条独立的 `{"role":"system"}` 消息（中间 system，shape 未验证且抬成权威背景）；经评审改为**方案三**——`deepseek_gateway.rs::project_message` 把 `CompactionSummary` 投影为 `user`，`chat_surface.rs` 折叠分支补空 assistant 配对维持交替，措辞标"仅供回顾参考、以当前对话为准"；新增投影验收测试（单 system、摘要 user、交替合法）。用户确认过时消息折叠进系统提示词会权重异常放大，故坚持摘要不作 system。任务 5 正式收口，下一步进入任务 6。
 
 ### 任务 6：Writing Coach 适配
 
@@ -962,6 +1013,25 @@ Runtime 与网络纵切稳定后，再开放：
 - 自动保存推进 revision 后，仍可接受属于同一可见身份的合法回答；正文或版本变化后迟到结果被拒绝。
 - Agent 建议不会被冒充为用户独立写作，也不会自动写入学习者能力证据。
 - 现有写作创建、保存、分析、问答、完成、版本回看和继续修改回归通过。
+
+#### 范围决策（2026-08-18 用户确认）
+
+任务 6 在"接入 Runtime"之外合并两项产品体验收敛（用户对现有写作检查的反馈）：
+
+- **解决"检查慢"**：接入 Runtime 后引入流式进度状态 + 可取消，让用户不再干等。Writing 检查输出仍是结构化 JSON（issues/patterns），**不做逐字流式渲染**——流式的价值在"可取消 + 实时友好状态"，不在"逐字冒字"。同时收紧 prompt（字段长度上限、典型 4-6 个问题）缩短实际输出耗时。
+- **修正检查方式（B(1)，只改 prompt 语义，不动 schema/不迁移）**：检查先抓明显语法问题；表达类问题由模型**从文章内容推断场景**（学术/求职/商务/口语/日常等），给出"一个针对场景的判断 + 一条建议"（reference 字段），**不并列"正式/地道"两个选项**；仅当确有必要时才给表达建议。
+- **不新增"放弃"按钮**：中止能力并入原检查按钮（检查中点击即停止，title 提示"停止检查"），符合用户"不增加按钮"的既有偏好。
+
+#### 实施/评审记录（任务 6，2026-08-18）
+
+- **共享内核接入**：新增 `writing_surface.rs`（WritingSurfaceAdapter，91 行最小适配层：只投影 `[System, User]` 与写作专属空工具集，不复制 loop/gateway/registry）；`writing.rs` 的分析/问答从旧非流式 `post_tracked_chat_completion` 改为经 `AgentRunCoordinator` + `DeepSeekChatGateway::for_surface` + `WritingSurfaceAdapter` 驱动，最终仍收口结构化 JSON，经 `parse_writing_analysis_content_salvage` 校验与 `save_analysis_if_current` 的 expectedRevision 事务保存（写作权威保留）。
+- **JSON 面参数**：gateway 增加 `for_surface(operation, category, output_json_object)` 与 `with_generation_params`/`with_thinking_disabled`；写作面强制 `response_format: json_object` + 关闭思考 + 4096/0.2（与已验证旧参数一致）。真实联调发现：`deepseek-v4-flash` 开启思考时会把全部输出预算烧在 `reasoning_content` 上、正文为空（finish=Length, content_chars=0），故结构化 JSON 面必须关闭思考，并加 `READRAY_JSON_STREAM_DIAG` 诊断日志。
+- **流式状态与取消**：`WritingStreamEvent` 协议（status/done/stopped/error）；`WritingUiSink` 把 AgentEvent 确定性投影为友好进度（"正在检查语法…/正在判断表达是否地道、更正式…/正在整理检查结果…"）；按 document_id 键控 abort flag + `abort_writing_analysis` command；前端检查按钮 checking 时显示进度文案、title"停止检查"、点击中止（删除单独的"放弃"按钮）。
+- **prompt 语义修正（B(1)）**：`writing_analysis_system_prompt` 重写——先抓明显语法问题；表达类由模型推断场景、给单条场景判断建议（不并列两个选项）；强化逐字复制（source/targetText 必须原文逐字、改写只进 reference、找不到精确匹配就放弃该问题、标题不属于检查正文）；输出精炼（字段长度上限）但**不得漏报**（漏报真实问题比多报更糟，学习者草稿典型 4-6 个真实问题，空数组仅当文章确实无可挑剔）；issues 为空或极少时仍给 1-2 条真实可迁移写作要点。
+- **诚实部分成功**：`parse_writing_analysis_content_salvage` 丢弃无法在正文中逐字定位的个别问题（记 `READRAY_WRITING_ANALYSIS_DROPPED` 日志）、保留合法问题保存，避免"一条坏问题整次检查作废"；没有任何合法问题时仍按失败处理（不伪装成功）。
+- **验证**：Rust lib 405/0（新增 13：surface 工具集/能力/transcript、gateway JSON 面参数与思考开关、salvage 三态、prompt 语义断言、digest 稳定性、abort 共享、UI sink 投影、写作流式事件协议）、cargo check 0 警告、cargo fmt 通过；前端 writing 30/30 与其他套件全绿（conversation 38/settings 57/overlay 20/review 50/startup 3）、`pnpm build`、tsc 通过。未运行 live 测试；真实 Tauri 人工验收由用户进行。
+- **评审修复轮（2026-08-18，已复审通过）**：① `parse_writing_analysis_content` 死代码警告——加 `#[cfg(test)]`；② 检查"慢"的 prompt 收紧误伤——初版 "aim for 3 to 5 high-value issues, never padding" 高门槛措辞导致模型对真实文章返回空 issues（用户实测 "What is Love ?" 检查后 0 个问题），改为"漏报比多报糟、典型 4-6 个、空数组仅当无可挑剔（罕见）"并保证空 issues 时仍给 1-2 条可迁移要点；③ 删除检查进行中的"放弃"按钮——中止并入检查按钮（点击停止），不新增按钮。
+- **已知问题（2026-08-18 记录，暂不处理）**：写作检查在真实使用中（示例文章 "What is Love ?"）曾返回 **0 个问题**，用户感知"和没审查一样"。评审修复轮已强化 prompt 措辞（漏报比多报糟 + 空 issues 仍给要点），但**未经真实 Tauri 复验**；若复验仍报 0 个或检查质量/耗时不满意，后续需重新评估关闭思考模式对检查质量的影响（可能需为写作面单独评估 thinking 参数或模型路径）。已作为已知边界记录，不阻塞任务 6 收口。
 
 ## 20. 测试策略
 
@@ -1096,7 +1166,7 @@ late_event_after_new_run
 5. 更新本文任务状态和必要的恢复文档。
 6. 停止等待用户确认，再进入下一任务。
 
-任务 0 协议与 provider spike 已通过评审，当前实施入口是"任务 1：Rust Agent Kernel"。在任务 1 完成并验收前，不新增 Agent migration，不改正式对话或写作 UI，不开放 Web Search 给用户真实会话。Writing Coach 必须等通用对话 Runtime、自动联网与长上下文完成各自验收后，再进入任务 6。
+任务 0/1/2/3/4/5/6 已全部通过评审并正式收口（任务 3/4 含真实 Tauri 人工验收；任务 5 为预算驱动长上下文投影 + 方案 A 最简折叠兜底；任务 6 Writing Coach 已接入共享 Runtime 并保留写作权威，见实施记录），**阶段八点五 Agent Runtime 升级全部完成**。任务 4 的"编辑并重新生成"已按 §18.4 覆盖式语义正式开放（不物理覆盖旧问题/旧回答）；Web Search 已通过 Wikipedia provider 开放给真实会话（覆盖范围以工具描述为准）；Writing Coach 检查/问答已复用同一 Runtime 内核（写作专属空工具集，默认不联网）。已知问题：写作检查曾返回 0 个问题（见任务 6 实施记录），待后续真实复验与处理，不阻塞整体合入 main。
 
 ## 26. 研究来源
 
