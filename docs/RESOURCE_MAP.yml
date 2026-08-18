@@ -97,8 +97,8 @@ core_docs:
     read_when:
       - "讨论、实现或验收主应用聊天、Quick AI overlay 或 Writing Coach 的 Agent loop、tool call、联网搜索、来源、运行恢复或长上下文。"
       - "判断 pi Agent Core 与 ReadRay Rust/Tauri/SQLite 的适配边界。"
-      - "继续阶段八点五的任务 5 及之后实现。"
-    notes: "任务 0/1/2/3/4 已通过评审并正式收口（任务 3/4 含真实 Tauri 使用验收）；采用 Rust 原生 pi-style 共享 Runtime，不直接嵌入 pi coding-agent，不增加 Node/Python sidecar。主应用聊天与 Quick AI overlay 共享 ChatSurfaceAdapter；Writing Coach 在 Runtime 稳定后通过独立 adapter 接入并保留 writing revision 权威。模型在已授权能力内自主选择低风险只读工具；当前入口为任务 5 长上下文与 compaction，截断继续归任务 5。"
+      - "继续阶段八点五的任务 6 及之后实现。"
+    notes: "任务 0/1/2/3/4/5 已通过评审并正式收口（任务 3/4 含真实 Tauri 使用验收）；采用 Rust 原生 pi-style 共享 Runtime，不直接嵌入 pi coding-agent，不增加 Node/Python sidecar。主应用聊天与 Quick AI overlay 共享 ChatSurfaceAdapter；Writing Coach 在 Runtime 稳定后通过独立 adapter 接入并保留 writing revision 权威。模型在已授权能力内自主选择低风险只读工具；当前入口为任务 6 Writing Coach 适配。任务 5 长上下文按用户确认的方案 A 简化——预算驱动投影（token/字符估算 + 50k 余量，永不从头断、永远保留 pending user），超窗最旧段折叠为投影态 user 历史消息（方案三，非第二条 system；不落库、不新增 migration、不进学习者记忆）。"
     risk: "不得一次性整包实现，不得开放 Bash、任意文件读写、动态扩展或通用系统权限；不得提前接学习者画像、记忆注入、个性化排序或其他阶段九语义。"
 
   - path: "doc/quick-ai-overlay-upgrade-task.md"

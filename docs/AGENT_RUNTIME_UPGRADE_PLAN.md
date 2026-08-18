@@ -1,8 +1,8 @@
 # ReadRay Agent Runtime 升级方案
 
-最后更新：2026-08-17
+最后更新：2026-08-18
 
-状态：任务 0/1/2/3/4 已完成并通过评审（任务 3/4 已正式收口，含真实 Tauri 使用验收）；下一步进入任务 5
+状态：任务 0/1/2/3/4/5 已完成并通过评审（任务 3/4/5 已正式收口，任务 3/4 含真实 Tauri 使用验收）；下一步进入任务 6
 
 ## 1. 文档定位
 
@@ -973,6 +973,25 @@ Runtime 与网络纵切稳定后，再开放：
 - 原始消息与工具步骤永不因压缩删除。
 - 摘要与阶段九学习者记忆没有数据或语义混用。
 
+#### 范围决策（2026-08-18 用户确认，方案 A）
+
+ReadRay 是文字阅读/学习工具（非 coding agent），对话 token 增长慢；且 DeepSeek V4 上下文为 **1M tokens**，正常对话几乎吃不满窗口。因此**不做完整 compaction 子系统**，只做"让用户永远感受不到上下文限制"的最简兜底，方向与计划的"持久化 summary、版本化和重新生成"不同：
+
+- **方案 A**：到达窗口上限时，自动把最旧一段折叠为极简摘要，对话无缝继续，用户无感。
+- **折叠摘要只存在投影/内存层**：不写回用户可见 transcript、不落库、不做 compaction 持久化表、不新增 SQLite migration（`DATABASE_SCHEMA_VERSION` 保持 21）。
+- **折叠时语义**：压缩的可能是已过时内容，不能抬成权威。经用户确认采用**方案三**——折叠摘要作为一条**真实的 user 历史消息**投影（而非并入/新增 system），措辞明确标"较早已折叠、仅供回顾参考、以当前对话为准"，既避开消息数组中第二条 system 的 shape 风险（项目曾因 `tool_calls:[]` 踩过 DeepSeek 400），又不让过时内容获得过高权重。
+- 防御性边界保留：折叠失败安全回退；原始消息永不删除；摘要与阶段九学习者记忆严格隔离。
+
+#### 实施/评审记录（任务 5，2026-08-18）
+
+- **预算驱动投影**：`chat_surface.rs::transcript` 把固定 `MAX_CONTEXT_MESSAGES=40` 改为 token/字符预算驱动——`estimate_text_tokens`（字符数/4 向上取整）为每条消息估算；`max_suffix_fitting` 从尾部向前累积能放下的最近完整后缀，**永远保留当前 pending user、永不从开头断**。预算 = 1M 窗口 − 50k 安全余量（吸收估算误差、系统提示词/工具 schema/未消化输出）。
+- **正常快速路径**：完整历史 + 系统在预算内时直接全量投影（绝大多数真实对话走这里），不再有任何固定截断。
+- **折叠兜底（方案 A + 方案三）**：超出预算时，最旧一段被 `build_compaction_summary` 确定性折叠为 `CompactionSummary`（不调用 LLM，保留最近若干条 user 问题摘录作为连续性锚，如实说明共 N 条较早消息被折叠，不编造语义总结）；投影为一条 user 消息并紧跟一条空 assistant 配对以保证 user/assistant 交替合法；`project_message` 把摘要投影为 `user` 角色（非 system）。折叠后摘要+配对+尾部超预算则安全回退为只投影最近完整尾部；折叠失败（空段/无 user 摘录）同样回退，不假装成功。
+- **持久化与隔离**：摘要只在 `transcript()` 投影层生成，`snapshot.messages` 原始历史完整不删改；无 migration、无 compaction 落库；摘要与阶段九学习者记忆无数据或语义混用（`RuntimeNotice`/`CompactionSummary` 均为投影态）。
+- **共享面**：主应用对话与 Quick AI overlay 都经 `ChatSurfaceAdapter::transcript`（`quick_ai.rs` 正式路径 `send_quick_ai_message_agent`），共享同一预算投影；旧 `send_quick_ai_message`/`_streaming`（含旧 40 条截断）作为受控回退保留，前端正式链路只走 Agent 版本，不受影响。
+- **验证**：Rust lib 392/0（基线 387 + 新增 5：全部投影/折叠/保留 pending/失败回退/token 估算，含方案三投影验收：单条 system、摘要为 user 且措辞标"供回顾参考/以当前对话为准"、末尾 pending、严格 user/assistant 交替）；cargo check 0 警告、cargo fmt 通过。未运行 live 测试；真实 Tauri 长对话人工验收（本场景接近 1M 窗口，日常几乎不会触发）留待整体停点。
+- **评审修复轮（2026-08-18，已复审通过）**：初版把折叠摘要投影为第二条独立的 `{"role":"system"}` 消息（中间 system，shape 未验证且抬成权威背景）；经评审改为**方案三**——`deepseek_gateway.rs::project_message` 把 `CompactionSummary` 投影为 `user`，`chat_surface.rs` 折叠分支补空 assistant 配对维持交替，措辞标"仅供回顾参考、以当前对话为准"；新增投影验收测试（单 system、摘要 user、交替合法）。用户确认过时消息折叠进系统提示词会权重异常放大，故坚持摘要不作 system。任务 5 正式收口，下一步进入任务 6。
+
 ### 任务 6：Writing Coach 适配
 
 目标：让作文中的分析、问答和辅导 Agent 复用已经验收的 Runtime，同时保留写作文章、revision、完成版本和请求身份权威。
@@ -1128,7 +1147,7 @@ late_event_after_new_run
 5. 更新本文任务状态和必要的恢复文档。
 6. 停止等待用户确认，再进入下一任务。
 
-任务 0/1/2/3/4 已通过评审（任务 3/4 已正式收口），当前实施入口为任务 5 长上下文与 compaction。任务 4 完成前不开放 steering/follow-up 与截断继续；"编辑并重新生成"已按 §18.4 覆盖式语义正式开放（不物理覆盖旧问题/旧回答），截断继续归任务 5。Web Search 已通过 Wikipedia provider 开放给真实会话（覆盖范围以工具描述为准）。Writing Coach 必须等通用对话 Runtime、自动联网与长上下文完成各自验收后，再进入任务 6。
+任务 0/1/2/3/4/5 已通过评审（任务 3/4/5 已正式收口，任务 3/4 含真实 Tauri 人工验收；任务 5 为预算驱动长上下文投影 + 方案 A 最简折叠兜底，见任务 5 实施记录），当前实施入口为任务 6 Writing Coach 适配。任务 4 完成前不开放 steering/follow-up 与截断继续；"编辑并重新生成"已按 §18.4 覆盖式语义正式开放（不物理覆盖旧问题/旧回答），截断继续已由任务 5 的诚实截断提示 + 折叠兜底承接。Web Search 已通过 Wikipedia provider 开放给真实会话（覆盖范围以工具描述为准）。Writing Coach 必须等通用对话 Runtime、自动联网与长上下文完成各自验收后再进入（任务 6 入口即此）。
 
 ## 26. 研究来源
 
