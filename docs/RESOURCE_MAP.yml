@@ -117,7 +117,7 @@ core_docs:
       - "实现或验收划词解释速度优化。"
       - "排查 DeepSeek reasoning 报错、划词长等待或迟到结果落库。"
       - "修复中文查询进入记忆、今天或复习页面。"
-    notes: "本轮划词优化已于 2026-08-12 正式收口：任务 1～4 已完成实现、必要验证和用户真实使用验收；任务 4 SQLite v18 精确缓存与 single-flight 已合回主项目。原任务 5 不包含新功能，基于投入产出不再单独执行，其跨模块完整回归清单仅保留为未来正式发布、参赛演示打包或相关模块大改时的检查参考，不得记作已运行。已确认 ExplanationCard 关闭 thinking、纯中文直接译英文、不做质量/Provider 对照测评、不增加深入理解、不维护滚动会话。"
+    notes: "本轮划词优化已于 2026-08-12 正式收口：任务 1～4 已完成实现、必要验证和用户真实使用验收；任务 4 SQLite v18 精确缓存与 single-flight 已合回主项目。2026-08-20 又完成收口后的单 token 语境消歧局部修复：缩写、全大写词、点号/加号/井号、下划线和混合大小写标识符仍统一按 word 处理，不增加 abbreviation 卡片类型或词库特判；UIA 对 context-sensitive word 优先 Document、失败回退 Paragraph，模型优先使用不超过 4096 字符且包含选中词的完整捕获上下文，否则使用选区相关 bounded context；prompt/cache identity 升级到 v7。用户已确认实际样本准确度明显改善，定向 Rust 测试、编译、fmt 与 diff 检查通过。原任务 5 不包含新功能，基于投入产出不再单独执行，其跨模块完整回归清单仅保留为未来正式发布、参赛演示打包或相关模块大改时的检查参考，不得记作已运行。已确认 ExplanationCard 关闭 thinking、纯中文直接译英文、不做质量/Provider 对照测评、不增加深入理解、不维护滚动会话。"
     risk: "不得照搬整页翻译批处理或 Google 非公开接口，不得把 queryText 覆盖成译文；原始学习事件保持追加式，规范英文目标通过正式持久化投影提供给页面。"
 
   - path: "docs/THEME_PROTOCOL.md"
@@ -1034,7 +1034,7 @@ source_areas:
       - "验证或扩展 Windows 跨应用选区捕获。"
       - "排查 selectedText、contextText、anchorRect 或前台应用诊断。"
       - "调整开发期 Ctrl+Alt+U 捕获快捷键。"
-    notes: "仅 Windows 编译；按焦点元素、窗口根、ElementFromPoint、Raw View 祖先和必要时子树的顺序寻找 TextPattern2/TextPattern。Ctrl+Alt+U 先在源应用前台完成捕获并输出 READRAY_UIA_CAPTURE；选区 TextRange 仍有效时从同一 Paragraph 精确派生前缀/后缀并生成模型专用 minimalContext，原始 contextText 独立保留。随后由前端事件链调用 DeepSeek 和锚定解释卡；Obsidian 1.12.7 与 Codex App 已完成既有真实端到端验证，新增最小上下文仍待真实桌面复验。"
+    notes: "仅 Windows 编译；按焦点元素、窗口根、ElementFromPoint、Raw View 祖先和必要时子树的顺序寻找 TextPattern2/TextPattern。Ctrl+Alt+U 先在源应用前台完成捕获并输出 READRAY_UIA_CAPTURE；context-sensitive 的单 token word 优先把选区扩展到 TextUnit_Document，失败回退 Paragraph，再从可读范围派生不超过 4096 字符的模型上下文，原始 contextText 独立保留。随后由前端事件链调用 DeepSeek 和锚定解释卡；Obsidian 1.12.7 与 Codex App 已完成既有真实端到端验证，2026-08-20 用户已确认实际样本的单 token 语境消歧准确度明显改善。"
     risk: "不同应用仍需分别验证；本轮未实现 MSAA/IAccessible2、剪贴板辅助或专用应用适配器。选区查询上限与协议一致为 4096 字符，不属于整页翻译能力。"
 
   - path: "src-tauri/src/desktop_lifecycle.rs"

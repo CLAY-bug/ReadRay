@@ -3,10 +3,10 @@ use crate::deepseek_client::{
     ChatCompletionRequestPolicy, TrackedChatCompletionError,
 };
 use crate::explanation::{
-    classify_query_type, determine_query_direction, normalize_english_learning_target,
-    normalize_model_english_learning_target, normalize_source_sentence_translation,
-    validate_explanation_card, CaptureInput, ExplanationCard, QueryDirection, QueryType,
-    MAX_CONTEXT_TEXT_LEN,
+    classify_query_type, determine_query_direction, is_context_sensitive_word,
+    normalize_english_learning_target, normalize_model_english_learning_target,
+    normalize_source_sentence_translation, validate_explanation_card, CaptureInput,
+    ExplanationCard, QueryDirection, QueryType, MAX_CONTEXT_TEXT_LEN,
 };
 use crate::explanation_cache::{self, ExplanationCacheSpec};
 use crate::learning_records;
@@ -30,7 +30,7 @@ const PARAGRAPH_MAX_TOKENS: u16 = 4_096;
 const EXPLANATION_CARD_TEMPERATURE: f32 = 0.2;
 const EXPLANATION_REQUEST_CANCELLED: &str = "READRAY_EXPLANATION_REQUEST_CANCELLED";
 const EXPLANATION_MODEL_REVISION: &str = "deepseek-chat-completions-thinking-disabled-v1";
-const EXPLANATION_PROMPT_VERSION: &str = "explanation-card-directional-v4";
+const EXPLANATION_PROMPT_VERSION: &str = "explanation-card-directional-v7";
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, Hash, PartialEq)]
 #[serde(rename_all = "snake_case")]
@@ -526,9 +526,10 @@ async fn resolve_explanation_card(
     minimal_context_text: Option<String>,
     waiter_authority: WaiterCacheAuthority,
 ) -> Result<ExplanationCard, String> {
+    let model_context_text = select_model_context(&input, minimal_context_text.as_deref());
     let spec = ExplanationCacheSpec::new(
         &input,
-        minimal_context_text.as_deref(),
+        model_context_text.as_deref(),
         configured_model(),
         EXPLANATION_MODEL_REVISION,
         EXPLANATION_PROMPT_VERSION,
@@ -578,6 +579,42 @@ async fn resolve_explanation_card(
     )?;
     let shared_card = waiter.wait().await?;
     explanation_cache::rebind_and_validate_card(&input, &spec, shared_card)
+}
+
+fn select_model_context(
+    input: &CaptureInput,
+    minimal_context_text: Option<&str>,
+) -> Option<String> {
+    let is_context_sensitive_query =
+        classify_query_type(&input.query_text)
+            .ok()
+            .is_some_and(|query_type| {
+                query_type == QueryType::Word && is_context_sensitive_word(&input.query_text)
+            });
+    if !is_context_sensitive_query {
+        return minimal_context_text.map(str::to_string);
+    }
+
+    let full_context = input
+        .context_text
+        .as_deref()
+        .filter(|value| !value.trim().is_empty())
+        .filter(|value| value.chars().count() <= MAX_CONTEXT_TEXT_LEN);
+    let minimal_context = minimal_context_text.filter(|value| !value.trim().is_empty());
+    let query_text = input.query_text.trim();
+
+    match (full_context, minimal_context) {
+        (Some(full), Some(minimal))
+            if full.chars().count() > minimal.chars().count() && full.contains(query_text) =>
+        {
+            Some(full.to_string())
+        }
+        (Some(_), Some(minimal)) => Some(minimal.to_string()),
+        (Some(full), None) if full.contains(query_text) => Some(full.to_string()),
+        (Some(_), None) => None,
+        (None, None) => None,
+        (None, Some(minimal)) => Some(minimal.to_string()),
+    }
 }
 
 #[tauri::command]
@@ -705,6 +742,7 @@ pub(crate) fn parse_explanation_card_content(
         "sourceText".to_string(),
         serde_json::Value::String(input.query_text.trim().to_string()),
     );
+    let expected_query_type = classify_query_type(&input.query_text)?;
     let query_direction = determine_query_direction(&input.query_text)?;
     if query_direction == QueryDirection::EnToZh {
         object.insert(
@@ -712,6 +750,7 @@ pub(crate) fn parse_explanation_card_content(
             serde_json::Value::String(normalize_english_learning_target(&input.query_text)?),
         );
     }
+    normalize_model_query_type(object, expected_query_type);
     let mut card: ExplanationCard = serde_json::from_value(value)
         .map_err(|error| format!("ExplanationCard 模型输出错误：JSON 结构无效：{error}"))?;
     if query_direction == QueryDirection::ZhToEn {
@@ -729,6 +768,26 @@ pub(crate) fn parse_explanation_card_content(
     })?;
 
     Ok(card)
+}
+
+fn normalize_model_query_type(
+    object: &mut serde_json::Map<String, serde_json::Value>,
+    expected_query_type: QueryType,
+) {
+    if expected_query_type != QueryType::Word {
+        return;
+    }
+
+    let is_word_alias = matches!(
+        object.get("queryType").and_then(|value| value.as_str()),
+        Some("abbreviation" | "acronym" | "initialism")
+    );
+    if is_word_alias {
+        object.insert(
+            "queryType".to_string(),
+            serde_json::Value::String("word".to_string()),
+        );
+    }
 }
 
 fn extract_content(response: DeepSeekChatResponse) -> Result<String, String> {
@@ -797,8 +856,10 @@ fn explanation_card_system_prompt(
 
 Word rules:
 - sourceText is the selected text; headword is the normalized lookup form.
+- Standalone uppercase abbreviations, acronyms, initialisms, and code/product identifiers are word-like entries. Always use queryType "word" for them; never invent "abbreviation", "acronym", or "initialism" as a queryType.
+- For a context-sensitive abbreviation or identifier, inspect all of contextText, including later sentences and other occurrences of the token. Use a later, more specific role, product, organization, or domain clue to resolve the selected token when one is present; do not default to the most common expansion or report that the meaning is unknown when the context provides such a clue.
 - Prefer the contextual sense. contextMeaning is allowed only with nonblank contextText (max 800 chars).
-- Copy a useful contextual sentence when present. sourceSentence may appear without sourceSentenceZh.
+- Copy the contextual sentence that best supports the resolved sense, even when it is later than the selected occurrence. sourceSentence may appear without sourceSentenceZh.
 - Provide sourceSentenceZh (max 2400) only when sourceSentence (max 1200) is primarily English. When sourceSentence is primarily Chinese, including Chinese-dominant mixed text with terms such as Rust/generation or Memory/Review, sourceSentenceZh must be null. sourceSentenceZh is never allowed without sourceSentence.
 - partOfSpeech and phonetic may be null. Code identifiers such as anchorRect should normally use null phonetic.
 - basicMeanings requires 1-4 concise Chinese meanings (max 400 chars each).
@@ -882,7 +943,7 @@ Do not answer with a language-direction choice, commentary, field name, placehol
 
     format!(
         r#"Create one ReadRay ExplanationCard JSON object matching the schema below: no Markdown, code fences, commentary, or extra object.
-queryType is fixed by the local classifier; keep the exact camelCase property names shown.
+The only allowed queryType values are "word", "phrase", "sentence", and "paragraph". queryType is fixed by the local classifier; keep the exact camelCase property names shown.
 {direction_rules}
 Use concise supporting explanations and natural complete translations in the requested direction. Never claim dictionary authority or invent unsupported facts.
 
@@ -1107,6 +1168,57 @@ mod tests {
         assert!(prompt.contains("Direction is zhToEn"));
         assert!(prompt.contains("natural, idiomatic English"));
         assert!(prompt.contains("sourceText remains the original Chinese selection"));
+    }
+
+    #[test]
+    fn abbreviation_alias_is_normalized_to_word_for_word_queries() {
+        let content = json!({
+            "queryType": "abbreviation",
+            "sourceText": "wrong",
+            "learningTargetText": "wrong",
+            "headword": "FDE",
+            "partOfSpeech": "initialism",
+            "phonetic": null,
+            "basicMeanings": ["前线部署工程师"],
+            "contextMeaning": null,
+            "sourceSentence": null,
+            "sourceSentenceZh": null,
+            "phrases": [],
+            "nearMeanings": [],
+            "examples": [],
+            "reviewHint": null
+        })
+        .to_string();
+
+        let card = parse_explanation_card_content(&input("FDE", None), &content).unwrap();
+        assert!(matches!(
+            card,
+            ExplanationCard::Word { ref headword, .. } if headword == "FDE"
+        ));
+    }
+
+    #[test]
+    fn word_prompt_forbids_separate_abbreviation_query_types() {
+        let prompt = explanation_card_system_prompt(QueryType::Word, QueryDirection::EnToZh);
+        assert!(prompt.contains("Always use queryType \"word\""));
+        assert!(prompt.contains("never invent \"abbreviation\", \"acronym\", or \"initialism\""));
+        assert!(prompt.contains("including later sentences and other occurrences"));
+        assert!(prompt.contains("best supports the resolved sense"));
+        assert!(prompt.contains("The only allowed queryType values are"));
+    }
+
+    #[test]
+    fn context_sensitive_queries_prefer_the_more_complete_captured_context() {
+        let full_context =
+            "A note mentions XYZ first. In this context, XYZ refers to the deployment role.";
+        let xyz_input = input("XYZ", Some(full_context));
+        let selected =
+            select_model_context(&xyz_input, Some("A note mentions XYZ first.")).unwrap();
+        assert_eq!(selected, full_context);
+
+        let ordinary_input = input("market", Some(full_context));
+        let selected = select_model_context(&ordinary_input, Some("The market remained open."));
+        assert_eq!(selected.as_deref(), Some("The market remained open."));
     }
 
     #[test]

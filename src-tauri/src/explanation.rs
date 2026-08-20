@@ -836,9 +836,79 @@ fn validate_string_array(
 }
 
 fn is_word_like(value: &str) -> bool {
-    !value.chars().any(char::is_whitespace)
+    let basic_word_like = !value.chars().any(char::is_whitespace)
         && value.chars().all(|character| {
             character.is_alphanumeric() || matches!(character, '_' | '-' | '\'' | '’')
+        });
+
+    basic_word_like || is_identifier_like(value)
+}
+
+pub(crate) fn is_context_sensitive_word(value: &str) -> bool {
+    let value = value.trim();
+    if value.is_empty() || value.chars().any(char::is_whitespace) {
+        return false;
+    }
+
+    if is_identifier_like(value) || value.contains('_') {
+        return true;
+    }
+
+    let ascii_letters = value
+        .chars()
+        .filter(|character| character.is_ascii_alphabetic())
+        .count();
+    let uppercase_letters = value
+        .chars()
+        .filter(|character| character.is_ascii_uppercase())
+        .count();
+    let has_digit = value.chars().any(|character| character.is_ascii_digit());
+    let has_lowercase = value
+        .chars()
+        .any(|character| character.is_ascii_lowercase());
+    let has_internal_uppercase = value
+        .chars()
+        .skip(1)
+        .any(|character| character.is_ascii_uppercase());
+
+    let all_caps_token = ascii_letters >= 2 && uppercase_letters == ascii_letters;
+    let mixed_case_identifier = has_lowercase && has_internal_uppercase;
+    let alphanumeric_identifier = has_digit && uppercase_letters > 0;
+
+    all_caps_token || mixed_case_identifier || alphanumeric_identifier
+}
+
+fn is_identifier_like(value: &str) -> bool {
+    if value.is_empty()
+        || value.chars().any(char::is_whitespace)
+        || !value
+            .chars()
+            .any(|character| character.is_ascii_alphabetic())
+        || !value
+            .chars()
+            .any(|character| matches!(character, '.' | '+' | '#'))
+        || !value.chars().all(|character| {
+            character.is_ascii_alphanumeric() || matches!(character, '.' | '+' | '#')
+        })
+    {
+        return false;
+    }
+
+    !value.ends_with('.') || is_dotted_initialism(value)
+}
+
+fn is_dotted_initialism(value: &str) -> bool {
+    let mut segments = value.split('.').collect::<Vec<_>>();
+    if segments.last() != Some(&"") {
+        return false;
+    }
+    segments.pop();
+    segments.len() >= 2
+        && segments.iter().all(|segment| {
+            segment.len() == 1
+                && segment
+                    .chars()
+                    .all(|character| character.is_ascii_alphabetic())
         })
 }
 
@@ -947,6 +1017,37 @@ mod tests {
     #[test]
     fn camel_case_identifier_is_classified_as_word() {
         assert_eq!(classify_query_type("anchorRect").unwrap(), QueryType::Word);
+    }
+
+    #[test]
+    fn standalone_abbreviations_and_identifiers_are_classified_as_words() {
+        for value in [
+            "FDE", "API", "GPT", "C++", ".NET", "C#", "node.js", "F.D.E.",
+        ] {
+            assert_eq!(
+                classify_query_type(value).unwrap(),
+                QueryType::Word,
+                "{value}"
+            );
+        }
+    }
+
+    #[test]
+    fn context_sensitive_word_shapes_are_detected_without_a_vocabulary() {
+        for value in [
+            "XYZ",
+            "RAG",
+            "U.S.",
+            "C++",
+            "node.js",
+            "anchorRect",
+            "API_v2",
+        ] {
+            assert!(is_context_sensitive_word(value), "{value}");
+        }
+        for value in ["market", "running", "useful"] {
+            assert!(!is_context_sensitive_word(value), "{value}");
+        }
     }
 
     #[test]

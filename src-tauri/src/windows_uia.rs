@@ -1,4 +1,4 @@
-use crate::explanation::{classify_query_type, QueryType};
+use crate::explanation::{classify_query_type, is_context_sensitive_word, QueryType};
 use serde::{Deserialize, Serialize};
 use std::ffi::c_void;
 use std::thread;
@@ -18,8 +18,8 @@ use windows::Win32::System::Threading::{
 use windows::Win32::UI::Accessibility::{
     CUIAutomation8, IUIAutomation, IUIAutomationElement, IUIAutomationTextPattern,
     IUIAutomationTextPattern2, IUIAutomationTextRange, IUIAutomationTreeWalker,
-    TextPatternRangeEndpoint_End, TextPatternRangeEndpoint_Start, TextUnit_Paragraph,
-    UIA_TextPattern2Id, UIA_TextPatternId,
+    TextPatternRangeEndpoint_End, TextPatternRangeEndpoint_Start, TextUnit_Document,
+    TextUnit_Paragraph, UIA_TextPattern2Id, UIA_TextPatternId,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
     GetCursorPos, GetForegroundWindow, GetWindowTextW, GetWindowThreadProcessId,
@@ -652,10 +652,23 @@ fn context_from_range(
     range: &IUIAutomationTextRange,
     has_single_selection: bool,
 ) -> Result<CapturedContext, String> {
+    let selected = raw_text_from_range(range, MAX_SELECTED_TEXT_CHARS).ok();
+    let use_document_context = selected.as_deref().is_some_and(|text| {
+        let selected = clean_model_context(text);
+        matches!(classify_query_type(&selected), Ok(QueryType::Word))
+            && is_context_sensitive_word(&selected)
+    });
     let context_range =
         unsafe { range.Clone() }.map_err(|error| format!("复制 UIA 选区失败：{error}"))?;
-    unsafe { context_range.ExpandToEnclosingUnit(TextUnit_Paragraph) }
-        .map_err(|error| format!("扩展 UIA Paragraph 上下文失败：{error}"))?;
+    if use_document_context {
+        if unsafe { context_range.ExpandToEnclosingUnit(TextUnit_Document) }.is_err() {
+            unsafe { context_range.ExpandToEnclosingUnit(TextUnit_Paragraph) }
+                .map_err(|error| format!("扩展 UIA Document/Paragraph 上下文失败：{error}"))?;
+        }
+    } else {
+        unsafe { context_range.ExpandToEnclosingUnit(TextUnit_Paragraph) }
+            .map_err(|error| format!("扩展 UIA Paragraph 上下文失败：{error}"))?;
+    }
     let context = text_from_range(&context_range, MAX_CONTEXT_TEXT_CHARS)?;
     if context.is_empty() {
         return Ok(CapturedContext {
@@ -664,7 +677,6 @@ fn context_from_range(
         });
     }
 
-    let selected = raw_text_from_range(range, MAX_SELECTED_TEXT_CHARS).ok();
     let before = prefix_text_from_ranges(&context_range, range).ok();
     let after = suffix_text_from_ranges(&context_range, range).ok();
     let minimal_context = match (selected.as_deref(), before.as_deref(), after.as_deref()) {
@@ -752,6 +764,15 @@ fn derive_minimal_context(
             }
         }
         QueryType::Word | QueryType::Phrase => {
+            if query_type == QueryType::Word && is_context_sensitive_word(&selected) {
+                return Some(bounded_context_window(
+                    &paragraph,
+                    &selected,
+                    &prefix,
+                    &suffix,
+                    exact_position,
+                ));
+            }
             if !exact_position {
                 return Some(paragraph);
             }
@@ -771,6 +792,67 @@ fn derive_minimal_context(
             }
         }
     }
+}
+
+fn bounded_context_window(
+    paragraph: &str,
+    selected: &str,
+    prefix: &str,
+    suffix: &str,
+    exact_position: bool,
+) -> String {
+    let max_chars = MAX_CONTEXT_TEXT_CHARS as usize;
+    let selected_chars = selected.chars().count();
+    if selected_chars >= max_chars {
+        return selected.chars().take(max_chars).collect();
+    }
+
+    let reconstructed = if exact_position {
+        None
+    } else {
+        Some(clean_model_context(&format!("{prefix}{selected}{suffix}")))
+    };
+    let source = reconstructed.as_deref().unwrap_or(paragraph);
+    if source.chars().count() <= max_chars {
+        return source.to_string();
+    }
+
+    let prefix = normalize_model_context_fragment(prefix);
+    let prefix_without_leading_whitespace = prefix.trim_start();
+    let total_chars = source.chars().count();
+    let selection_start = (!prefix_without_leading_whitespace.is_empty()
+        && source.starts_with(prefix_without_leading_whitespace))
+    .then_some(prefix_without_leading_whitespace.chars().count())
+    .or_else(|| {
+        source
+            .find(selected)
+            .map(|index| source[..index].chars().count())
+    })
+    .unwrap_or(0)
+    .min(total_chars.saturating_sub(selected_chars));
+    let selection_end = selection_start + selected_chars;
+    let remaining = max_chars - selected_chars;
+    let desired_before = remaining / 2;
+    let before = desired_before.min(selection_start);
+    let after = (remaining - before).min(total_chars - selection_end);
+    let extra_before = (remaining - before - after).min(selection_start - before);
+    let before = before + extra_before;
+    let extra_after = (remaining - before - after).min(total_chars - selection_end - after);
+    let after = after + extra_after;
+    let window_start = selection_start - before;
+    let window_end = selection_end + after;
+    let start_byte = source
+        .char_indices()
+        .nth(window_start)
+        .map(|(index, _)| index)
+        .unwrap_or(source.len());
+    let end_byte = source
+        .char_indices()
+        .nth(window_end)
+        .map(|(index, _)| index)
+        .unwrap_or(source.len());
+
+    source[start_byte..end_byte].to_string()
 }
 
 fn fallback_minimal_context(paragraph_text: &str, selected_text: Option<&str>) -> Option<String> {
@@ -1068,6 +1150,72 @@ mod tests {
             phrase.as_deref(),
             Some("The migration is still in progress!")
         );
+    }
+
+    #[test]
+    fn context_sensitive_single_tokens_keep_later_disambiguating_context() {
+        let cases = [
+            (
+                "XYZ",
+                "A note mentions XYZ first. In this context, XYZ refers to the deployment role.",
+                "A note mentions ",
+                " first. In this context, XYZ refers to the deployment role.",
+            ),
+            (
+                "U.S.",
+                "The text mentions U.S. first. The surrounding paragraph explains the intended jurisdiction.",
+                "The text mentions ",
+                " first. The surrounding paragraph explains the intended jurisdiction.",
+            ),
+            (
+                "node.js",
+                "The note mentions node.js first. The next sentence identifies the runtime used here.",
+                "The note mentions ",
+                " first. The next sentence identifies the runtime used here.",
+            ),
+        ];
+
+        for (selected, paragraph, prefix, suffix) in cases {
+            assert_eq!(
+                derive_minimal_context(selected, paragraph, prefix, suffix, true).as_deref(),
+                Some(paragraph),
+                "{selected} should retain paragraph context"
+            );
+        }
+    }
+
+    #[test]
+    fn oversized_context_sensitive_context_is_bounded_and_keeps_selection_window() {
+        let prefix = format!("{}A note mentions ", "before ".repeat(250));
+        let suffix = format!(
+            " first. In this context, XYZ refers to the deployment role.{}",
+            " after ".repeat(250)
+        );
+        let paragraph = format!("{prefix}XYZ{suffix}");
+        let context = derive_minimal_context("XYZ", &paragraph, &prefix, &suffix, true)
+            .expect("expected bounded context");
+
+        assert!(context.chars().count() <= 4096);
+        assert!(context.contains("XYZ"));
+        assert!(context.contains("deployment role"));
+    }
+
+    #[test]
+    fn truncated_paragraph_reconstructs_context_around_the_selected_token() {
+        let prefix = "before ".repeat(700);
+        let suffix = " after ".repeat(700);
+        let context = derive_minimal_context(
+            "XYZ",
+            "The captured paragraph prefix is truncated before the selection.",
+            &prefix,
+            &format!(" first. In this context, XYZ refers to the deployment role.{suffix}"),
+            true,
+        )
+        .expect("expected reconstructed context");
+
+        assert!(context.chars().count() <= 4096);
+        assert!(context.contains("XYZ"));
+        assert!(context.contains("deployment role"));
     }
 
     #[test]

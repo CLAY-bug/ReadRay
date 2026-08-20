@@ -1,6 +1,6 @@
 # ReadRay 交接记录
 
-最后更新：2026-08-17
+最后更新：2026-08-20
 
 ## TL;DR
 
@@ -8,6 +8,7 @@
 - 主题状态：ReadRayThemeV1、安全解析、SQLite v8、设置页导入/选择/删除、主窗口恢复以及随包 Flexoki（Light/Dark）与 30 个内置主题已通过独立审核和真实 Tauri 人工验收；主题工作不改变 DEVELOPMENT_PLAN 阶段状态。
 - 当前路线：Windows 原生，Tauri + React + TypeScript + Rust + SQLite。
 - 划词优化：本轮方案已于 2026-08-12 正式收口。任务 1～4 均已完成实现、必要验证和用户真实使用验收；任务 4“SQLite 精确缓存与 single-flight”已合回主项目。SQLite v18 增加 7 天、256 条的 ExplanationCard 精确缓存；同 key 的 SQLite lookup/provider/usage/upsert 由 single-flight 共享，每个请求继续独立核对 requestKey/generation 并保存自己的真实学习事件，取消或迟到请求不能落库或写缓存。原任务 5 不含新功能，基于投入产出不再单独执行；其跨模块完整回归清单仅保留为未来正式发布、参赛演示打包或相关模块大改时的检查参考，不得记作本轮已运行。
+- 单 token 语境消歧返修（2026-08-20）：在上述划词优化收口后，针对缩写、全大写词、点号/加号/井号标识符、下划线标识符和混合大小写标识符增加结构化的 context-sensitive word 判断，不绑定 FDE 等词库，也不新增 abbreviation 卡片类型，仍统一按 `word` 处理。UIA 对这类选区优先扩展 `TextUnit_Document`，失败再回退 `TextUnit_Paragraph`；模型在完整捕获上下文不超过 4096 字符且包含选中词时优先使用它，否则使用围绕选区的 bounded context。Prompt/cache identity 已升级到 v7，模型返回的 abbreviation/acronym/initialism 别名会归一为 `word`，并要求利用选中词之后的角色、产品、组织或领域线索消歧。`deepseek_explanation` 定向测试 28 项通过（1 项联网测试 ignored），`windows_uia` 定向测试 11 项通过，最终定向编译、fmt 与 diff 检查通过；用户已确认实际样本的翻译准确度明显改善。
 - 学习目标聚合（2026-08-14 已验收）：SQLite v19、稳定 target/occurrence、目标级复习状态、历史 Feed/card/attempt/feedback 追溯、`legacy_compat` 隔离、Memory 聚合次数与全部真实出现、Review 同轮去重/跨轮 occurrence 轮换和精确目标相邻避让均已完成。Memory 搜索保留历史语境与解释命中，但优先精确目标、目标前缀/包含和原始查询，同级再按最近 occurrence 排序。实现经过自动验证、父任务代码审查、真实 v18→v19 启动修复及用户真实 Tauri/SQLite 人工验收；未进入画像、记忆注入、个性化排序、效果评估或语义聚类。
 - 主窗口体验（2026-08-15 已验收）：今天页正文与底部输入框、完整对话输入区已共用稳定的内容宽度和离散断点；textarea 自动增高与最大化状态查询不再随每一帧 resize 强制布局。主窗口会在首次显示前恢复上次正常尺寸、位置和最大化状态，越界或显示器变化时自动约束到当前工作区；无历史状态时按工作区约 86% 自适应。展开态主侧栏宽度以 `readray.main.sidebar-width.v1` 独立记忆，折叠和 hover 预览不覆盖该值。用户已完成真实 Tauri 拖拽、重启和侧栏宽度人工验收；窗口状态仅属于 `main`，不影响 overlay、SQLite schema 或阶段九范围。
 - 侧栏自动收放与缩放抖动修复（2026-08-16 已完成真实 Tauri 验收）：首轮已把写作/对话逐帧强制布局改为 120ms resize-settle，并加入 `src/sidebarAutoCollapse.ts`（<1000 收、>1080 放、80px 迟滞、手动折叠优先）与 `is-sidebar-resizing`。真实视频复验曾出现强烈黑/白 L 形色带，逐帧对照 Codex 桌面后确认主因是 Windows 外层窗口先变化、WebView2 内容面迟一两帧，而 ReadRay 暴露了高对比默认底板；并非侧栏状态机本身。第二轮直接按应用收口：main 恢复 `transparent:true` 合成路径，静态 `backgroundColor:#f2f1ed` 兜住启动与默认主题；新增 `src/mainWindowBackground.ts`，每次应用主题时同时同步原生窗口层和 WebView2 默认底色；`MainAppShell` 在宽度或高度连续变化时挂出 `is-window-resizing`，120ms 稳定后才结算侧栏自动收放，期间禁用侧栏/标题栏宽度过渡。用户 16:21 复验确认效果已经好很多；随后参照同机 150% 缩放下 Codex 约 720px 的物理最小宽度，把 main 逻辑最小宽度从 840 调为 480（高度仍为 600），并同步 Rust 历史窗口恢复约束。折叠态的 hover 预览入口也从整条左边缘收窄到状态按钮；按钮打开后移入侧栏可继续保持，移开后关闭。16:29 视频进一步暴露两个窄窗细节：临时预览关闭时侧栏从 absolute 切回 flex 再做宽度动画，导致主页面被短暂推动；现改为整个折叠/预览生命周期始终 absolute。另因 Tauri 480 是外层窗口宽度、实际 WebView 客户区略小，CSS 再设 480px min-width 会产生横向溢出并裁掉输入框右边距；现由原生层独占窗口下限，`.rr-main-app` 使用 `min-width:0` 服从实际客户区，composer 继续按 `calc(100% - 28px)` 和 `margin-inline:auto` 保持左右对称。最终又完成固定侧栏连续推出/收回、hover 覆盖预览、两态按钮图标，以及“正式应用 Icon + ReadRay + 右侧状态按钮”的标题栏视觉收口；用户已确认整体效果验收完毕。本轮验证：`test:settings` 57/57、`test:conversation` 28/28、`test:writing` 30/30、`pnpm build`、YAML 与 diff 检查均通过。
@@ -70,7 +71,7 @@
 - 正式交互分为两种状态：有选区和 `anchorRect` 时显示锚定结果浮层；无选区时通过快捷键呼出居中输入框，用户手动输入后再切换到结果态。
 - ExplanationCard 是 ReadRay 的中间协议，服务 DeepSeek 结构化输出、compact UI 映射和后续 SQLite 本地记忆；它不是某个前端组件的 props。
 - ExplanationCard 使用 `queryType` 判别联合：word 保存词义、语境、原句、搭配和例句；phrase 保存整体义、语境义和构成；sentence/paragraph 以完整中文翻译为第一信息，不强制生成单词卡字段。
-- 查询类型只在本地判断，不增加第二次 LLM 请求：单个普通词或 camelCase 标识符判为 word；较短非完整多词内容判为 phrase；完整单句判为 sentence；多句、换行或较长内容判为 paragraph。
+- 查询类型只在本地判断，不增加第二次 LLM 请求：单个普通词或标识符形态（包括 camelCase、缩写和代码/产品标识符）判为 word；较短非完整多词内容判为 phrase；完整单句判为 sentence；多句、换行或较长内容判为 paragraph。缩写不单独增加卡片类型。
 - 解释卡上下文规则：只有输入侧存在 `contextText` 时，输出侧才允许 `contextMeaning`；无上下文时必须降级为普通解释。
 - CaptureInput 的 queryText/contextText 上限为 4096 字符；本轮支持用户主动选择的长句和段落，不做整页翻译。
 - UI 信息原则：不要为了填充而展示低信息标签；例如未定义 ReadRay 难度体系前，不展示模型自由生成的 CEFR 难度，结果头部右侧只有在 `reviewHint` 有实际内容时才显示。
@@ -103,7 +104,7 @@
 - compact UI 从静态 mock 演进为两条正式交互：有选区时显示贴近 `anchorRect` 的 `AnchoredResultPopover`，无选区时由 `CenteredCommandInput` 进入真实解释结果；早期大背景预览仅是定位交互边界的开发阶段，不是当前产品壳。
 - `ExplanationCard` 是 `word` / `phrase` / `sentence` / `paragraph` 四类 serde tagged enum；Rust validator 按类型检查必填、长度、数组、双语例句和上下文约束，`create_explanation_card` 对请求、HTTP、响应结构、JSON 和 validator 错误分别诊断。
 - overlay 已形成独立桌面窗口：无边框、透明、置顶、跳过任务栏，输入/loading/error/result 使用不同窗口尺寸；默认位于屏幕偏上区域，用户拖动位置在当前进程内优先恢复，失焦或 Esc 隐藏。该位置方案已经接受，不再重复校准。
-- Windows UIA 捕获优先 `TextPattern2`、回退 `TextPattern`，返回选区、段落上下文和物理屏幕坐标；捕获必须发生在 ReadRay show/focus 之前，锚定窗口按显示器 DPI 和工作区放置。
+- Windows UIA 捕获优先 `TextPattern2`、回退 `TextPattern`，返回选区、上下文和物理屏幕坐标；捕获必须发生在 ReadRay show/focus 之前，锚定窗口按显示器 DPI 和工作区放置。对 context-sensitive 的单 token word 优先读取 `TextUnit_Document`，失败才回退 Paragraph，并在模型输入侧保留不超过 4096 字符的选区相关语境。
 - Obsidian 1.12.7 的编辑与阅读模式已真实验证；阅读模式的关键经验是沿 Raw View 祖先链找到 Document 的 `TextPattern2`，不能只检查焦点元素。成功链路未依赖 MSAA/IAccessible2 或剪贴板辅助。
 - Codex App 渲染内容区可通过 `TextPattern` 取得选区和上下文；ProseMirror 编辑区虽能取得选区和坐标，但 Paragraph 上下文可能退化为选中文本并混入对象替换字符，正式链路必须清理 U+200B/U+FFFC，并把退化上下文降级为 `null`。
 - DeepSeek Flash 按本地 `queryType` 返回严格 JSON；句子/段落以完整翻译为第一信息，模型返回的 `sourceText` 在 serde 前由捕获输入覆盖，避免模型改写原文。锚定结果按内容和类型自适应宽高，超出工作区时内部滚动。
@@ -336,9 +337,9 @@ Quick AI 浮层升级任务 7、主窗口静态品牌启动层、WebView 默认�
 
 - **长期数据原则**：`learning_records` 是追加式原始事件。未来若增加重复聚合、复盘状态或时间线，应新建独立表并追加 migration，不回填或覆盖原始事件。
 - **长期 UIA 观察项**：Obsidian 编辑模式可从焦点 Edit 读取 `TextPattern2`，阅读模式需沿 Raw View 祖先链查找 Document；两者当前可用，但不同主题、页面结构和版本仍需逐步验证。
-- **长期 UIA 观察项**：Codex App 渲染区通常使用 `TextPattern`；ProseMirror 编辑区的选区和坐标可用，但 Paragraph 上下文不完整，不能把退化结果当成完整语境。
+- **长期 UIA 观察项**：Codex App 渲染区通常使用 `TextPattern`；ProseMirror 编辑区的选区和坐标可用，但 Paragraph 上下文仍可能不完整。当前对 context-sensitive 单 token 会先尝试 Document、失败后回退 Paragraph；不同应用的 Document/Paragraph 结构和可读范围仍需逐步验证，不能把任何退化结果当成完整语境。
 - **跨应用扩展边界**：不要求一次支持所有 Windows 应用。先逐个验证 VS Code、Obsidian、Notion Desktop、WPS/Word、PDF 阅读器等高价值场景；继续以 UIA 为主，高价值应用再做专门适配，剪贴板仅作 fallback，OCR 仍不在当前路线内。
-- **解释体验限制**：查询类型依赖本地启发式规则，缩写、很短的多句文本或缺少句末标点的长句可能落入相邻类型；优先用真实样本调整，不为分类再增加一次 LLM 请求。
+- **解释体验限制**：查询类型依赖本地结构启发式规则；缩写和标识符保持 `word`，不创建单独卡片类型，也不为 FDE 等个别词增加词库特判。很短的多句文本或缺少句末标点的长句仍可能落入相邻类型；优先用真实样本调整，不为分类再增加一次 LLM 请求。
 - **解释体验限制**：CaptureInput 和 ExplanationCard 当前上限为 4096 字符，长段落还受模型 JSON 稳定性与浮窗最大高度约束，不代表整页翻译能力。
 - **阶段八与 v19 聚合边界**：原始 `learning_records` 继续作为追加式真实查询事件完整保留；正式聚合只合并 queryType 相同且英文学习目标在大小写、首尾空白和连续空白规范化后精确一致的记录，不做语义、相近词、同义词或词形聚类。聚合目标详情可追溯全部真实 occurrence、原始来源、上下文和时间；Review 可在后续轮次轮换该目标的不同真实英文语境，但不伪造历史出现。长期学习者记忆、记忆注入与个性化 Feed 排序仍属于阶段九，不得由当前复习状态或质量反馈冒充。
 - **Agent 后续边界**：Quick AI 已支持流式输出、停止/重试、白名单 Markdown 渲染、组合式系统提示词、编辑并重新生成（hover 入口 + 行内编辑，方案 B 替代链审计）与截断诚实提示；阶段八点五任务 0/1/2/3 已通过评审，任务 3 已正式收口（Wikipedia 受控搜索 + 受控网页抓取 + 来源卡片 + 失败后可直接发新消息；集中在 `agent-runtime` 分支，任务 1-6 全部完成后再一次性合入 main）。任务 4 日常使用交互已实现并通过自动验证（含 2026-08-18 编辑并重新生成设计变更修复轮），待调度者复审与真实 Tauri 验收。记忆注入属于阶段九；截断继续/超 8K 续写和长上下文按任务 5 处理，不因文档建立自动并入正式能力。
