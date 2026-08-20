@@ -99,7 +99,7 @@
 }
 
 .rr-settings-content {
-  width: min(820px, calc(100% - 64px));
+  width: min(720px, calc(100% - 64px));
   margin: 0 auto;
   padding: 42px 0 72px;
 }
@@ -1391,7 +1391,7 @@
 
 @container (max-width: 1100px) {
   .rr-settings-content {
-    width: calc(100% - 40px);
+    width: min(720px, calc(100% - 40px));
     padding-top: 30px;
   }
 
@@ -1411,7 +1411,7 @@
 
 @container (max-width: 900px) {
   .rr-settings-content {
-    width: calc(100% - 28px);
+    width: min(720px, calc(100% - 28px));
     padding-top: 24px;
     padding-bottom: 44px;
   }

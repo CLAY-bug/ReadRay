@@ -319,6 +319,12 @@ function OverlayApp() {
   const quickAiRenameRequestId = useRef(0);
   const quickAiConversationRef = useRef<QuickAiConversation | null>(null);
   const anchoredSourceRect = useRef<AnchorRect | null>(null);
+  const anchoredResizeFrame = useRef<number | null>(null);
+  const anchoredResizePending = useRef<{
+    width: number;
+    height: number;
+  } | null>(null);
+  const anchoredResizeGeneration = useRef(0);
 
   const setQuickAiConversation = useCallback(
     (conversation: QuickAiConversation | null) => {
@@ -423,15 +429,25 @@ function OverlayApp() {
     setCommandOpen(true);
   }, [explanationRequests]);
 
+  const resetAnchoredResize = useCallback(() => {
+    anchoredResizeGeneration.current += 1;
+    if (anchoredResizeFrame.current !== null) {
+      window.cancelAnimationFrame(anchoredResizeFrame.current);
+      anchoredResizeFrame.current = null;
+    }
+    anchoredResizePending.current = null;
+  }, []);
+
   const closeAnchoredOverlay = useCallback(async () => {
     explanationRequests.invalidate("anchored");
+    resetAnchoredResize();
     setPopoverOpen(false);
     try {
       await invoke("hide_anchored_overlay_window");
     } catch (error) {
       setWindowCheck({ state: "warn", detail: formatError(error) });
     }
-  }, [explanationRequests]);
+  }, [explanationRequests, resetAnchoredResize]);
 
   const runAnchoredQuery = useCallback(async (capture: WindowsUiaCapture) => {
     const selectedText = normalizeUiaText(capture.selectedText);
@@ -440,6 +456,7 @@ function OverlayApp() {
       return;
     }
 
+    resetAnchoredResize();
     explanationRequests.invalidate("manual");
     const requestKey = explanationRequests.begin("anchored");
     anchoredSourceRect.current = capturedAnchorRect;
@@ -484,13 +501,6 @@ function OverlayApp() {
       }
       notifyLearningRecordCreated();
 
-      await invoke("present_anchored_overlay_window", {
-        stage: "result",
-        anchorRect: capturedAnchorRect,
-      });
-      if (!explanationRequests.isCurrent("anchored", requestKey)) {
-        return;
-      }
       setAnchoredResult(mapExplanationCard(card));
       setAnchoredStage("result");
       explanationRequests.finish("anchored", requestKey);
@@ -514,25 +524,45 @@ function OverlayApp() {
         anchorRect: capturedAnchorRect,
       }).catch(() => undefined);
     }
-  }, [explanationRequests]);
+  }, [explanationRequests, resetAnchoredResize]);
 
   const handleAnchoredContentSizeChange = useCallback(
     (size: { width: number; height: number }) => {
-      const currentAnchorRect = anchoredSourceRect.current;
-      if (!currentAnchorRect) {
+      anchoredResizePending.current = size;
+      if (anchoredResizeFrame.current !== null) {
         return;
       }
 
-      invoke("resize_anchored_overlay_window", {
-        width: size.width,
-        height: size.height,
-        anchorRect: currentAnchorRect,
-      }).catch((error) => {
-        setWindowCheck({ state: "warn", detail: formatError(error) });
+      const generation = anchoredResizeGeneration.current;
+      anchoredResizeFrame.current = window.requestAnimationFrame(() => {
+        anchoredResizeFrame.current = null;
+        if (generation !== anchoredResizeGeneration.current) {
+          anchoredResizePending.current = null;
+          return;
+        }
+
+        const nextSize = anchoredResizePending.current;
+        anchoredResizePending.current = null;
+        const currentAnchorRect = anchoredSourceRect.current;
+        if (!nextSize || !currentAnchorRect) {
+          return;
+        }
+
+        void invoke("resize_anchored_overlay_window", {
+          width: nextSize.width,
+          height: nextSize.height,
+          anchorRect: currentAnchorRect,
+        }).catch((error) => {
+          setWindowCheck({ state: "warn", detail: formatError(error) });
+        });
       });
     },
     [],
   );
+
+  useEffect(() => {
+    return resetAnchoredResize;
+  }, [resetAnchoredResize]);
 
   const consumeOverlayIntent = useCallback(async () => {
     try {

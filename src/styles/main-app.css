@@ -77,10 +77,15 @@
   font-size: calc(16px * var(--rr-ui-font-scale));
   -webkit-font-smoothing: antialiased;
   text-rendering: optimizeLegibility;
+  user-select: none;
 }
 
 .rr-main-app.is-maximized {
   border-radius: 0;
+}
+
+.rr-main-app :where(input, textarea, select, [contenteditable]) {
+  user-select: text;
 }
 
 .rr-main-app :where(button, input, textarea) {

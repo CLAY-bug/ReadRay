@@ -886,7 +886,7 @@ test("正式设置页保持五类设计结构，确定性操作已接线且不�
   assert.match(page, /autostart/i);
   assert.match(page, /closeBehavior/);
   assert.match(styles, /\.rr-settings-nav\s*\{[\s\S]*?width:\s*auto/);
-  assert.match(styles, /\.rr-settings-content\s*\{[\s\S]*?width:\s*min\(820px/);
+  assert.match(styles, /\.rr-settings-content\s*\{[\s\S]*?width:\s*min\(720px/);
   assert.match(styles, /\.rr-settings-page\s*\{[\s\S]*?--rr-settings-font-scale:\s*calc\(var\(--rr-ui-font-scale\) \* 0\.94\)/);
   assert.match(styles, /\.rr-settings-row\s*\{[\s\S]*?grid-template-columns:\s*minmax\(0, 1fr\) auto[\s\S]*?min-height:\s*64px/);
   assert.match(styles, /\.rr-settings-label\s*\{[\s\S]*?font-weight:\s*570/);
@@ -907,6 +907,8 @@ test("正式设置页保持五类设计结构，确定性操作已接线且不�
   assert.match(overlayStyles, /\.app-shell\s*\{[\s\S]*?font-size:\s*calc\(16px \* var\(--rr-ui-font-scale\)\)/);
   assert.match(mainStyles, /\.rr-main-app\s*\{[\s\S]*?font-size:\s*calc\(16px \* var\(--rr-ui-font-scale\)\)/);
   assert.match(mainStyles, /\.rr-main-app\s*\{[\s\S]*?min-width:\s*0/);
+  assert.match(mainStyles, /\.rr-main-app\s*\{[^}]*?user-select:\s*none/);
+  assert.match(mainStyles, /\.rr-main-app\s+:where\(input,\s*textarea,\s*select,\s*\[contenteditable\]\)\s*\{[^}]*?user-select:\s*text/);
   assert.match(sidebar, /className="rr-main-settings-footer"/);
   assert.match(mainStyles, /\.rr-main-settings-footer\s*\{[\s\S]*?border-top:/);
   assert.match(mainStyles, /\.rr-main-settings-footer\s*\{[\s\S]*?padding-top:\s*calc\(6px/);
@@ -934,6 +936,8 @@ test("正式设置页保持五类设计结构，确定性操作已接线且不�
   assert.match(mainStyles, /\.rr-main-app\.is-sidebar-collapsed\.is-sidebar-peeking \.rr-main-sidebar\s*\{[\s\S]*?pointer-events:\s*auto[\s\S]*?transform:\s*translateX\(0\)/);
   assert.doesNotMatch(mainStyles, /\.rr-main-app\.is-sidebar-collapsed \.rr-main-collapse svg[\s\S]*?rotate\(180deg\)/);
   assert.match(mainStyles, /\.rr-main-home-content,\s*\.rr-main-composer-inner\s*\{[\s\S]*?width:\s*var\(--rr-main-dialogue-width\)[\s\S]*?margin-inline:\s*auto/);
+  assert.match(styles, /@container \(max-width:\s*1100px\)[\s\S]*?\.rr-settings-content\s*\{[\s\S]*?width:\s*min\(720px,\s*calc\(100% - 40px\)\)/);
+  assert.match(styles, /@container \(max-width:\s*900px\)[\s\S]*?\.rr-settings-content\s*\{[\s\S]*?width:\s*min\(720px,\s*calc\(100% - 28px\)\)/);
   assert.match(mainStyles, /\.rr-main-sidebar\s*\{[\s\S]*?--rr-main-sidebar-nav-font-size:\s*max\(12px, calc\(var\(--rr-ui-font-size\) - 1px\)\)/);
   assert.match(mainStyles, /\.rr-main-nav-item\.is-active,[\s\S]*?font-weight:\s*500/);
   assert.match(mainStyles, /\.rr-main-recent-item\.is-active\s*\{[\s\S]*?font-weight:\s*450/);

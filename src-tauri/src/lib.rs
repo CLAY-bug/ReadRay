@@ -805,7 +805,7 @@ pub fn run() {
                     {
                         match event.state() {
                             ShortcutState::Pressed => {
-                                let capture = windows_uia::capture_foreground();
+                                let capture = windows_uia::capture_foreground_with_retry();
                                 eprintln!(
                                     "READRAY_UIA_CAPTURE ok={} selected_chars={} has_context={} has_minimal_context={} has_anchor={} text_pattern={}",
                                     capture.ok,

@@ -6,6 +6,17 @@
       "runtimeExecutable": "D:/Application/nvm/nodejs/pnpm.cmd",
       "runtimeArgs": ["dev"],
       "port": 1420
+    },
+    {
+      "name": "readray-attach",
+      "url": "http://localhost:1420",
+      "port": 1420
+    },
+    {
+      "name": "readray-preview",
+      "runtimeExecutable": "D:/Application/nvm/nodejs/pnpm.cmd",
+      "runtimeArgs": ["preview", "--port", "4173"],
+      "port": 4173
     }
   ]
 }

@@ -232,31 +232,36 @@ function UserMessage({
           </button>
         ) : null}
       </div>
-      {message.meta ? (
-        <div className="rr-conversation-user-meta">{message.meta}</div>
-      ) : null}
-      {editable ? (
-        <button
-          className="rr-conversation-user-edit-button"
-          type="button"
-          aria-label="编辑问题并重新生成"
-          title="编辑问题并重新生成"
-          onClick={() => onEdit(message)}
-        >
-          <svg
-            width="13"
-            height="13"
-            viewBox="0 0 24 24"
-            fill="none"
-            stroke="currentColor"
-            strokeWidth="1.9"
-            strokeLinecap="round"
-            strokeLinejoin="round"
-            aria-hidden="true"
-          >
-            <path d="M17 3a2.85 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z" />
-          </svg>
-        </button>
+      {message.meta || editable ? (
+        <div className={`rr-conversation-user-footer${editable ? " is-editable" : ""}`}>
+          {message.meta ? (
+            <div className="rr-conversation-user-meta">{message.meta}</div>
+          ) : null}
+          {editable ? (
+            <button
+              className="rr-conversation-user-edit-button"
+              type="button"
+              aria-label="编辑问题并重新生成"
+              title="编辑问题并重新生成"
+              onClick={() => onEdit(message)}
+            >
+              <svg
+                width="16"
+                height="16"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="1.6"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                aria-hidden="true"
+              >
+                <path d="m15.5 5.5 3 3" />
+                <path d="M4 20l4.5-1 10-10a2.12 2.12 0 0 0-3-3l-10 10L4 20Z" />
+              </svg>
+            </button>
+          ) : null}
+        </div>
       ) : null}
     </article>
   );

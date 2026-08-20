@@ -140,17 +140,27 @@ function AnchoredResultPopover({
     }
 
     let animationFrame = 0;
+    let settleTimer = 0;
     const reportSize = () => {
       window.cancelAnimationFrame(animationFrame);
-      animationFrame = window.requestAnimationFrame(() => {
-        const width = Math.ceil(preferredWidth + windowInset * 2);
-        const height = Math.ceil(element.scrollHeight + windowInset * 2 + 6);
-        const sizeKey = `${width}:${height}`;
-        if (lastReportedSize.current !== sizeKey) {
-          lastReportedSize.current = sizeKey;
-          onContentSizeChange({ width, height });
-        }
-      });
+      window.clearTimeout(settleTimer);
+      settleTimer = window.setTimeout(() => {
+        animationFrame = window.requestAnimationFrame(() => {
+          const width = Math.ceil(preferredWidth + windowInset * 2);
+          // The native window is still using the compact loading width here.
+          // Measure at the intended card width so narrow-viewport wrapping does
+          // not produce a second height correction after the native resize.
+          const previousMaxWidth = element.style.maxWidth;
+          element.style.maxWidth = "none";
+          const height = Math.ceil(element.scrollHeight + windowInset * 2 + 6);
+          element.style.maxWidth = previousMaxWidth;
+          const sizeKey = `${width}:${height}`;
+          if (lastReportedSize.current !== sizeKey) {
+            lastReportedSize.current = sizeKey;
+            onContentSizeChange({ width, height });
+          }
+        });
+      }, 32);
     };
 
     const observer = new ResizeObserver(reportSize);
@@ -160,6 +170,7 @@ function AnchoredResultPopover({
     return () => {
       observer.disconnect();
       window.cancelAnimationFrame(animationFrame);
+      window.clearTimeout(settleTimer);
     };
   }, [embedded, onContentSizeChange, open, preferredWidth, result]);
 

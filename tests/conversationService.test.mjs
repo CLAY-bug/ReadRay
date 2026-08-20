@@ -252,6 +252,14 @@ test("assistant 回答悬停浮现复制按钮且优先复制原始 Markdown", a
   );
   assert.match(
     conversationStyles,
+    /\.rr-conversation-assistant-copy-button \{[\s\S]*?width: 32px;[\s\S]*?height: 32px;[\s\S]*?border-radius: 9px;[\s\S]*?color: var\(--rr-main-meta\);/,
+  );
+  assert.match(
+    conversationStyles,
+    /\.rr-conversation-assistant-copy-button svg \{[\s\S]*?width: 18px;[\s\S]*?height: 18px;[\s\S]*?stroke-width: 1\.6;/,
+  );
+  assert.match(
+    conversationStyles,
     /\.rr-conversation-message\.is-assistant:hover[\s\S]*?\.rr-conversation-assistant-copy-button:hover,[\s\S]*?\.rr-conversation-assistant-copy-button:focus-visible \{[\s\S]*?opacity: 1;[\s\S]*?pointer-events: auto;/,
   );
   assert.match(
@@ -956,10 +964,18 @@ test("最后一条用户输入下方提供编辑并重新生成入口，菜单�
   // 仅最后一条输入展示：线程以 assistant 结尾且其前一条是 user。
   assert.match(page, /editableUserMessageId/);
   assert.match(page, /lastMessage\?\.role === "assistant"/);
+  assert.match(page, /rr-conversation-user-footer/);
   // 菜单内不再有"重新生成回答"入口与 canRegenerate 死代码。
   assert.doesNotMatch(page, /重新生成回答/);
   assert.doesNotMatch(page, /canRegenerate/);
   assert.match(styles, /\.rr-conversation-user-edit-button \{/);
+  assert.match(styles, /\.rr-conversation-user-footer\.is-editable[\s\S]*?padding-right:\s*28px/);
+  assert.match(styles, /\.rr-conversation-user-edit-button\s*\{[\s\S]*?top:\s*50%[\s\S]*?transform:\s*translateY\(-50%\)/);
+  assert.match(styles, /\.rr-conversation-user-edit-button svg\s*\{[\s\S]*?width:\s*16px[\s\S]*?stroke-width:\s*1\.6/);
+  assert.match(
+    styles,
+    /\.rr-conversation-user-edit-button \{[\s\S]*?border-radius:\s*7px;[\s\S]*?color:\s*var\(--rr-main-meta\);/,
+  );
   assert.match(styles, /\.rr-conversation-user-edit \{/);
 });
 

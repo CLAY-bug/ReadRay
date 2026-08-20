@@ -304,8 +304,21 @@ button.rr-conversation-title:not(:disabled) {
   letter-spacing: 0.015em;
 }
 
-.rr-conversation-user-meta {
+.rr-conversation-user-footer {
+  position: relative;
+  display: flex;
+  min-height: 22px;
+  align-items: center;
+  justify-content: flex-end;
   margin: 6px 3px 0;
+}
+
+.rr-conversation-user-footer.is-editable .rr-conversation-user-meta {
+  padding-right: 28px;
+}
+
+.rr-conversation-user-meta {
+  margin: 0;
   opacity: 0.58;
   text-align: right;
   font-size: calc(11px * var(--rr-ui-font-scale));
@@ -321,18 +334,20 @@ button.rr-conversation-title:not(:disabled) {
 .rr-conversation-user-edit-button {
   position: absolute;
   right: 0;
-  bottom: -30px;
+  top: 50%;
   display: inline-flex;
-  min-width: 26px;
-  height: 26px;
+  width: 22px;
+  min-width: 22px;
+  height: 22px;
   align-items: center;
   justify-content: center;
-  border-radius: 6px;
-  padding: 0 6px;
-  color: var(--rr-main-muted);
+  border-radius: 7px;
+  padding: 0;
+  color: var(--rr-main-meta);
   cursor: pointer;
   opacity: 0;
   pointer-events: none;
+  transform: translateY(-50%);
   transition:
     opacity 150ms ease,
     color 150ms ease,
@@ -340,16 +355,10 @@ button.rr-conversation-title:not(:disabled) {
   z-index: 1;
 }
 
-/* 与 assistant 复制按钮相同的透明衔接区：从消息滑向按钮不丢失悬停 */
-.rr-conversation-message.is-user:has(.rr-conversation-user-edit-button)::after {
-  content: "";
-  position: absolute;
-  right: 0;
-  bottom: -38px;
-  left: 0;
-  height: 38px;
-  background: transparent;
-  z-index: 0;
+.rr-conversation-user-edit-button svg {
+  width: 16px;
+  height: 16px;
+  stroke-width: 1.6;
 }
 
 .rr-conversation-message.is-user:hover .rr-conversation-user-edit-button,
@@ -363,7 +372,7 @@ button.rr-conversation-title:not(:disabled) {
 .rr-conversation-user-edit-button:hover,
 .rr-conversation-user-edit-button:focus-visible {
   outline: 0;
-  color: var(--rr-main-fg);
+  color: var(--rr-main-muted);
   background: var(--rr-main-border-soft);
 }
 
@@ -627,13 +636,14 @@ button.rr-conversation-title:not(:disabled) {
   left: 0;
   bottom: -30px;
   display: inline-flex;
-  min-width: 26px;
-  height: 26px;
+  width: 32px;
+  min-width: 32px;
+  height: 32px;
   align-items: center;
   justify-content: center;
-  border-radius: 6px;
-  padding: 0 6px;
-  color: var(--rr-main-muted);
+  border-radius: 9px;
+  padding: 0;
+  color: var(--rr-main-meta);
   cursor: pointer;
   font-size: calc(11.5px * var(--rr-ui-font-scale));
   opacity: 0;
@@ -673,8 +683,14 @@ button.rr-conversation-title:not(:disabled) {
 .rr-conversation-assistant-copy-button:hover,
 .rr-conversation-assistant-copy-button:focus-visible {
   outline: 0;
-  color: var(--rr-main-fg);
+  color: var(--rr-main-muted);
   background: var(--rr-main-border-soft);
+}
+
+.rr-conversation-assistant-copy-button svg {
+  width: 18px;
+  height: 18px;
+  stroke-width: 1.6;
 }
 
 .rr-conversation-empty {

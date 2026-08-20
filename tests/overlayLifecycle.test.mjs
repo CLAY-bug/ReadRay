@@ -98,10 +98,11 @@ test("首次 Quick AI 等待态左对齐，搜索入口使用两层 Esc", async 
 });
 
 test("ExplanationCard 通知、原始上下文与 Rust requestKey 权威保持同一链路", async () => {
-  const [app, rust, lib] = await Promise.all([
+  const [app, rust, lib, uia] = await Promise.all([
     readFile("src/App.tsx", "utf8"),
     readFile("src-tauri/src/deepseek_explanation.rs", "utf8"),
     readFile("src-tauri/src/lib.rs", "utf8"),
+    readFile("src-tauri/src/windows_uia.rs", "utf8"),
   ]);
   const anchored = section(app, "const runAnchoredQuery", "const handleAnchoredContentSizeChange");
   const manual = section(app, "async function submitCommand", "async function sendQuickAiMessage");
@@ -121,6 +122,30 @@ test("ExplanationCard 通知、原始上下文与 Rust requestKey 权威保持�
   assert.match(lib, /WindowEvent::CloseRequested[\s\S]*OVERLAY_WINDOW_LABEL[\s\S]*cancel_all_explanation_requests/);
   assert.doesNotMatch(lib, /serde_json::to_string\(&capture\)/);
   assert.match(lib, /READRAY_UIA_CAPTURE ok=\{\} selected_chars=\{\} has_context=\{\}/);
+  assert.match(lib, /windows_uia::capture_foreground_with_retry\(\)/);
+  assert.match(uia, /const UIA_CAPTURE_RETRY_DELAYS_MS: \[u64; 2\] = \[40, 80\]/);
+  assert.match(uia, /pub fn capture_foreground_with_retry\(\)/);
+  assert.match(uia, /retry\.foreground\.hwnd != initial_foreground_hwnd/);
+});
+
+test("划词结果先渲染再按稳定尺寸调整浮层，避免结果阶段重复重排", async () => {
+  const [app, popover] = await Promise.all([
+    readFile("src/App.tsx", "utf8"),
+    readFile("src/components/AnchoredResultPopover.tsx", "utf8"),
+  ]);
+  const anchored = section(
+    app,
+    "const runAnchoredQuery",
+    "const handleAnchoredContentSizeChange",
+  );
+
+  assert.doesNotMatch(anchored, /stage: "result"/);
+  assert.match(anchored, /setAnchoredResult\(mapExplanationCard\(card\)\)/);
+  assert.match(anchored, /setAnchoredStage\("result"\)/);
+  assert.match(app, /anchoredResizePending/);
+  assert.match(app, /anchoredResizeGeneration/);
+  assert.match(popover, /element\.style\.maxWidth = "none"/);
+  assert.match(popover, /settleTimer = window\.setTimeout/);
 });
 
 test("搜索框与 Quick AI 同宽同首行高，并从固定顶边向下展开", async () => {

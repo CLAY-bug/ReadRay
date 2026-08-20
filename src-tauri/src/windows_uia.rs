@@ -1,7 +1,8 @@
 use crate::explanation::{classify_query_type, QueryType};
 use serde::{Deserialize, Serialize};
 use std::ffi::c_void;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::thread;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use windows::core::PWSTR;
 use windows::Win32::Foundation::{CloseHandle, HWND, POINT, RPC_E_CHANGED_MODE};
 use windows::Win32::System::Com::{
@@ -29,6 +30,7 @@ const MAX_CONTEXT_TEXT_CHARS: i32 = 4096;
 const MAX_ANCESTOR_DEPTH: usize = 16;
 const MAX_RAW_VIEW_ELEMENTS: usize = 512;
 const MAX_RAW_VIEW_DEPTH: usize = 16;
+const UIA_CAPTURE_RETRY_DELAYS_MS: [u64; 2] = [40, 80];
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -99,6 +101,15 @@ impl WindowsUiaCapture {
             diagnostics: Vec::new(),
             error: None,
         }
+    }
+
+    fn has_usable_selection(&self) -> bool {
+        self.ok
+            && self
+                .selected_text
+                .as_deref()
+                .is_some_and(|text| !text.trim().is_empty())
+            && self.anchor_rect.is_some()
     }
 }
 
@@ -175,6 +186,38 @@ pub fn capture_foreground() -> WindowsUiaCapture {
     }
 
     capture.completed_at_unix_ms = unix_time_ms();
+    capture
+}
+
+pub fn capture_foreground_with_retry() -> WindowsUiaCapture {
+    let mut capture = capture_foreground();
+    let initial_foreground_hwnd = capture.foreground.hwnd;
+
+    if capture.has_usable_selection() {
+        return capture;
+    }
+
+    for delay_ms in UIA_CAPTURE_RETRY_DELAYS_MS {
+        thread::sleep(Duration::from_millis(delay_ms));
+        let retry = capture_foreground();
+
+        if initial_foreground_hwnd != 0
+            && retry.foreground.hwnd != 0
+            && retry.foreground.hwnd != initial_foreground_hwnd
+        {
+            capture
+                .diagnostics
+                .push("UIA 捕获重试期间前台窗口发生变化，已停止重试。".to_string());
+            break;
+        }
+
+        if retry.has_usable_selection() {
+            return retry;
+        }
+
+        capture = retry;
+    }
+
     capture
 }
 
