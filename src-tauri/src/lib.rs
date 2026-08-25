@@ -1,5 +1,6 @@
 use serde::Serialize;
 use serde_json::json;
+#[cfg(debug_assertions)]
 use std::path::PathBuf;
 use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, Instant};
