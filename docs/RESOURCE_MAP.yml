@@ -4,8 +4,8 @@ project:
   repo_root: "."
 
 meta:
-  version: "1.84"
-  last_updated: "2026-08-24"
+  version: "1.85"
+  last_updated: "2026-08-25"
   updated_by: "Codex"
   source_of_truth: "docs/RESOURCE_MAP.yml"
   language: "zh-CN"
@@ -511,7 +511,7 @@ source_areas:
     read_when:
       - "调整设置页、DeepSeek Key 首次配置/更新/清除或失败重试。"
       - "排查设置页 loading、重启恢复或窄窗口布局。"
-    notes: "复用 MainAppShell、MainSidebar 和标题栏；页面只消费 SettingsService 与应用级 AppThemeController。支持由外壳传入 initialSection 直达 AI 服务分类，并在加载、保存或清除 Key 后通过 onApiKeyConfiguredChange 回报 apiKeyConfigured。ReadRay 使用量默认选择“今天”，其余范围仍由用户手动切换。主题区只提供随包内置主题的选择与 light/dark 模式切换，暂不开放导入或删除入口；下拉上下键、Home/End 与鼠标悬停只临时预览主题，确认后才保存，取消会恢复数据库权威配色；主题失败不得覆盖当前权威配色。既有 Key、余额、Token、数据、字体字号、发送键、全局快捷键、开机启动和关闭策略保持原正式链路。"
+    notes: "复用 MainAppShell、MainSidebar 和标题栏；页面只消费 SettingsService 与应用级 AppThemeController。支持由外壳传入 initialSection 直达 AI 服务分类，并在加载、保存或清除 Key 后通过 onApiKeyConfiguredChange 回报 apiKeyConfigured。ReadRay 使用量默认选择“今天”，其余范围仍由用户手动切换。主题区只提供随包内置主题的选择与 light/dark 模式切换，暂不开放导入或删除入口；下拉上下键、Home/End 与鼠标悬停只临时预览主题，确认后才保存，取消会恢复数据库权威配色；主题失败不得覆盖当前权威配色。全局快捷键录制只发起原生 command 并消费 readray://shortcut-recorded，WebView 不再从 keydown 推断系统级按键；切页或卸载会取消原生录制。既有 Key、余额、Token、数据、字体字号、发送键、开机启动和关闭策略保持原正式链路。"
     risk: "不得直接 invoke、读主题文件、读取 localStorage/sessionStorage、显示或返回已保存 Key 明文；主题失败不得覆盖当前权威配色。"
 
   - path: "src/themeProtocol.ts"
@@ -592,7 +592,7 @@ source_areas:
     status: "active"
     read_when:
       - "调整设置快照、Key 验证保存或清除 command 参数。"
-    notes: "调用设置快照、SQLite 偏好读取/更新、Windows 开机启动读取/切换、Key 保存/清除、余额、按显式本机日历边界聚合使用量、打开数据目录和 SQLite 备份 commands；备份取消时不调用 Rust。Key 只作为用户本次输入提交，不做前端持久化。"
+    notes: "调用设置快照、SQLite 偏好读取/更新、Windows 原生快捷键录制/取消/结果事件、开机启动读取/切换、Key 保存/清除、余额、按显式本机日历边界聚合使用量、打开数据目录和 SQLite 备份 commands；备份取消时不调用 Rust。Key 只作为用户本次输入提交，不做前端持久化。"
     risk: "不得缓存 Key、记录 Key 或把原生存储实现移入前端。"
 
   - path: "src/settingsService.ts"
@@ -616,7 +616,7 @@ source_areas:
     status: "active"
     read_when:
       - "调整字体选项、字号范围、发送快捷键或 IME 行为。"
-    notes: "只允许随包的 Geist/思源黑体与 Newsreader/思源宋体组合；默认界面 14px、学习内容 17px。字号输入候选只接受范围内整数；CSS 同时提供基准字号和相对默认值的缩放变量，用于在主窗口/overlay 保留既有文字层级，并让写作编辑、辅导、完成稿和模式内容与工具栏保持作用域隔离。shouldSendMultilineMessage 供今天、完整对话、overlay Quick AI 和写作辅导共用，组合输入期间始终拒绝发送。"
+    notes: "只允许随包的 Geist/思源黑体与 Newsreader/思源宋体组合；默认界面 14px、学习内容 17px。全局快捷键使用 version=2 的 chord / modifierDoubleTap 判别联合；新装默认快速查询 Alt+Super+Space、选区解释双击左 Alt，身份比较与显示不再把高级手势降格为组合字符串。字号输入候选只接受范围内整数；CSS 同时提供基准字号和相对默认值的缩放变量，用于在主窗口/overlay 保留既有文字层级，并让写作编辑、辅导、完成稿和模式内容与工具栏保持作用域隔离。shouldSendMultilineMessage 供今天、完整对话、overlay Quick AI 和写作辅导共用，组合输入期间始终拒绝发送。"
     risk: "不得扫描系统字体、添加主题/语言选项，或让单行解释查询跟随多行发送偏好。"
 
   - path: "src/appPreferenceSaveCoordinator.ts"
@@ -636,12 +636,12 @@ source_areas:
     risk: "不得使用 localStorage/sessionStorage 或在 hook 中直接 invoke。"
 
   - path: "src/desktopLifecycle.ts"
-    purpose: "前端应用级保存等待、安全退出结果隔离和全局快捷键录制纯逻辑。"
+    purpose: "前端应用级保存等待、安全退出结果隔离和原生快捷键录制事件类型。"
     status: "active"
     read_when:
       - "调整安全退出保存等待、强制退出确认或快捷键录制。"
       - "排查迟到退出结果、设置保存或写作 flush 未被等待。"
-    notes: "DesktopSaveCoordinator 持续跟踪设置 mutation 的 promise/失败和写作草稿 flush；即使 SettingsPage 已卸载，安全退出仍等待进行中操作并报告未解决失败。退出 request ID 激活 mutation gate 后，设置 mutation 与写作编辑入口拒绝新修改，flush 以 mutation generation 确认静默后才调用 typed Rust 退出 command；失败或取消会解除 gate。快捷键录制拒绝裸按键并生成稳定组合字符串。"
+    notes: "DesktopSaveCoordinator 持续跟踪设置 mutation 的 promise/失败和写作草稿 flush；即使 SettingsPage 已卸载，安全退出仍等待进行中操作并报告未解决失败。退出 request ID 激活 mutation gate 后，设置 mutation 与写作编辑入口拒绝新修改，flush 以 mutation generation 确认静默后才调用 typed Rust 退出 command；失败或取消会解除 gate。快捷键录制结果只定义有类型事件协议，按键识别与录制抑制属于 Rust Windows 原生层。"
     risk: "不得把模型请求加入退出等待，也不得在此直接操作托盘、窗口、注册表或 SQLite。"
 
   - path: "src/desktopContextMenu.ts"
@@ -1042,7 +1042,7 @@ source_areas:
     status: "active"
     read_when:
       - "开发全局快捷键、剪贴板、窗口行为、SQLite 命令、原生配置。"
-    notes: "当前包含 Tauri v2 配置、Rust入口和桌面插件。single-instance 按官方要求最先注册；setup 初始化 SQLite 权威偏好、动态全局快捷键和仅三项菜单的托盘。持久化快捷键被占用时记录实际注册状态与错误但继续 setup，不改写 SQLite；手动启动仍显示 main。带专用参数的开机启动保持 main/overlay 隐藏；overlay 既有失焦/Esc 隐藏和意图领取边界不变。"
+    notes: "当前包含 Tauri v2 配置、Rust入口和桌面插件。single-instance 按官方要求最先注册；setup 初始化 SQLite 权威偏好、动态全局快捷键、Windows 高级快捷键监听和仅三项菜单的托盘。普通 chord 继续由 Tauri global-shortcut 注册；双击左 Alt 与设置录制由独立 Windows 原生层处理。持久化快捷键被占用时记录实际注册状态与错误但继续 setup，不改写 SQLite；手动启动仍显示 main。带专用参数的开机启动保持 main/overlay 隐藏；overlay 既有失焦/Esc 隐藏和意图领取边界不变。"
     risk: "不要把 UI 状态和业务展示逻辑塞进 Rust 层。"
 
   - path: "src-tauri/tauri.conf.json"
@@ -1071,8 +1071,17 @@ source_areas:
       - "调整托盘菜单、主窗口关闭/恢复、快捷键注册或安全退出。"
       - "排查手动/开机启动可见性、第二实例或运行时与 SQLite 偏好不一致。"
       - "排查窗口重启后尺寸、位置、最大化状态未恢复，或显示器/DPI 变化后窗口越界。"
-    notes: "托盘左键恢复主窗口，右键菜单仅打开/快速查询/退出；快速查询复用既有 overlay intent。main 使用官方 tauri-plugin-window-state 的独立 .main-window-state.json，只保存 SIZE、POSITION、MAXIMIZED；setup 在首次显示前手动恢复，并把无效或离屏几何约束到当前/主显示器工作区。无历史状态时按工作区约 86% 生成不小于 480×600、不大于 1440×900 的默认边界；历史尺寸也按相同 DPI 感知最小值约束，最大化恢复保留修正后的普通窗口边界。运行时同时保存 SQLite 快捷键映射、实际 registered set 和两项独立 startup error；任意偏好保存失败会把物理注册与完整 active 元数据一起回滚。单实例回调只对再次手动启动恢复主窗口。真正退出由主窗口先完成设置写入和写作 flush；取消先清除 pending ID，窗口显示/聚焦失败仅记录警告而不把前端留在过期请求上。"
+    notes: "托盘左键恢复主窗口，右键菜单仅打开/快速查询/退出；快速查询复用既有 overlay intent。main 使用官方 tauri-plugin-window-state 的独立 .main-window-state.json，只保存 SIZE、POSITION、MAXIMIZED；setup 在首次显示前手动恢复，并把无效或离屏几何约束到当前/主显示器工作区。无历史状态时按工作区约 86% 生成不小于 480×600、不大于 1440×900 的默认边界；历史尺寸也按相同 DPI 感知最小值约束，最大化恢复保留修正后的普通窗口边界。运行时把 version=2 binding 解析为普通 chord 或双击左 Alt；registered set 只包含 chord，高级动作交给 advanced_shortcuts。任意偏好保存失败会把普通注册、原生高级动作与完整 active 元数据一起回滚。单实例回调只对再次手动启动恢复主窗口。真正退出由主窗口先完成设置写入和写作 flush；取消先清除 pending ID，窗口显示/聚焦失败仅记录警告而不把前端留在过期请求上。"
     risk: "不得让托盘退出绕过安全退出，或让开机启动、第二实例创建额外托盘和数据库连接；overlay 窗口边界不得在此改写。"
+
+  - path: "src-tauri/src/advanced_shortcuts.rs"
+    purpose: "Windows 低级键盘监听、双击左 Alt 状态机和原生快捷键录制。"
+    status: "active"
+    read_when:
+      - "调整双击修饰键、录制抑制、按键命名或原生快捷键事件。"
+      - "排查系统菜单、输入法切换或高级快捷键无法响应。"
+    notes: "WH_KEYBOARD_LL 安装在独立消息线程，回调只更新小型状态并把动作交给工作线程；运行时双击左 Alt 使用 350ms 窗口且不吞键，设置录制期间临时抑制本次按键直到全部释放，避免 WebView 焦点、Windows 系统菜单或输入法先消费录制动作。任何插入键都会取消双击判定；注入按键不参与。"
+    risk: "低级钩子不能跨越安全桌面，普通权限进程对管理员窗口的 UIA 捕获仍受 UIPI/权限边界影响；运行时不吞 Alt，因此应用菜单、输入法与辅助功能冲突必须在真实 Windows 环境人工验证。"
 
   - path: "src-tauri/src/explanation.rs"
     purpose: "阶段二 ExplanationCard 中间协议、CaptureInput 类型和 Rust validator。"
@@ -1176,7 +1185,7 @@ source_areas:
     status: "active"
     read_when:
       - "调整设置 Rust 协议、Key 验证或 SQLite 数据概览。"
-    notes: "返回无明文的 Key configured/source、实际模型、数据目录、三类计数、版本、Windows 实际开机启动状态、可选快捷键注册错误和非敏感偏好；余额复用 DeepSeek 官方 GET /user/balance，显式声明 JSON 响应，首次失败由前端短暂自动重试一次并展示非敏感错误详情。偏好更新除既有校验外还校验关闭策略与两组全局快捷键；先阶段化运行时注册，再按 revision 保存 SQLite，提交模糊错误会回读权威值决定确认或回滚。开机启动 command 直接读写官方插件状态，不写 SQLite。"
+    notes: "返回无明文的 Key configured/source、实际模型、数据目录、三类计数、版本、Windows 实际开机启动状态、可选快捷键注册错误和非敏感偏好；余额复用 DeepSeek 官方 GET /user/balance，显式声明 JSON 响应，首次失败由前端短暂自动重试一次并展示非敏感错误详情。偏好更新校验 version=2 chord / modifierDoubleTap、关闭策略与两项 binding；先阶段化普通注册和原生高级动作，再按 revision 保存 SQLite，提交模糊错误会回读权威值决定确认或回滚。开机启动 command 直接读写官方插件状态，不写 SQLite。"
     risk: "失败不得替换现有 Key 或报告保存成功；不得记录、序列化返回或在错误消息中拼接候选 Key。备份失败必须清理临时数据库及 sidecar，不得覆盖源库或把残缺文件当成成功结果。"
 
   - path: "src-tauri/src/themes.rs"
@@ -1229,7 +1238,7 @@ source_areas:
       - "调整学习记录 schema、迁移或存储字段。"
       - "实现学习记录窗口、搜索、筛选、单条读取或删除。"
       - "排查自动保存或应用数据目录中的 SQLite 问题。"
-    notes: "使用 rusqlite bundled；v1～v18 保持既有 schema 不变。v19 一次新增 learning_targets、learning_target_occurrences 与 learning_target_review_states，并在同一事务回填稳定目标、以强 NOT NULL target 身份重建 Feed/generated-card/attempt 表、按 createdAt/id 重放全部未撤销 attempt、隐藏而不删除同轮历史重复 target，最后执行数量、身份、代表记录、状态重放、来源和外键一致性审计。正常目标唯一身份显式为 canonicalizationVersion + queryType + normalizedTargetText，规范化只合并大小写和空白格式；缺少 v17 可靠英文投影的旧记录各自绑定 targetKind=legacy_compat、canonicalizationVersion=0、normalizedTargetText=NULL 的不可聚合兼容身份，旧 Feed 与子链路保留但 active 槽关闭，Memory 和未来 Review 候选统一排除。新学习事件仍追加 learning_records，并与 v17 投影、稳定 target/occurrence 同事务保存。Memory target commands 的搜索/分页/总数均按正常目标；搜索保留目标、历史原文、解释与上下文多字段命中，但按精确目标、目标前缀、目标包含、原始查询、语境/解释的相关度排序，同级再按最近 occurrence 排序。"
+    notes: "使用 rusqlite bundled；v1～v18 保持既有 schema 不变。v19 一次新增 learning_targets、learning_target_occurrences 与 learning_target_review_states，并在同一事务回填稳定目标、以强 NOT NULL target 身份重建 Feed/generated-card/attempt 表、按 createdAt/id 重放全部未撤销 attempt、隐藏而不删除同轮历史重复 target，最后执行数量、身份、代表记录、状态重放、来源和外键一致性审计。正常目标唯一身份显式为 canonicalizationVersion + queryType + normalizedTargetText，规范化只合并大小写和空白格式；缺少 v17 可靠英文投影的旧记录各自绑定 targetKind=legacy_compat、canonicalizationVersion=0、normalizedTargetText=NULL 的不可聚合兼容身份，旧 Feed 与子链路保留但 active 槽关闭，Memory 和未来 Review 候选统一排除。v22 向 app_preferences 追加两项 nullable binding JSON 权威列：新数据库写入 Alt+Super+Space / 双击左 Alt，已有数据库把 v7 历史字符串逐项转换为 chord JSON，历史列保留且不改写。新学习事件仍追加 learning_records，并与 v17 投影、稳定 target/occurrence 同事务保存。Memory target commands 的搜索/分页/总数均按正常目标；搜索保留目标、历史原文、解释与上下文多字段命中，但按精确目标、目标前缀、目标包含、原始查询、语境/解释的相关度排序，同级再按最近 occurrence 排序。"
     risk: "learning_records 继续只做不可修改的原始事件，不做去重或覆盖；不得修改已发布 v1～v18，后续 target 重绑/拆分必须保持原始 occurrence 和历史 Feed/card/attempt 追溯。"
 
   - path: "src-tauri/src/review.rs"

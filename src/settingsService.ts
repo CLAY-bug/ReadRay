@@ -1,4 +1,8 @@
 import type { SettingsRepository } from "./settingsRepository";
+import type {
+  ShortcutRecordingAction,
+  ShortcutRecordingResult,
+} from "./desktopLifecycle";
 import {
   validateAppPreferences,
   type AppPreferences,
@@ -19,6 +23,11 @@ export interface SettingsService {
   loadSettings(): Promise<SettingsSnapshot>;
   loadPreferences(): Promise<AppPreferences>;
   savePreferences(preferences: AppPreferences): Promise<AppPreferences>;
+  beginShortcutRecording(action: ShortcutRecordingAction): Promise<void>;
+  cancelShortcutRecording(): Promise<void>;
+  listenShortcutRecording(
+    listener: (result: ShortcutRecordingResult) => void,
+  ): Promise<() => void>;
   loadAutostartEnabled(): Promise<boolean>;
   setAutostartEnabled(enabled: boolean): Promise<boolean>;
   validateAndSaveApiKey(apiKey: string): Promise<SettingsSnapshot>;
@@ -192,6 +201,18 @@ export class RepositorySettingsService implements SettingsService {
     return validateAppPreferences(
       await this.repository.updatePreferences(validateAppPreferences(preferences)),
     );
+  }
+
+  beginShortcutRecording(action: ShortcutRecordingAction) {
+    return this.repository.beginShortcutRecording(action);
+  }
+
+  cancelShortcutRecording() {
+    return this.repository.cancelShortcutRecording();
+  }
+
+  listenShortcutRecording(listener: (result: ShortcutRecordingResult) => void) {
+    return this.repository.listenShortcutRecording(listener);
   }
 
   async loadAutostartEnabled() {

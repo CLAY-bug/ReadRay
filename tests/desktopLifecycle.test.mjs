@@ -5,7 +5,6 @@ import {
   DesktopSaveCoordinator,
   runForcedExit,
   runSafeExit,
-  shortcutFromKeyEvent,
 } from "../src/desktopLifecycle.ts";
 
 function deferred() {
@@ -17,39 +16,6 @@ function deferred() {
   });
   return { promise, resolve, reject };
 }
-
-test("快捷键录制拒绝裸按键并生成稳定组合键", () => {
-  assert.throws(
-    () => shortcutFromKeyEvent({
-      code: "KeyR",
-      ctrlKey: false,
-      altKey: false,
-      shiftKey: false,
-      metaKey: false,
-    }),
-    /裸按键/,
-  );
-  assert.equal(
-    shortcutFromKeyEvent({
-      code: "KeyR",
-      ctrlKey: true,
-      altKey: true,
-      shiftKey: false,
-      metaKey: false,
-    }),
-    "Ctrl+Alt+R",
-  );
-  assert.equal(
-    shortcutFromKeyEvent({
-      code: "ControlLeft",
-      ctrlKey: true,
-      altKey: false,
-      shiftKey: false,
-      metaKey: false,
-    }),
-    undefined,
-  );
-});
 
 test("安全退出等待所有保存并在成功后直接退出", async () => {
   const saves = new DesktopSaveCoordinator();

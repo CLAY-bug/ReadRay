@@ -14,19 +14,19 @@ import type {
   ThemeMutationRetry,
 } from "../themeMutationCoordinator";
 import type { ThemeMode } from "../themeProtocol";
-import {
-  desktopSaveCoordinator,
-  shortcutFromKeyEvent,
-  shortcutParts,
-} from "../desktopLifecycle";
+import { desktopSaveCoordinator } from "../desktopLifecycle";
 import {
   DEFAULT_APP_PREFERENCES,
   LEARNING_FONT_SIZE_MAX,
   LEARNING_FONT_SIZE_MIN,
   parseFontSizeCandidate,
+  shortcutBindingIdentity,
+  shortcutBindingParts,
+  validateShortcutBinding,
   UI_FONT_SIZE_MAX,
   UI_FONT_SIZE_MIN,
   type AppPreferences,
+  type ShortcutBinding,
 } from "../appPreferences";
 import {
   BalanceRefreshController,
@@ -404,7 +404,7 @@ function ShortcutRow({
   onRestore,
 }: {
   name: string;
-  value: string;
+  value: ShortcutBinding;
   recording: boolean;
   disabled: boolean;
   isDefault: boolean;
@@ -415,8 +415,11 @@ function ShortcutRow({
     <div className="rr-settings-shortcut-row">
       <div className="rr-settings-shortcut-name">{name}</div>
       <div className="rr-settings-shortcut-actions">
-        <div className="rr-settings-shortcut-value" aria-label={value}>
-          {shortcutParts(value).map((part) => <kbd key={part}>{part}</kbd>)}
+        <div
+          className="rr-settings-shortcut-value"
+          aria-label={shortcutBindingParts(value).join(" ")}
+        >
+          {shortcutBindingParts(value).map((part) => <kbd key={part}>{part}</kbd>)}
         </div>
         <button
           className="rr-settings-button"
@@ -425,7 +428,7 @@ function ShortcutRow({
           aria-pressed={recording}
           onClick={onRecord}
         >
-          {recording ? "请按组合键…" : "录制新快捷键"}
+          {recording ? "请按快捷键…" : "录制新快捷键"}
         </button>
         <button
           className="rr-settings-restore"
@@ -504,8 +507,9 @@ function SettingsPage({
   const [preferenceMessage, setPreferenceMessage] = useState<string>();
   const [failedPreferences, setFailedPreferences] = useState<AppPreferences>();
   const [recordingShortcut, setRecordingShortcut] = useState<
-    "quickQueryShortcut" | "selectionExplanationShortcut"
+    "quickQueryBinding" | "selectionExplanationBinding"
   >();
+  const [shortcutRecordingReady, setShortcutRecordingReady] = useState(false);
   const [shortcutError, setShortcutError] = useState<string>();
   const [autostartStatus, setAutostartStatus] = useState<RequestStatus>("idle");
   const [autostartMessage, setAutostartMessage] = useState<string>();
@@ -529,7 +533,12 @@ function SettingsPage({
   const preferenceKeyRef = useRef(0);
   const autostartKeyRef = useRef(0);
   const themeKeyRef = useRef(0);
+  const snapshotRef = useRef<SettingsSnapshot | undefined>(undefined);
+  const savePreferencesRef = useRef<
+    ((next: AppPreferences) => Promise<void>) | undefined
+  >(undefined);
   const scrollRef = useRef<HTMLDivElement>(null);
+  savePreferencesRef.current = savePreferences;
   function trackSettingsOperation<T>(label: string, start: () => Promise<T>) {
     return desktopSaveCoordinator.runMutation(label, start);
   }
@@ -549,36 +558,75 @@ function SettingsPage({
   }, []);
 
   useEffect(() => {
-    if (!recordingShortcut || !snapshot) return;
-    const activeRecording = recordingShortcut;
-    const currentSnapshot = snapshot;
-    function record(event: KeyboardEvent) {
-      event.preventDefault();
-      event.stopPropagation();
-      if (event.key === "Escape") {
+    snapshotRef.current = snapshot;
+  }, [snapshot]);
+
+  useEffect(() => {
+    setShortcutRecordingReady(false);
+    if (!service) return;
+    let disposed = false;
+    let unlisten: (() => void) | undefined;
+    void service.listenShortcutRecording((result) => {
+      if (disposed) return;
+      const field = result.action === "quickQuery"
+        ? "quickQueryBinding"
+        : "selectionExplanationBinding";
+      if (result.cancelled) {
         setRecordingShortcut(undefined);
         setShortcutError(undefined);
         return;
       }
-      try {
-        const shortcut = shortcutFromKeyEvent(event);
-        if (!shortcut) return;
-        const other = activeRecording === "quickQueryShortcut"
-          ? currentSnapshot.preferences.selectionExplanationShortcut
-          : currentSnapshot.preferences.quickQueryShortcut;
-        if (shortcut === other) {
-          throw new Error("快速查询和选区解释不能使用同一个快捷键。");
-        }
-        setShortcutError(undefined);
+      if (result.error || !result.binding) {
         setRecordingShortcut(undefined);
-        patchPreferences({ [activeRecording]: shortcut });
-      } catch (error) {
-        setShortcutError(errorMessage(error));
+        setShortcutError(result.error ?? "没有录制到有效的全局快捷键。");
+        return;
       }
-    }
-    window.addEventListener("keydown", record, true);
-    return () => window.removeEventListener("keydown", record, true);
-  }, [recordingShortcut, snapshot]);
+      let binding: ShortcutBinding;
+      try {
+        binding = validateShortcutBinding(
+          result.binding,
+          result.action === "quickQuery" ? "快速查询" : "选区解释",
+        );
+      } catch (error) {
+        setRecordingShortcut(undefined);
+        setShortcutError(errorMessage(error));
+        return;
+      }
+      const currentSnapshot = snapshotRef.current;
+      const other = field === "quickQueryBinding"
+        ? currentSnapshot?.preferences.selectionExplanationBinding
+        : currentSnapshot?.preferences.quickQueryBinding;
+      if (
+        other &&
+        shortcutBindingIdentity(other) === shortcutBindingIdentity(binding)
+      ) {
+        setRecordingShortcut(undefined);
+        setShortcutError("快速查询和选区解释不能使用同一个快捷键。");
+        return;
+      }
+      setShortcutError(undefined);
+      setRecordingShortcut(undefined);
+      if (currentSnapshot) {
+        void savePreferencesRef.current?.({
+          ...currentSnapshot.preferences,
+          [field]: binding,
+        });
+      }
+    }).then((cleanup) => {
+      if (disposed) cleanup();
+      else {
+        unlisten = cleanup;
+        setShortcutRecordingReady(true);
+      }
+    }).catch((error) => {
+      if (!disposed) setShortcutError(errorMessage(error));
+    });
+    return () => {
+      disposed = true;
+      unlisten?.();
+      void service.cancelShortcutRecording();
+    };
+  }, [service]);
 
   useEffect(() => {
     if (!service) return;
@@ -972,8 +1020,10 @@ function SettingsPage({
     }
     const previous = snapshot.preferences;
     const shortcutsChanged =
-      next.quickQueryShortcut !== previous.quickQueryShortcut ||
-      next.selectionExplanationShortcut !== previous.selectionExplanationShortcut;
+      shortcutBindingIdentity(next.quickQueryBinding) !==
+        shortcutBindingIdentity(previous.quickQueryBinding) ||
+      shortcutBindingIdentity(next.selectionExplanationBinding) !==
+        shortcutBindingIdentity(previous.selectionExplanationBinding);
     if (!desktopSaveCoordinator.recordMutation()) return;
     const requestKey = preferenceKeyRef.current + 1;
     preferenceKeyRef.current = requestKey;
@@ -1080,6 +1130,22 @@ function SettingsPage({
   function patchPreferences(patch: Partial<AppPreferences>) {
     if (!snapshot) return;
     void savePreferences({ ...snapshot.preferences, ...patch });
+  }
+
+  async function startShortcutRecording(
+    field: "quickQueryBinding" | "selectionExplanationBinding",
+  ) {
+    if (!service || !shortcutRecordingReady || preferenceStatus === "loading") return;
+    setShortcutError(undefined);
+    setRecordingShortcut(field);
+    try {
+      await service.beginShortcutRecording(
+        field === "quickQueryBinding" ? "quickQuery" : "selectionExplanation",
+      );
+    } catch (error) {
+      setRecordingShortcut(undefined);
+      setShortcutError(errorMessage(error));
+    }
   }
 
   async function toggleAutostart() {
@@ -1388,30 +1454,42 @@ function SettingsPage({
                   <div className="rr-settings-panel">
                     <ShortcutRow
                       name="快速查询"
-                      value={snapshot.preferences.quickQueryShortcut}
-                      recording={recordingShortcut === "quickQueryShortcut"}
-                      disabled={preferenceStatus === "loading"}
-                      isDefault={snapshot.preferences.quickQueryShortcut === DEFAULT_APP_PREFERENCES.quickQueryShortcut}
-                      onRecord={() => {
-                        setShortcutError(undefined);
-                        setRecordingShortcut("quickQueryShortcut");
-                      }}
+                      value={snapshot.preferences.quickQueryBinding}
+                      recording={recordingShortcut === "quickQueryBinding"}
+                      disabled={
+                        !shortcutRecordingReady ||
+                        preferenceStatus === "loading" ||
+                        recordingShortcut !== undefined
+                      }
+                      isDefault={
+                        shortcutBindingIdentity(snapshot.preferences.quickQueryBinding) ===
+                        shortcutBindingIdentity(DEFAULT_APP_PREFERENCES.quickQueryBinding)
+                      }
+                      onRecord={() => void startShortcutRecording("quickQueryBinding")}
                       onRestore={() => patchPreferences({
-                        quickQueryShortcut: DEFAULT_APP_PREFERENCES.quickQueryShortcut,
+                        quickQueryBinding: DEFAULT_APP_PREFERENCES.quickQueryBinding,
                       })}
                     />
                     <ShortcutRow
                       name="选区解释"
-                      value={snapshot.preferences.selectionExplanationShortcut}
-                      recording={recordingShortcut === "selectionExplanationShortcut"}
-                      disabled={preferenceStatus === "loading"}
-                      isDefault={snapshot.preferences.selectionExplanationShortcut === DEFAULT_APP_PREFERENCES.selectionExplanationShortcut}
-                      onRecord={() => {
-                        setShortcutError(undefined);
-                        setRecordingShortcut("selectionExplanationShortcut");
-                      }}
+                      value={snapshot.preferences.selectionExplanationBinding}
+                      recording={recordingShortcut === "selectionExplanationBinding"}
+                      disabled={
+                        !shortcutRecordingReady ||
+                        preferenceStatus === "loading" ||
+                        recordingShortcut !== undefined
+                      }
+                      isDefault={
+                        shortcutBindingIdentity(
+                          snapshot.preferences.selectionExplanationBinding,
+                        ) === shortcutBindingIdentity(
+                          DEFAULT_APP_PREFERENCES.selectionExplanationBinding,
+                        )
+                      }
+                      onRecord={() => void startShortcutRecording("selectionExplanationBinding")}
                       onRestore={() => patchPreferences({
-                        selectionExplanationShortcut: DEFAULT_APP_PREFERENCES.selectionExplanationShortcut,
+                        selectionExplanationBinding:
+                          DEFAULT_APP_PREFERENCES.selectionExplanationBinding,
                       })}
                     />
                   </div>

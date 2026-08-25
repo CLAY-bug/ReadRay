@@ -26,8 +26,11 @@ import {
   DEFAULT_APP_PREFERENCES,
   appPreferenceCssVariables,
   parseFontSizeCandidate,
+  shortcutBindingIdentity,
+  shortcutBindingParts,
   shouldSendMultilineMessage,
   validateAppPreferences,
+  validateShortcutBinding,
 } from "../src/appPreferences.ts";
 import { AppPreferenceSaveCoordinator } from "../src/appPreferenceSaveCoordinator.ts";
 
@@ -180,6 +183,8 @@ test("Tauri 设置 repository 通过有类型 command 和原生保存对话框�
   await repository.get();
   await repository.getPreferences();
   await repository.updatePreferences(preferences({ uiFontSize: 16 }));
+  await repository.beginShortcutRecording("quickQuery");
+  await repository.cancelShortcutRecording();
   await repository.getAutostartEnabled();
   await repository.setAutostartEnabled(true);
   await repository.validateAndSaveApiKey("candidate-secret");
@@ -196,6 +201,8 @@ test("Tauri 设置 repository 通过有类型 command 和原生保存对话框�
       command: "update_app_preferences",
       args: { preferences: preferences({ uiFontSize: 16 }) },
     },
+    { command: "begin_shortcut_recording", args: { action: "quickQuery" } },
+    { command: "cancel_shortcut_recording", args: undefined },
     { command: "get_autostart_enabled", args: undefined },
     { command: "set_autostart_enabled", args: { enabled: true } },
     {
@@ -281,6 +288,31 @@ test("偏好设置校验、字体作用域与两种发送方式保持确定语�
   assert.throws(
     () => validateAppPreferences(preferences({ learningFontSize: 13 })),
     /14–24/,
+  );
+  assert.equal(
+    shortcutBindingIdentity(DEFAULT_APP_PREFERENCES.quickQueryBinding),
+    "chord:Alt+Super+Space",
+  );
+  assert.deepEqual(
+    shortcutBindingParts(DEFAULT_APP_PREFERENCES.quickQueryBinding),
+    ["Alt", "Win", "Space"],
+  );
+  assert.deepEqual(
+    shortcutBindingParts(DEFAULT_APP_PREFERENCES.selectionExplanationBinding),
+    ["左 Alt", "×2"],
+  );
+  assert.throws(
+    () => validateShortcutBinding(
+      { version: 2, kind: "chord", accelerator: "Space" },
+      "快速查询",
+    ),
+    /必须包含修饰键/,
+  );
+  assert.throws(
+    () => validateAppPreferences(preferences({
+      quickQueryBinding: DEFAULT_APP_PREFERENCES.selectionExplanationBinding,
+    })),
+    /不能使用同一个快捷键/,
   );
   const variables = appPreferenceCssVariables(
     preferences({
@@ -890,7 +922,12 @@ test("正式设置页保持五类设计结构，确定性操作已接线且不�
   assert.doesNotMatch(page, /themeController\.delete/);
   assert.doesNotMatch(page, /ReadRay 内置主题不能删除/);
   assert.match(page, /录制新快捷键/);
-  assert.match(page, /shortcutFromKeyEvent/);
+  assert.match(page, /listenShortcutRecording/);
+  assert.match(page, /beginShortcutRecording/);
+  assert.match(page, /cancelShortcutRecording/);
+  assert.doesNotMatch(page, /shortcutFromKeyEvent|onKeyDown=\{recordShortcut\}/);
+  assert.match(repository, /begin_shortcut_recording/);
+  assert.match(repository, /readray:\/\/shortcut-recorded/);
   assert.match(page, /恢复默认快捷键/);
   assert.match(page, /onClick=\{refreshBalance\}/);
   assert.match(page, /new BalanceRefreshController/);

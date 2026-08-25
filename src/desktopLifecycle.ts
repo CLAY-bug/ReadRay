@@ -147,70 +147,13 @@ export async function runForcedExit(
   return "forced" as const;
 }
 
-const modifierCodes = new Set([
-  "ControlLeft",
-  "ControlRight",
-  "AltLeft",
-  "AltRight",
-  "ShiftLeft",
-  "ShiftRight",
-  "MetaLeft",
-  "MetaRight",
-]);
+export type ShortcutRecordingAction =
+  | "quickQuery"
+  | "selectionExplanation";
 
-const namedCodes: Record<string, string> = {
-  Space: "Space",
-  Enter: "Enter",
-  Escape: "Escape",
-  Tab: "Tab",
-  Backspace: "Backspace",
-  Delete: "Delete",
-  Insert: "Insert",
-  Home: "Home",
-  End: "End",
-  PageUp: "PageUp",
-  PageDown: "PageDown",
-  ArrowUp: "ArrowUp",
-  ArrowDown: "ArrowDown",
-  ArrowLeft: "ArrowLeft",
-  ArrowRight: "ArrowRight",
+export type ShortcutRecordingResult = {
+  action: ShortcutRecordingAction;
+  binding?: import("./appPreferences").ShortcutBinding;
+  cancelled: boolean;
+  error?: string;
 };
-
-export type ShortcutKeyEvent = {
-  code: string;
-  ctrlKey: boolean;
-  altKey: boolean;
-  shiftKey: boolean;
-  metaKey: boolean;
-};
-
-function shortcutKeyName(code: string) {
-  if (/^Key[A-Z]$/.test(code)) return code.slice(3);
-  if (/^Digit[0-9]$/.test(code)) return code.slice(5);
-  if (/^F(?:[1-9]|1[0-9]|2[0-4])$/.test(code)) return code;
-  return namedCodes[code];
-}
-
-export function shortcutFromKeyEvent(event: ShortcutKeyEvent) {
-  if (modifierCodes.has(event.code)) return undefined;
-  if (!event.ctrlKey && !event.altKey && !event.shiftKey && !event.metaKey) {
-    throw new Error("全局快捷键不能使用裸按键。");
-  }
-  const key = shortcutKeyName(event.code);
-  if (!key) {
-    throw new Error("该按键暂不支持作为 ReadRay 全局快捷键。");
-  }
-  return [
-    event.ctrlKey ? "Ctrl" : undefined,
-    event.altKey ? "Alt" : undefined,
-    event.shiftKey ? "Shift" : undefined,
-    event.metaKey ? "Super" : undefined,
-    key,
-  ]
-    .filter(Boolean)
-    .join("+");
-}
-
-export function shortcutParts(value: string) {
-  return value.split("+").filter(Boolean);
-}
