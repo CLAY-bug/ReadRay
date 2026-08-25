@@ -13,6 +13,22 @@ use codex_themes_data::CODEX_BUILTIN_FULL_THEMES;
 const THEME_FORMAT_VERSION: i64 = 1;
 const DEFAULT_THEME_ID: &str = "readray-default";
 const FLEXOKI_THEME_ID: &str = "flexoki";
+// 仅用于从旧版本已保存的单模式 Codex 主题选择平滑回退；这些 ID 不再进入随包主题列表。
+const RETIRED_BUILTIN_THEME_IDS: &[&str] = &[
+    "ayu",
+    "dracula",
+    "lobster",
+    "material",
+    "matrix",
+    "monokai",
+    "night-owl",
+    "nord",
+    "oscurange",
+    "proof",
+    "sentry",
+    "tokyo-night",
+    "temple",
+];
 const MAX_MANIFEST_BYTES: u64 = 16 * 1024;
 const MAX_CSS_BYTES: u64 = 64 * 1024;
 const MAX_CUSTOM_THEMES: i64 = 64;
@@ -197,9 +213,9 @@ fn default_theme() -> ReadRayThemeV1 {
             format_version: THEME_FORMAT_VERSION,
             id: DEFAULT_THEME_ID.to_string(),
             name: "ReadRay Default".to_string(),
-            version: "1.0.0".to_string(),
+            version: "1.1.0".to_string(),
             author: "ReadRay".to_string(),
-            modes: vec![ThemeMode::Light],
+            modes: vec![ThemeMode::Light, ThemeMode::Dark],
             license: None,
             source_url: None,
         },
@@ -233,7 +249,36 @@ fn default_theme() -> ReadRayThemeV1 {
             scrim: "rgba(28, 27, 23, 0.32)".to_string(),
             shadow: "rgba(38, 37, 30, 0.1)".to_string(),
         }),
-        dark: None,
+        dark: Some(ReadRayThemeColors {
+            canvas: "#0d0d0b".to_string(),
+            sidebar: "#171512".to_string(),
+            surface: "#1f1b18".to_string(),
+            surface_elevated: "#27211d".to_string(),
+            surface_subtle: "#171512".to_string(),
+            surface_contrast: "#332821".to_string(),
+            text_primary: "#f6f0e8".to_string(),
+            text_secondary: "#d5c9bb".to_string(),
+            text_muted: "#8f8579".to_string(),
+            text_subtle: "#6f665c".to_string(),
+            border: "rgba(246, 240, 232, 0.12)".to_string(),
+            border_soft: "rgba(246, 240, 232, 0.07)".to_string(),
+            accent: "#ff6a32".to_string(),
+            accent_hover: "#ff8150".to_string(),
+            accent_text: "#0d0d0b".to_string(),
+            success: "#68c08d".to_string(),
+            success_soft: "rgba(104, 192, 141, 0.14)".to_string(),
+            warning: "#e3ab52".to_string(),
+            warning_soft: "rgba(227, 171, 82, 0.14)".to_string(),
+            warning_strong: "#f2c25f".to_string(),
+            danger: "#ef7783".to_string(),
+            danger_soft: "rgba(239, 119, 131, 0.14)".to_string(),
+            danger_strong: "#ff9a8b".to_string(),
+            selection: "rgba(255, 106, 50, 0.22)".to_string(),
+            diff_added: "#72c99a".to_string(),
+            diff_removed: "#ef7783".to_string(),
+            scrim: "rgba(0, 0, 0, 0.5)".to_string(),
+            shadow: "rgba(0, 0, 0, 0.32)".to_string(),
+        }),
         builtin: true,
         warnings: Vec::new(),
     }
@@ -1213,7 +1258,29 @@ fn read_theme_snapshot(connection: &Connection) -> Result<ThemeSnapshot, String>
     let current = themes
         .iter()
         .find(|theme| theme.manifest.id == current_theme_id)
-        .ok_or_else(|| "数据库当前主题不存在。".to_string())?;
+        .ok_or_else(|| "数据库当前主题不存在。".to_string());
+    let current = match current {
+        Ok(theme) => theme,
+        Err(_) if RETIRED_BUILTIN_THEME_IDS.contains(&current_theme_id.as_str()) => {
+            let changed = connection
+                .execute(
+                    "UPDATE theme_preferences \
+                     SET revision = revision + 1, theme_id = ?1, mode = ?2 \
+                     WHERE id = 1 AND revision = ?3",
+                    params![DEFAULT_THEME_ID, ThemeMode::Light.storage_value(), revision],
+                )
+                .map_err(|error| format!("无法恢复已移除的主题偏好：{error}"))?;
+            if changed == 1 {
+                return read_theme_snapshot(connection);
+            }
+            let (_, latest_theme_id, _) = read_preference(connection)?;
+            if latest_theme_id != current_theme_id {
+                return read_theme_snapshot(connection);
+            }
+            return Err("主题偏好已在另一个窗口更新，请重新读取后重试。".to_string());
+        }
+        Err(error) => return Err(error),
+    };
     if !current.manifest.modes.contains(&current_mode) {
         return Err("数据库当前主题不支持已保存的模式。".to_string());
     }
@@ -1688,7 +1755,7 @@ mod tests {
     #[test]
     fn codex_builtin_themes_are_unique_complete_mode_aware_and_protected() {
         let themes = codex_builtin_themes();
-        assert_eq!(themes.len(), 28);
+        assert_eq!(themes.len(), 15);
 
         // 主题 ID 唯一，且不与既有内置主题冲突。
         let mut ids = std::collections::HashSet::new();
@@ -1701,8 +1768,8 @@ mod tests {
             );
             assert_ne!(theme.manifest.id, DEFAULT_THEME_ID);
             assert_ne!(theme.manifest.id, FLEXOKI_THEME_ID);
-            // 至少一个模式
-            assert!(theme.light.is_some() || theme.dark.is_some());
+            // 随包 Codex 主题必须同时支持浅色和深色模式。
+            assert!(theme.light.is_some() && theme.dark.is_some());
         }
 
         // 每个声明模式都有完整 28 token 配色，且通过规范化与可读性校验。
@@ -1730,47 +1797,68 @@ mod tests {
         }
 
         // 内置主题不可删除、不可被自定义 ID 冲突覆盖。
-        assert!(delete_theme_in_database(&mut test_database("codex-delete").1, "ayu", 0,).is_err());
+        assert!(
+            delete_theme_in_database(&mut test_database("codex-delete").1, "catppuccin", 0,)
+                .is_err()
+        );
         // validate_manifest 对内置 ID 返回冲突错误（自定义主题不能用内置 ID）。
-        let ayu_manifest = themes
+        let catppuccin_manifest = themes
             .iter()
-            .find(|theme| theme.manifest.id == "ayu")
+            .find(|theme| theme.manifest.id == "catppuccin")
             .unwrap()
             .manifest
             .clone();
-        assert!(validate_manifest(&ayu_manifest).is_err());
+        assert!(validate_manifest(&catppuccin_manifest).is_err());
 
-        // 模式选择：单模式主题选择不支持的模式被拒绝。
+        // 模式选择：保留的 Codex 主题两种模式都可用。
         let (_, mut connection) = test_database("codex-select");
         let selected_dark =
-            select_theme_in_database(&mut connection, "ayu", ThemeMode::Dark, 0).unwrap();
-        assert_eq!(selected_dark.current_theme_id, "ayu");
+            select_theme_in_database(&mut connection, "catppuccin", ThemeMode::Dark, 0).unwrap();
+        assert_eq!(selected_dark.current_theme_id, "catppuccin");
         assert_eq!(selected_dark.current_mode, ThemeMode::Dark);
-        assert!(
-            select_theme_in_database(&mut connection, "ayu", ThemeMode::Light, 1).is_err(),
-            "ayu 只有 dark 模式，不应能选择 light"
-        );
-        // 双模式主题两种模式都可用。
         let cat_selected =
             select_theme_in_database(&mut connection, "catppuccin", ThemeMode::Light, 1).unwrap();
         assert_eq!(cat_selected.current_mode, ThemeMode::Light);
 
         // 重启恢复：Codex 主题随快照恢复且仍是内置。
         let (root, mut connection) = test_database("codex-restart");
-        let _ =
-            select_theme_in_database(&mut connection, "tokyo-night", ThemeMode::Dark, 0).unwrap();
+        let _ = select_theme_in_database(&mut connection, "solarized", ThemeMode::Dark, 0).unwrap();
         drop(connection);
         let reopened = learning_records::open_database(&root.join("readray.sqlite3")).unwrap();
         let restored = read_theme_snapshot(&reopened).unwrap();
-        assert_eq!(restored.current_theme_id, "tokyo-night");
+        assert_eq!(restored.current_theme_id, "solarized");
         assert_eq!(restored.current_mode, ThemeMode::Dark);
         let restored_theme = restored
             .themes
             .iter()
-            .find(|theme| theme.manifest.id == "tokyo-night")
+            .find(|theme| theme.manifest.id == "solarized")
             .unwrap();
         assert!(restored_theme.builtin);
         let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn removed_builtin_theme_selection_falls_back_to_default() {
+        let (_, connection) = test_database("retired-theme-fallback");
+        connection
+            .execute(
+                "UPDATE theme_preferences SET revision = 4, theme_id = 'ayu', mode = 'dark' WHERE id = 1",
+                [],
+            )
+            .unwrap();
+
+        let snapshot = read_theme_snapshot(&connection).unwrap();
+        assert_eq!(snapshot.revision, 5);
+        assert_eq!(snapshot.current_theme_id, DEFAULT_THEME_ID);
+        assert_eq!(snapshot.current_mode, ThemeMode::Light);
+        assert!(!snapshot
+            .themes
+            .iter()
+            .any(|theme| theme.manifest.id == "ayu"));
+
+        let persisted = read_theme_snapshot(&connection).unwrap();
+        assert_eq!(persisted.revision, 5);
+        assert_eq!(persisted.current_theme_id, DEFAULT_THEME_ID);
     }
 
     #[test]
@@ -1786,7 +1874,7 @@ mod tests {
             .unwrap_err()
             .contains("已存在"));
         assert_eq!(read_theme_snapshot(&connection).unwrap().revision, 1);
-        assert_eq!(read_theme_snapshot(&connection).unwrap().themes.len(), 31);
+        assert_eq!(read_theme_snapshot(&connection).unwrap().themes.len(), 18);
 
         let selected =
             select_theme_in_database(&mut connection, "stored-theme", ThemeMode::Light, 1).unwrap();
@@ -1810,14 +1898,14 @@ mod tests {
         assert_eq!(deleted.revision, 3);
         assert_eq!(deleted.current_theme_id, DEFAULT_THEME_ID);
         assert_eq!(deleted.current_mode, ThemeMode::Light);
-        assert_eq!(deleted.themes.len(), 30);
+        assert_eq!(deleted.themes.len(), 17);
         drop(connection);
 
         let reopened = learning_records::open_database(&root.join("readray.sqlite3")).unwrap();
         let restored = read_theme_snapshot(&reopened).unwrap();
         assert_eq!(restored.revision, 3);
         assert_eq!(restored.current_theme_id, DEFAULT_THEME_ID);
-        assert_eq!(restored.themes.len(), 30);
+        assert_eq!(restored.themes.len(), 17);
         drop(reopened);
         let _ = fs::remove_dir_all(root);
     }
@@ -1836,7 +1924,12 @@ mod tests {
 
     #[test]
     fn default_theme_keeps_current_runtime_color_values() {
-        let colors = default_theme().light.unwrap();
+        let theme = default_theme();
+        assert_eq!(
+            theme.manifest.modes,
+            vec![ThemeMode::Light, ThemeMode::Dark]
+        );
+        let colors = theme.light.unwrap();
         assert_eq!(colors.canvas, "#f2f1ed");
         assert_eq!(colors.sidebar, "#ebeae5");
         assert_eq!(colors.surface, "#e6e5e0");
@@ -1849,5 +1942,14 @@ mod tests {
         assert_eq!(colors.border_soft, "rgba(38, 37, 30, 0.06)");
         assert_eq!(colors.accent, "#f54e00");
         assert_eq!(colors.danger, "#cf2d56");
+
+        let dark = theme.dark.unwrap();
+        assert_eq!(dark.canvas, "#0d0d0b");
+        assert_eq!(dark.sidebar, "#171512");
+        assert_eq!(dark.surface, "#1f1b18");
+        assert_eq!(dark.text_primary, "#f6f0e8");
+        assert_eq!(dark.accent, "#ff6a32");
+        assert_eq!(dark.accent_text, "#0d0d0b");
+        assert_eq!(dark.shadow, "rgba(0, 0, 0, 0.32)");
     }
 }

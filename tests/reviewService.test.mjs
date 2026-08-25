@@ -221,6 +221,34 @@ test("学习记录中的完整英文语境直接使用", () => {
   assert.equal(isUsableEnglishContext("persistent", "persistent"), false);
 });
 
+test("过长或带终端装饰的原始上下文不冒充单词语境", () => {
+  const noisyContext = `PowerShell 7.6.3 \uE0B6 19150 D:\\project\\ReadRay features ${
+    "Running BeforeDevCommand pnpm dev. ".repeat(40)
+  }`;
+  assert.equal(isUsableEnglishContext(noisyContext, "features"), false);
+  assert.equal(
+    isUsableEnglishContext("The \uE0B6 features are listed in the terminal output.", "features"),
+    false,
+  );
+  assert.equal(
+    isUsableEnglishContext("The features are listed in the release notes. ".repeat(20), "features"),
+    false,
+  );
+
+  const record = learningRecord(11, {
+    queryText: "features",
+    learningTargetText: "features",
+    contextText: noisyContext,
+  });
+  const model = mapReviewFeedPage(
+    page({ items: [feedItem({ learningRecord: record })] }),
+    NOW,
+  );
+  assert.equal(model.cards[0].promptKind, "meaning");
+  assert.equal(model.cards[0].promptText, "features");
+  assert.equal(model.cards[0].needsPreparation, true);
+});
+
 test("ExplanationCard 的 AI 例句和 sourceSentence 不冒充学习时语境", () => {
   const record = learningRecord(11, {
     contextText: "这是一段中文上下文。",

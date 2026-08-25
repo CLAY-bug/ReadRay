@@ -377,7 +377,7 @@
   border-radius: var(--rr-radius-md);
   padding: 5px;
   background: color-mix(in oklab, var(--rr-main-bg), var(--rr-main-surface) 8%);
-  box-shadow: 0 12px 28px color-mix(in oklab, var(--rr-main-fg), transparent 88%);
+  box-shadow: 0 12px 28px color-mix(in oklab, var(--rr-main-shadow), transparent 48%);
 }
 
 .rr-settings-select-option {
@@ -678,7 +678,7 @@
 
 .rr-settings-text-input:focus-visible {
   border-color: color-mix(in oklab, var(--rr-main-accent), var(--rr-main-border) 68%);
-  box-shadow: 0 4px 12px var(--rr-main-shadow);
+  box-shadow: 0 0 0 2px color-mix(in oklab, var(--rr-main-accent), transparent 78%);
 }
 
 .rr-settings-text-input::placeholder {
@@ -765,6 +765,15 @@
   font-family: var(--rr-main-font-mono);
   font-size: calc(10px * var(--rr-settings-font-scale));
   letter-spacing: 0.02em;
+}
+
+.rr-settings-balance-error {
+  max-width: 560px;
+  margin-top: 8px;
+  color: var(--rr-main-danger);
+  font-size: calc(10.5px * var(--rr-settings-font-scale));
+  line-height: 1.45;
+  overflow-wrap: anywhere;
 }
 
 .rr-settings-balance-list {

@@ -2,7 +2,7 @@
 
 ReadRayThemeV1 是 ReadRay 唯一稳定的内部主题协议。主题包由同一目录中的 `manifest.json` 与 `theme.css` 组成；ReadRay 只把 `theme.css` 当作文本解析，绝不把原始 CSS 插入页面或交给浏览器执行。
 
-当前随包提供 30 个内置主题：`ReadRay Default`（浅色）、`Flexoki`（浅色/深色双模式）和 28 个 Codex 预设主题（来自 OpenAI Codex 应用的代码配色主题，如 Ayu、Catppuccin、Dracula、GitHub、Nord、Solarized、Tokyo Night 等，各按注册表保留真实 light/dark 可用性）。内置主题数据由 `scripts/gen-themes.mjs` 从 `scripts/codex-theme-extract/core-palette.json` 生成，Rust 与前端共用同一份数据，不执行或导入原始 CSS/JS/TextMate scope。`ReadRay Default` 始终是默认主题；所有内置主题都不可删除，且自定义主题不能使用任何内置主题 ID。Codex、Obsidian 或其他来源以后必须通过各自独立 adapter 转换为 ReadRayThemeV1，本协议不承诺兼容任何外部主题格式。
+当前随包提供 17 个内置主题：`ReadRay Default`（浅色/深色双模式）、`Flexoki`（浅色/深色双模式）和 15 个 Codex 预设主题。Codex 预设只保留同时提供真实 light/dark 配色的主题，单模式预设不进入 ReadRay 内置列表。内置主题数据由 `scripts/gen-themes.mjs` 从 `scripts/codex-theme-extract/core-palette.json` 生成，Rust 与前端共用同一份数据，不执行或导入原始 CSS/JS/TextMate scope。`ReadRay Default` 始终是默认主题；所有内置主题都不可删除，且自定义主题不能使用任何内置主题 ID。Codex、Obsidian 或其他来源以后必须通过各自独立 adapter 转换为 ReadRayThemeV1，本协议不承诺兼容任何外部主题格式。
 
 ## manifest.json
 
@@ -24,7 +24,7 @@ ReadRayThemeV1 是 ReadRay 唯一稳定的内部主题协议。主题包由同�
 必填字段：
 
 - `formatVersion`：必须为整数 `1`。
-- `id`：1–64 个字符，只允许小写 ASCII 字母、数字和连字符，且必须以字母或数字开头；`readray-default`、`flexoki` 与全部 28 个 Codex 预设主题 ID 均保留给内置主题。
+- `id`：1–64 个字符，只允许小写 ASCII 字母、数字和连字符，且必须以字母或数字开头；`readray-default`、`flexoki` 与全部 15 个双模式 Codex 预设主题 ID 均保留给内置主题。
 - `name`：1–80 个字符。
 - `version`：1–32 个字符。
 - `author`：1–80 个字符。
@@ -112,7 +112,7 @@ manifest 不接受未知字段、空必填字段或控制字符。
 - `canvas`、`sidebar`、`surface` 必须不透明；主文字与这三个背景的对比度均不得低于 4.5:1。
 - Rust 只读取用户在原生目录对话框中明确选择目录直属的 `manifest.json` 和 `theme.css`；两个文件必须是普通文件，符号链接和目录外路径均拒绝。
 - 导入在写入前由 Rust 安全预检同一目录并返回规范化目标；正式写入会重新解析目录并核对主题 ID，前端不会自行读取文件。该目标身份同时用于 IPC 报错后的精确对账，不能用任意新增主题推断本次导入成功。
-- SQLite v8 只保存规范化 manifest、light/dark 颜色和解析警告，不保存原始 CSS。内置主题（ReadRay Default、Flexoki 与 28 个 Codex 预设）只存在于代码资源中，不写入 SQLite，也不重复保存。
+- SQLite v8 只保存规范化 manifest、light/dark 颜色和解析警告，不保存原始 CSS。内置主题（ReadRay Default、Flexoki 与 15 个双模式 Codex 预设）只存在于代码资源中，不写入 SQLite，也不重复保存。
 - 页面只通过 `ThemeService → ThemeRepository → typed Rust commands` 操作主题，不直接 invoke、读文件或写 SQLite。
 - 解析、选择或应用失败时，应用级协调器重读并恢复 SQLite 权威主题；只有 revision 恰好推进一次且目标主题、当前选择和主题存在性满足本次操作的完整后置条件时，才确认“已提交但调用方未确认”。数据库未变化时保留显式重试，并发冲突则不自动重试；旧结果不能覆盖较新的成功操作。
 

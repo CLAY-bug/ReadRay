@@ -53,13 +53,35 @@
   },
   "bundle": {
     "active": true,
-    "targets": "all",
+    "targets": ["nsis"],
+    "publisher": "CLAY-bug",
+    "homepage": "https://github.com/CLAY-bug/ReadRay",
+    "copyright": "Copyright © 2026 CLAY-bug",
+    "license": "MIT",
+    "licenseFile": "../LICENSE",
+    "category": "Education",
+    "shortDescription": "Windows-first local-first AI English learning agent",
+    "longDescription": "ReadRay turns real reading, writing and conversations into contextual English learning, traceable memory and review on Windows.",
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",
       "icons/128x128@2x.png",
       "icons/icon.icns",
       "icons/icon.ico"
-    ]
+    ],
+    "windows": {
+      "allowDowngrades": false,
+      "webviewInstallMode": {
+        "type": "embedBootstrapper"
+      },
+      "nsis": {
+        "installMode": "currentUser",
+        "languages": ["SimpChinese", "English"],
+        "displayLanguageSelector": false,
+        "startMenuFolder": "ReadRay",
+        "installerIcon": "icons/icon.ico",
+        "uninstallerIcon": "icons/icon.ico"
+      }
+    }
   }
 }

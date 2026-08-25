@@ -50,13 +50,15 @@ import sourceHanSansLicense from "../assets/fonts/licenses/Source-Han-Sans-OFL.t
 import sourceHanSerifLicense from "../assets/fonts/licenses/Source-Han-Serif-OFL.txt?raw";
 import flexokiLicense from "../assets/flexoki-LICENSE.txt?raw";
 
-type SettingsSection = "general" | "appearance" | "ai" | "data" | "about";
+export type SettingsSection = "general" | "appearance" | "ai" | "data" | "about";
 type OperationState = "idle" | "saving" | "clearing";
 type RequestStatus = "idle" | "loading" | "success" | "error";
 
 type SettingsPageProps = {
   service: SettingsService | null;
   themeController: AppThemeController;
+  initialSection?: SettingsSection;
+  onApiKeyConfiguredChange?: (configured: boolean) => void;
   onPreferencesSave?: (
     candidate: AppPreferences,
     previousAuthority: AppPreferences,
@@ -207,13 +209,17 @@ function SettingsSelect({
   disabled = false,
   className,
   onChange,
+  onPreview,
+  onPreviewCancel,
 }: {
   label: string;
   value: string;
   options: readonly SettingsSelectOption[];
   disabled?: boolean;
   className?: string;
-  onChange: (value: string) => void;
+  onChange: (value: string) => boolean | void;
+  onPreview?: (value: string) => void;
+  onPreviewCancel?: () => void;
 }) {
   const selectId = useId();
   const rootRef = useRef<HTMLDivElement>(null);
@@ -225,17 +231,20 @@ function SettingsSelect({
   );
   const [activeIndex, setActiveIndex] = useState(selectedIndex);
   const selectedOption = options[selectedIndex];
+  const activeOption = options[activeIndex] ?? selectedOption;
 
   useEffect(() => {
     if (!open) return;
 
     const handlePointerDown = (event: PointerEvent) => {
       if (!rootRef.current?.contains(event.target as Node)) {
+        onPreviewCancel?.();
         setOpen(false);
       }
     };
     const handleDocumentKeyDown = (event: globalThis.KeyboardEvent) => {
       if (event.key === "Escape") {
+        onPreviewCancel?.();
         setOpen(false);
         buttonRef.current?.focus();
       }
@@ -247,7 +256,7 @@ function SettingsSelect({
       document.removeEventListener("pointerdown", handlePointerDown);
       document.removeEventListener("keydown", handleDocumentKeyDown);
     };
-  }, [open]);
+  }, [onPreviewCancel, open]);
 
   useEffect(() => {
     if (!open) {
@@ -255,10 +264,31 @@ function SettingsSelect({
     }
   }, [open, selectedIndex]);
 
+  useEffect(() => {
+    if (!open) return;
+    document
+      .getElementById(`${selectId}-option-${activeIndex}`)
+      ?.scrollIntoView({ block: "nearest" });
+  }, [activeIndex, open, selectId]);
+
+  const setActiveOption = (index: number) => {
+    const option = options[index];
+    if (!option) return;
+    setActiveIndex(index);
+    // 仅在主题下拉传入 onPreview 时临时应用配色；真正保存仍由 onChange 完成。
+    if (index !== activeIndex) onPreview?.(option.value);
+  };
+
+  const closeMenu = (restorePreview = true) => {
+    if (restorePreview) onPreviewCancel?.();
+    setOpen(false);
+  };
+
   const chooseOption = (index: number) => {
     const option = options[index];
     if (!option) return;
-    onChange(option.value);
+    const committed = onChange(option.value);
+    if (committed === false) onPreviewCancel?.();
     setOpen(false);
     buttonRef.current?.focus();
   };
@@ -276,11 +306,15 @@ function SettingsSelect({
       event.preventDefault();
       if (!open) {
         openMenu();
+        const delta = event.key === "ArrowDown" ? 1 : -1;
+        setActiveOption(
+          Math.min(Math.max(selectedIndex + delta, 0), options.length - 1),
+        );
         return;
       }
       const delta = event.key === "ArrowDown" ? 1 : -1;
-      setActiveIndex((index) =>
-        Math.min(Math.max(index + delta, 0), options.length - 1),
+      setActiveOption(
+        Math.min(Math.max(activeIndex + delta, 0), options.length - 1),
       );
       return;
     }
@@ -288,7 +322,7 @@ function SettingsSelect({
     if (event.key === "Home" || event.key === "End") {
       event.preventDefault();
       if (!open) openMenu();
-      setActiveIndex(event.key === "Home" ? 0 : options.length - 1);
+      setActiveOption(event.key === "Home" ? 0 : options.length - 1);
       return;
     }
 
@@ -322,12 +356,12 @@ function SettingsSelect({
           open ? `${selectId}-option-${activeIndex}` : undefined
         }
         disabled={disabled}
-        onClick={() => (open ? setOpen(false) : openMenu())}
+        onClick={() => (open ? closeMenu() : openMenu())}
         onKeyDown={handleKeyDown}
-        title={selectedOption?.label ?? value}
+        title={activeOption?.label ?? value}
       >
         <span className="rr-settings-select-value">
-          {selectedOption?.label ?? value}
+          {(open ? activeOption : selectedOption)?.label ?? value}
         </span>
         <ChevronDownIcon />
       </button>
@@ -348,7 +382,7 @@ function SettingsSelect({
               type="button"
               role="option"
               aria-selected={option.value === value}
-              onMouseEnter={() => setActiveIndex(index)}
+              onMouseEnter={() => setActiveOption(index)}
               onClick={() => chooseOption(index)}
             >
               {option.label}
@@ -431,9 +465,12 @@ function SettingsLoading() {
 function SettingsPage({
   service,
   themeController,
+  initialSection = "general",
+  onApiKeyConfiguredChange,
   onPreferencesSave,
 }: SettingsPageProps) {
-  const [activeSection, setActiveSection] = useState<SettingsSection>("general");
+  const [activeSection, setActiveSection] =
+    useState<SettingsSection>(initialSection);
   const [snapshot, setSnapshot] = useState<SettingsSnapshot>();
   const [loadStatus, setLoadStatus] = useState<"loading" | "ready" | "error">(
     "loading",
@@ -453,7 +490,7 @@ function SettingsPage({
   const [documentVisible, setDocumentVisible] = useState(
     () => typeof document === "undefined" || document.visibilityState === "visible",
   );
-  const [usageRange, setUsageRange] = useState<ModelUsageRange>("last7Days");
+  const [usageRange, setUsageRange] = useState<ModelUsageRange>("today");
   const [usageStatus, setUsageStatus] = useState<RequestStatus>("idle");
   const [usageSummary, setUsageSummary] = useState<ModelUsageSummary>();
   const [usageError, setUsageError] = useState<string>();
@@ -475,6 +512,10 @@ function SettingsPage({
   const [themeStatus, setThemeStatus] = useState<RequestStatus>("idle");
   const [themeMessage, setThemeMessage] = useState<string>();
   const [themeRetry, setThemeRetry] = useState<ThemeMutationRetry>();
+  const [themePreview, setThemePreview] = useState<{
+    themeId: string;
+    mode: ThemeMode;
+  }>();
   const mountedRef = useRef(false);
   const operationKeyRef = useRef(0);
   const balanceControllerRef = useRef<{
@@ -646,6 +687,7 @@ function SettingsPage({
       (nextSnapshot) => {
         if (ignore) return;
         setSnapshot(nextSnapshot);
+        onApiKeyConfiguredChange?.(nextSnapshot.apiKeyConfigured);
         setShortcutError(nextSnapshot.shortcutRegistrationError ?? undefined);
         setEditingKey(!nextSnapshot.apiKeyConfigured);
         setLoadStatus("ready");
@@ -659,7 +701,7 @@ function SettingsPage({
     return () => {
       ignore = true;
     };
-  }, [retryToken, service]);
+  }, [onApiKeyConfiguredChange, retryToken, service]);
 
   useEffect(() => {
     if (!service) {
@@ -760,6 +802,7 @@ function SettingsPage({
         return;
       }
       setSnapshot(nextSnapshot);
+      onApiKeyConfiguredChange?.(nextSnapshot.apiKeyConfigured);
       setKeyDraft("");
       setEditingKey(false);
       balanceControllerRef.current?.controller.replaceCredential({
@@ -806,6 +849,7 @@ function SettingsPage({
         return;
       }
       setSnapshot(nextSnapshot);
+      onApiKeyConfiguredChange?.(nextSnapshot.apiKeyConfigured);
       setKeyDraft("");
       setEditingKey(true);
       balanceControllerRef.current?.controller.replaceCredential({
@@ -1140,26 +1184,51 @@ function SettingsPage({
     }
   }
 
-  function selectTheme(themeId: string, mode?: ThemeMode) {
+  function resolveThemeMode(themeId: string, mode?: ThemeMode) {
     const theme = themeController.snapshot.themes.find(
       (candidate) => candidate.manifest.id === themeId,
     );
-    if (!theme) return;
-    const selectedMode = mode ?? (
+    if (!theme) return undefined;
+    return mode ?? (
       theme.manifest.modes.includes(themeController.snapshot.currentMode)
         ? themeController.snapshot.currentMode
         : theme.manifest.modes[0]
     );
+  }
+
+  function selectTheme(themeId: string, mode?: ThemeMode): boolean {
+    const theme = themeController.snapshot.themes.find(
+      (candidate) => candidate.manifest.id === themeId,
+    );
+    const selectedMode = resolveThemeMode(themeId, mode);
+    if (!theme || !selectedMode) return false;
     if (
       themeId === themeController.snapshot.currentThemeId &&
       selectedMode === themeController.snapshot.currentMode
-    ) return;
+    ) {
+      restoreThemePreview();
+      return false;
+    }
+    setThemePreview(undefined);
     void runThemeMutation(
       "主题选择",
       { kind: "select", themeId, mode: selectedMode },
       () => themeController.select(themeId, selectedMode),
       () => `已应用 ${theme.manifest.name} · ${selectedMode === "light" ? "浅色" : "深色"}。`,
     );
+    return true;
+  }
+
+  function previewTheme(themeId: string, mode?: ThemeMode) {
+    const selectedMode = resolveThemeMode(themeId, mode);
+    if (!selectedMode) return;
+    themeController.preview(themeId, selectedMode);
+    setThemePreview({ themeId, mode: selectedMode });
+  }
+
+  function restoreThemePreview() {
+    themeController.restorePreview();
+    setThemePreview(undefined);
   }
 
   function retryThemeMutation() {
@@ -1207,12 +1276,17 @@ function SettingsPage({
 
   const balanceStatus = balanceState.status;
   const balance = balanceState.value;
+  const balanceError = balanceState.error === undefined
+    ? undefined
+    : errorMessage(balanceState.error);
   const validationMessage =
     operation === "saving"
       ? "正在验证 DeepSeek 连接，成功后才会替换现有配置…"
       : operationError ?? operationMessage;
+  const selectedThemeId = themePreview?.themeId ?? themeController.snapshot.currentThemeId;
+  const selectedThemeMode = themePreview?.mode ?? themeController.snapshot.currentMode;
   const selectedTheme = themeController.snapshot.themes.find(
-    (theme) => theme.manifest.id === themeController.snapshot.currentThemeId,
+    (theme) => theme.manifest.id === selectedThemeId,
   );
   const themeBusy =
     themeStatus === "loading" || themeController.status === "loading";
@@ -1411,29 +1485,26 @@ function SettingsPage({
                   <GroupHeading title="主题" />
                   <div className="rr-settings-panel">
                     <div className="rr-settings-row">
-                      <SettingsCopy
-                        label="当前主题"
-                        help={selectedTheme
-                          ? `${selectedTheme.manifest.author} · ${selectedTheme.manifest.version}`
-                          : "数据库主题暂不可用"}
-                      />
+                      <SettingsCopy label="当前主题" />
                       <div className="rr-settings-stack-control">
                         <div className="rr-settings-appearance-actions">
                           <SettingsSelect
                             className="rr-settings-theme-select"
                             label="主题"
-                            value={themeController.snapshot.currentThemeId}
+                            value={selectedThemeId}
                             options={themeController.snapshot.themes.map((theme) => ({
                               value: theme.manifest.id,
                               label: theme.manifest.name,
                             }))}
                             disabled={themeBusy || themeController.status === "error"}
                             onChange={(value) => selectTheme(value)}
+                            onPreview={(value) => previewTheme(value)}
+                            onPreviewCancel={restoreThemePreview}
                           />
                           <SettingsSelect
                             className="rr-settings-theme-mode-select"
                             label="主题模式"
-                            value={themeController.snapshot.currentMode}
+                            value={selectedThemeMode}
                             options={
                               selectedTheme?.manifest.modes.map((mode) => ({
                                 value: mode,
@@ -1446,9 +1517,14 @@ function SettingsPage({
                               (selectedTheme?.manifest.modes.length ?? 0) <= 1
                             }
                             onChange={(value) => selectTheme(
-                              themeController.snapshot.currentThemeId,
+                              selectedThemeId,
                               value as ThemeMode,
                             )}
+                            onPreview={(value) => previewTheme(
+                              selectedThemeId,
+                              value as ThemeMode,
+                            )}
+                            onPreviewCancel={restoreThemePreview}
                           />
                         </div>
                       </div>
@@ -1462,15 +1538,13 @@ function SettingsPage({
                       </button>
                     </div>
                   ) : null}
-                  {themeMessage ? (
+                  {themeMessage && themeStatus === "error" ? (
                     <div
-                      className={`rr-settings-inline-message ${
-                        themeStatus === "error" ? "is-error" : "is-success"
-                      }`}
-                      role={themeStatus === "error" ? "alert" : "status"}
+                      className="rr-settings-inline-message is-error"
+                      role="alert"
                     >
                       <span>{themeMessage}</span>
-                      {themeStatus === "error" && themeRetry ? (
+                      {themeRetry ? (
                         <button type="button" onClick={retryThemeMutation}>
                           重试
                         </button>
@@ -1796,6 +1870,11 @@ function SettingsPage({
                                 : "正在准备查询…"}
                       </div>
                     )}
+                    {balanceStatus === "error" && balanceError ? (
+                      <div className="rr-settings-balance-error" role="alert">
+                        查询详情：{balanceError}
+                      </div>
+                    ) : null}
                   </div>
                   <button
                     className="rr-settings-button"

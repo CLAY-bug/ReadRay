@@ -186,7 +186,7 @@ test("ThemeService 严格校验当前 themeId、模式和内置默认主题", as
     validateThemeSnapshot(snapshot({ currentThemeId: "missing-theme" })),
   );
   assert.throws(() =>
-    validateThemeSnapshot(snapshot({ currentMode: "dark" })),
+    validateThemeSnapshot(snapshot({ currentMode: "sepia" })),
   );
   const missingBuiltin = snapshot({ themes: [customTheme()] });
   assert.throws(() => validateThemeSnapshot(missingBuiltin));
@@ -265,6 +265,22 @@ test("ReadRay Default 应用前后保留原有主应用 CSS 变量值", async ()
   }
 });
 
+test("ReadRay Default 补充与浅色同语义层级的深色模式，并沿用 Graphite + Amber 品牌色", async () => {
+  assert.deepEqual(READRAY_DEFAULT_THEME.manifest.modes, ["light", "dark"]);
+  assert.ok(READRAY_DEFAULT_THEME.dark);
+  const darkRuntime = themeCssVariables({
+    ...clone(DEFAULT_THEME_SNAPSHOT),
+    currentMode: "dark",
+  });
+  assert.equal(darkRuntime["--rr-main-bg"], "#0d0d0b");
+  assert.equal(darkRuntime["--rr-main-sidebar"], "#171512");
+  assert.equal(darkRuntime["--rr-main-surface"], "#1f1b18");
+  assert.equal(darkRuntime["--rr-main-fg"], "#f6f0e8");
+  assert.equal(darkRuntime["--rr-main-accent"], "#ff6a32");
+  assert.equal(darkRuntime["--rr-main-accent-text"], "#0d0d0b");
+  assert.equal(darkRuntime["--rr-main-shadow"], "rgba(0, 0, 0, 0.32)");
+});
+
 test("Flexoki 内置主题默认可见、支持双模式切换，且运行时变量随模式映射", async () => {
   const lightSnapshot = {
     ...clone(DEFAULT_THEME_SNAPSHOT),
@@ -285,9 +301,9 @@ test("Flexoki 内置主题默认可见、支持双模式切换，且运行时变
   assert.equal(darkRuntime["--rr-main-accent"], "#3aa99f");
   assert.equal(darkRuntime["--rr-main-fg"], "#cecdc3");
 
-  // 主题列表默认包含全部随包内置主题（ReadRay Default、Flexoki 与 28 个 Codex 主题），且都不可删除。
+  // 主题列表默认包含 ReadRay Default、Flexoki 与 15 个双模式 Codex 主题，且都不可删除。
   const list = validateThemeSnapshot(DEFAULT_THEME_SNAPSHOT).themes;
-  assert.equal(list.length, 30);
+  assert.equal(list.length, 17);
   assert.ok(list.every((theme) => theme.builtin));
   const coordinator = new ThemeMutationCoordinator({
     service: {
@@ -307,30 +323,26 @@ test("Flexoki 内置主题默认可见、支持双模式切换，且运行时变
 test("Codex 内置主题清单、模式支持、唯一 ID、删除限制与运行时变量映射", async () => {
   const themes = validateThemeSnapshot(DEFAULT_THEME_SNAPSHOT).themes;
   const codexThemes = themes.filter((theme) => theme.manifest.id !== "readray-default" && theme.manifest.id !== "flexoki");
-  assert.equal(codexThemes.length, 28);
+  assert.equal(codexThemes.length, 15);
 
   // 唯一 ID
   const ids = new Set(codexThemes.map((theme) => theme.manifest.id));
-  assert.equal(ids.size, 28);
+  assert.equal(ids.size, 15);
 
-  // 模式支持：单模式主题不虚构另一模式
-  const ayu = codexThemes.find((t) => t.manifest.id === "ayu");
-  assert.deepEqual(ayu.manifest.modes, ["dark"]);
-  assert.equal(ayu.light, null);
-  assert.ok(ayu.dark);
-
-  const proof = codexThemes.find((t) => t.manifest.id === "proof");
-  assert.deepEqual(proof.manifest.modes, ["light"]);
-  assert.equal(proof.dark, null);
-  assert.ok(proof.light);
-
+  // 内置 Codex 主题只保留同时支持两种模式的主题。
+  assert.ok(codexThemes.every((theme) => {
+    assert.deepEqual(theme.manifest.modes, ["dark", "light"]);
+    assert.ok(theme.dark);
+    assert.ok(theme.light);
+    return true;
+  }));
   const catppuccin = codexThemes.find((t) => t.manifest.id === "catppuccin");
   assert.deepEqual(catppuccin.manifest.modes, ["dark", "light"]);
   assert.ok(catppuccin.dark);
   assert.ok(catppuccin.light);
 
   // 每个主题 token 完整（28 个颜色字段），且颜色规范
-  const colorFieldCount = Object.keys(ayu.dark).length;
+  const colorFieldCount = Object.keys(catppuccin.dark).length;
   assert.equal(colorFieldCount, 28);
 
   // 内置主题删除限制
@@ -344,19 +356,19 @@ test("Codex 内置主题清单、模式支持、唯一 ID、删除限制与运�
     },
     apply: () => undefined,
   });
-  const outcome = await coordinator.delete(DEFAULT_THEME_SNAPSHOT, "ayu");
+  const outcome = await coordinator.delete(DEFAULT_THEME_SNAPSHOT, "catppuccin");
   assert.equal(outcome.status, "failed");
   assert.match(outcome.message, /内置主题不能删除/);
 
-  // 运行时变量映射：ayu dark 应用后背景/前景/强调
-  const ayuDark = themeCssVariables({
+  // 运行时变量映射：Catppuccin dark 应用后背景/前景/强调
+  const catppuccinDark = themeCssVariables({
     ...clone(DEFAULT_THEME_SNAPSHOT),
-    currentThemeId: "ayu",
+    currentThemeId: "catppuccin",
     currentMode: "dark",
   });
-  assert.equal(ayuDark["--rr-main-bg"], "#10141c");
-  assert.equal(ayuDark["--rr-main-fg"], "#bfbdb6");
-  assert.equal(ayuDark["--rr-main-accent"], "#e6b450");
+  assert.equal(catppuccinDark["--rr-main-bg"], "#1e1e2e");
+  assert.equal(catppuccinDark["--rr-main-fg"], "#cdd6f4");
+  assert.equal(catppuccinDark["--rr-main-accent"], "#cba6f7");
 });
 
 test("主题选择失败会恢复数据库权威主题并保留可重试请求", async () => {
@@ -513,7 +525,10 @@ test("主应用主题敏感背景、焦点、状态色和阴影不再绕过语�
   assert.doesNotMatch(settingsCss, graphiteShadow);
   assert.doesNotMatch(writingCss, graphiteShadow);
   assert.match(mainCss, /--rr-main-shadow:/);
-  assert.match(settingsCss, /box-shadow:\s*0 4px 12px var\(--rr-main-shadow\)/);
+  assert.match(
+    settingsCss,
+    /box-shadow:\s*0 0 0 2px color-mix\(in oklab, var\(--rr-main-accent\), transparent 78%\)/,
+  );
 });
 
 test("正式主题路径不使用前端存储、不执行原始 CSS，也不联网下载主题", async () => {

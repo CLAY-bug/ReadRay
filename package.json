@@ -13,6 +13,7 @@
     "test:writing": "node --test tests/writing*.test.mjs",
     "test:settings": "node --test tests/settingsService.test.mjs tests/themeService.test.mjs tests/desktopLifecycle.test.mjs tests/desktopContextMenu.test.mjs tests/mainSidebarWidth.test.mjs tests/sidebarAutoCollapse.test.mjs",
     "test:startup": "node --test tests/startupBrand.test.mjs",
+    "release:build": "tauri build",
     "tauri": "tauri"
   },
   "dependencies": {

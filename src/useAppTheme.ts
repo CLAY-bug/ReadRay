@@ -28,6 +28,8 @@ export type AppThemeController = {
   status: "loading" | "ready" | "error";
   error?: string;
   reload(): Promise<void>;
+  preview(themeId: string, mode: ThemeMode): void;
+  restorePreview(): void;
   importPackage(): Promise<ThemeMutationOutcome>;
   select(themeId: string, mode: ThemeMode): Promise<ThemeMutationOutcome>;
   delete(themeId: string): Promise<ThemeMutationOutcome>;
@@ -49,17 +51,39 @@ export function useAppTheme(service: ThemeService | null): AppThemeController {
   const reloadPendingRef = useRef(false);
   const snapshotRef = useRef(snapshot);
 
-  const apply = useCallback((next: ThemeSnapshot) => {
-    const validated = validateThemeSnapshot(next);
+  const applyRuntime = useCallback((validated: ThemeSnapshot) => {
     const mainApp = document.querySelector<HTMLElement>(".rr-main-app");
     if (!mainApp) throw new Error("ReadRay 主应用尚未就绪，无法应用主题。");
     applyThemeVariables(mainApp.style, validated);
     void syncMainWindowBackground(validated);
+  }, []);
+
+  const apply = useCallback((next: ThemeSnapshot) => {
+    const validated = validateThemeSnapshot(next);
+    applyRuntime(validated);
     snapshotRef.current = validated;
     setSnapshot(validated);
     setStatus("ready");
     setError(undefined);
-  }, []);
+  }, [applyRuntime]);
+
+  const preview = useCallback((themeId: string, mode: ThemeMode) => {
+    // 预览只改变当前 WebView/原生背景，不推进 snapshotRef 或 SQLite 权威状态。
+    const authority = snapshotRef.current;
+    const theme = authority.themes.find(
+      (candidate) => candidate.manifest.id === themeId,
+    );
+    if (!theme || !theme.manifest.modes.includes(mode)) return;
+    applyRuntime(validateThemeSnapshot({
+      ...authority,
+      currentThemeId: themeId,
+      currentMode: mode,
+    }));
+  }, [applyRuntime]);
+
+  const restorePreview = useCallback(() => {
+    applyRuntime(snapshotRef.current);
+  }, [applyRuntime]);
 
   const coordinator = useState(() =>
     service ? new ThemeMutationCoordinator({ service, apply }) : null,
@@ -166,6 +190,8 @@ export function useAppTheme(service: ThemeService | null): AppThemeController {
     status,
     error,
     reload,
+    preview,
+    restorePreview,
     importPackage: () => run((authority) => coordinator!.importPackage(authority)),
     select: (themeId, mode) => run((authority) => coordinator!.select(authority, themeId, mode)),
     delete: (themeId) => run((authority) => coordinator!.delete(authority, themeId)),
