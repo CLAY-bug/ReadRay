@@ -17,7 +17,7 @@ ReadRay 是一个 Windows 优先、本地优先的英语学习 Agent。它把真
 3. 填写并验证自己的 DeepSeek API Key；密钥保存在 Windows Credential Manager，不写入 SQLite 或普通日志。
 4. 回到今天、对话或 Quick AI 开始使用。
 
-安装包是 Windows x64 NSIS 当前用户安装版本，不要求管理员权限。首次安装 WebView2 可能需要联网下载运行时。
+安装包是 Windows x64 NSIS 当前用户安装版本，不要求管理员权限。
 
 ## 已知边界
 
@@ -29,9 +29,9 @@ ReadRay 是一个 Windows 优先、本地优先的英语学习 Agent。它把真
 
 ```text
 文件：ReadRay_0.1.0_x64-setup.exe
-SHA-256：待源码冻结、重新构建并完成最终签名后填写
+SHA-256：1ADD481473D461679C9BC85FC92C4AF31A837E88FFF1C32A89464291B573522B
 ```
 
-上传前必须对最终待发布文件重新计算 SHA-256；代码签名会改变文件内容，因此必须以签名后文件的结果替换上述占位文字。
+以上 SHA-256 对应本次未签名的 RC1 安装包；如果后续进行代码签名或重新构建，必须重新计算并更新该值。
 
 欢迎通过 GitHub Issues 提交安装、首次配置、快捷键、解释质量或复习体验反馈。Preview 的目的就是先观察真实使用，再决定阶段九和后续优化的优先级。
