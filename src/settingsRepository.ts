@@ -1,6 +1,11 @@
 import { invoke } from "@tauri-apps/api/core";
+import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { save } from "@tauri-apps/plugin-dialog";
 import type { AppPreferences } from "./appPreferences";
+import type {
+  ShortcutRecordingAction,
+  ShortcutRecordingResult,
+} from "./desktopLifecycle";
 import type {
   DatabaseBackupResult,
   DeepSeekBalance,
@@ -17,6 +22,11 @@ export interface SettingsRepository {
   get(): Promise<SettingsSnapshot>;
   getPreferences(): Promise<AppPreferences>;
   updatePreferences(preferences: AppPreferences): Promise<AppPreferences>;
+  beginShortcutRecording(action: ShortcutRecordingAction): Promise<void>;
+  cancelShortcutRecording(): Promise<void>;
+  listenShortcutRecording(
+    listener: (result: ShortcutRecordingResult) => void,
+  ): Promise<UnlistenFn>;
   getAutostartEnabled(): Promise<boolean>;
   setAutostartEnabled(enabled: boolean): Promise<boolean>;
   validateAndSaveApiKey(apiKey: string): Promise<SettingsSnapshot>;
@@ -60,6 +70,20 @@ export class TauriSettingsRepository implements SettingsRepository {
   updatePreferences(preferences: AppPreferences) {
     return this.invokeCommand<AppPreferences>("update_app_preferences", {
       preferences,
+    });
+  }
+
+  beginShortcutRecording(action: ShortcutRecordingAction) {
+    return this.invokeCommand<void>("begin_shortcut_recording", { action });
+  }
+
+  cancelShortcutRecording() {
+    return this.invokeCommand<void>("cancel_shortcut_recording");
+  }
+
+  listenShortcutRecording(listener: (result: ShortcutRecordingResult) => void) {
+    return listen<ShortcutRecordingResult>("readray://shortcut-recorded", (event) => {
+      listener(event.payload);
     });
   }
 

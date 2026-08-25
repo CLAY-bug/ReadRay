@@ -45,6 +45,7 @@ import type { SettingsService } from "../settingsService";
 import type { AppPreferences } from "../appPreferences";
 import type { AppPreferenceSaveOutcome } from "../appPreferenceSaveCoordinator";
 import type { AppThemeController } from "../useAppTheme";
+import ApiKeySetupCard from "./ApiKeySetupCard";
 import ConversationPage from "./ConversationPage";
 import ConversationHistoryPage from "./ConversationHistoryPage";
 import ConversationManagementMenu, {
@@ -54,7 +55,7 @@ import MainAppIcon from "./MainAppIcon";
 import MainSidebar from "./MainSidebar";
 import MemoryPage from "./MemoryPage";
 import ReviewPage from "./ReviewPage";
-import SettingsPage from "./SettingsPage";
+import SettingsPage, { type SettingsSection } from "./SettingsPage";
 import TodayPage from "./TodayPage";
 import WritingPage from "./WritingPage";
 
@@ -149,6 +150,10 @@ function MainAppShell({
     useState<MainAppNavigationId | "conversation" | "conversation-history">(
       "today",
     );
+  const [settingsInitialSection, setSettingsInitialSection] =
+    useState<SettingsSection>("general");
+  const [apiKeyConfigured, setApiKeyConfigured] = useState<boolean | null>(null);
+  const [apiKeySetupDismissed, setApiKeySetupDismissed] = useState(false);
   const [activeConversationId, setActiveConversationId] = useState<string>();
   const conversationRequestKeyRef = useRef(0);
   const [conversationRequest, setConversationRequest] =
@@ -187,6 +192,34 @@ function MainAppShell({
   sidebarAutoCollapsedRef.current = sidebarAutoCollapsed;
   // 有效折叠 = 用户手动折叠或窗口过窄触发的自动折叠；手动切换优先表达用户意图。
   const sidebarEffectiveCollapsed = sidebarCollapsed || sidebarAutoCollapsed;
+
+  useEffect(() => {
+    let disposed = false;
+    if (!settingsService) {
+      setApiKeyConfigured(null);
+      return () => {
+        disposed = true;
+      };
+    }
+
+    setApiKeyConfigured(null);
+    void settingsService.loadSettings().then(
+      (snapshot) => {
+        if (!disposed) {
+          setApiKeyConfigured(snapshot.apiKeyConfigured);
+        }
+      },
+      (error) => {
+        if (!disposed) {
+          setApiKeyConfigured(null);
+          console.error("ReadRay AI 服务状态读取失败：", error);
+        }
+      },
+    );
+    return () => {
+      disposed = true;
+    };
+  }, [settingsService]);
 
   function updateActivePage(
     nextPageId: MainAppNavigationId | "conversation" | "conversation-history",
@@ -463,6 +496,9 @@ function MainAppShell({
     ) {
       updateActivePage(id);
     }
+    if (id === "settings") {
+      setSettingsInitialSection("general");
+    }
     if (id === "memory") {
       setRequestedMemoryRecordId(undefined);
     }
@@ -470,6 +506,19 @@ function MainAppShell({
       setWritingLibraryRequest((request) => request + 1);
     }
     onNavigate(id);
+  }
+
+  const handleApiKeyConfiguredChange = useCallback((configured: boolean) => {
+    setApiKeyConfigured(configured);
+    if (!configured) {
+      setApiKeySetupDismissed(false);
+    }
+  }, []);
+
+  function handleOpenApiKeySettings() {
+    setSettingsInitialSection("ai");
+    updateActivePage("settings");
+    onNavigate("settings");
   }
 
   function handleTodayActionSelect(id: TodayActionId) {
@@ -730,6 +779,16 @@ function MainAppShell({
         </div>
       </header>
 
+      {settingsService &&
+      apiKeyConfigured === false &&
+      activePageId !== "settings" &&
+      !apiKeySetupDismissed ? (
+        <ApiKeySetupCard
+          onOpenSettings={handleOpenApiKeySettings}
+          onDismiss={() => setApiKeySetupDismissed(true)}
+        />
+      ) : null}
+
       <div className="rr-main-workspace">
         <div className="rr-main-sidebar-slot">
           <MainSidebar
@@ -821,8 +880,11 @@ function MainAppShell({
           />
         ) : activePageId === "settings" ? (
           <SettingsPage
+            key={settingsInitialSection}
             service={settingsService}
             themeController={themeController}
+            initialSection={settingsInitialSection}
+            onApiKeyConfiguredChange={handleApiKeyConfiguredChange}
             onPreferencesSave={onPreferencesSave}
           />
         ) : activePageId === "writing" ? null : (

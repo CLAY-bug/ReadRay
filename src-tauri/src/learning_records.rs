@@ -13,7 +13,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use tauri::{AppHandle, Manager};
 
 const DATABASE_FILE_NAME: &str = "readray.sqlite3";
-const DATABASE_SCHEMA_VERSION: i64 = 21;
+const DATABASE_SCHEMA_VERSION: i64 = 22;
 const LEARNING_TARGET_CANONICALIZATION_VERSION: i64 = 1;
 const REVIEW_DAY_UNIX_MS: i64 = 24 * 60 * 60 * 1_000;
 pub const EXPLANATION_CARD_SCHEMA_VERSION: i64 = 2;
@@ -790,6 +790,16 @@ ALTER TABLE quick_ai_messages
   CHECK (truncated IN (0, 1));
 "#;
 
+/// 全局快捷键 v2：保留 v7 的历史字符串列，新 JSON 列成为版本化权威，
+/// 从而同时表达普通组合键与双击左 Alt，不删除或改写旧值。
+const MIGRATION_22: &str = r#"
+ALTER TABLE app_preferences
+  ADD COLUMN quick_query_binding_json TEXT;
+
+ALTER TABLE app_preferences
+  ADD COLUMN selection_explanation_binding_json TEXT;
+"#;
+
 const MIGRATIONS: &[(i64, &str)] = &[
     (1, MIGRATION_1),
     (2, MIGRATION_2),
@@ -809,9 +819,10 @@ const MIGRATIONS: &[(i64, &str)] = &[
     (16, MIGRATION_16),
     (17, MIGRATION_17),
     (18, MIGRATION_18),
-    (DATABASE_SCHEMA_VERSION - 2, MIGRATION_19),
-    (DATABASE_SCHEMA_VERSION - 1, MIGRATION_20),
-    (DATABASE_SCHEMA_VERSION, MIGRATION_21),
+    (19, MIGRATION_19),
+    (20, MIGRATION_20),
+    (21, MIGRATION_21),
+    (DATABASE_SCHEMA_VERSION, MIGRATION_22),
 ];
 
 #[derive(Clone, Debug, Serialize)]
@@ -1778,6 +1789,11 @@ fn migrate(connection: &mut Connection) -> Result<(), String> {
     let transaction = connection
         .transaction()
         .map_err(|error| format!("学习记录迁移事务无法开始：{error}"))?;
+    let starting_version: Option<i64> = transaction
+        .query_row("SELECT MAX(version) FROM schema_migrations", [], |row| {
+            row.get(0)
+        })
+        .map_err(|error| format!("学习记录迁移起始版本读取失败：{error}"))?;
 
     for &(version, sql) in MIGRATIONS {
         let applied: Option<i64> = transaction
@@ -1808,6 +1824,9 @@ fn migrate(connection: &mut Connection) -> Result<(), String> {
                 rebuild_learning_target_review_states_v19(&transaction)?;
                 audit_learning_target_aggregation_v19(&transaction)?;
             }
+            if version == 22 {
+                backfill_shortcut_bindings_v22(&transaction, starting_version.is_none())?;
+            }
             transaction
                 .execute(
                     "INSERT INTO schema_migrations (version, applied_at_unix_ms) VALUES (?1, ?2)",
@@ -1821,6 +1840,62 @@ fn migrate(connection: &mut Connection) -> Result<(), String> {
         .commit()
         .map_err(|error| format!("学习记录迁移事务无法提交：{error}"))?;
 
+    Ok(())
+}
+
+fn shortcut_chord_json(accelerator: &str) -> Result<String, String> {
+    serde_json::to_string(&serde_json::json!({
+        "version": 2,
+        "kind": "chord",
+        "accelerator": accelerator,
+    }))
+    .map_err(|error| format!("无法生成普通快捷键迁移数据：{error}"))
+}
+
+fn shortcut_double_left_alt_json() -> Result<String, String> {
+    serde_json::to_string(&serde_json::json!({
+        "version": 2,
+        "kind": "modifierDoubleTap",
+        "modifier": "Alt",
+        "side": "left",
+    }))
+    .map_err(|error| format!("无法生成双击左 Alt 迁移数据：{error}"))
+}
+
+fn backfill_shortcut_bindings_v22(
+    transaction: &Transaction<'_>,
+    fresh_database: bool,
+) -> Result<(), String> {
+    let (quick_query, selection_explanation) = if fresh_database {
+        (
+            shortcut_chord_json("Alt+Super+Space")?,
+            shortcut_double_left_alt_json()?,
+        )
+    } else {
+        let legacy = transaction
+            .query_row(
+                "SELECT quick_query_shortcut, selection_explanation_shortcut \
+                 FROM app_preferences WHERE id = 1",
+                [],
+                |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
+            )
+            .map_err(|error| format!("无法读取历史全局快捷键：{error}"))?;
+        (
+            shortcut_chord_json(&legacy.0)?,
+            shortcut_chord_json(&legacy.1)?,
+        )
+    };
+    let changed = transaction
+        .execute(
+            "UPDATE app_preferences \
+             SET quick_query_binding_json = ?1, selection_explanation_binding_json = ?2 \
+             WHERE id = 1",
+            params![quick_query, selection_explanation],
+        )
+        .map_err(|error| format!("无法迁移版本化全局快捷键：{error}"))?;
+    if changed != 1 {
+        return Err("版本化全局快捷键迁移未找到权威偏好行。".to_string());
+    }
     Ok(())
 }
 
@@ -3235,6 +3310,32 @@ mod tests {
             .unwrap();
 
         assert_eq!(version, DATABASE_SCHEMA_VERSION);
+        let bindings: (String, String) = store
+            .connection
+            .query_row(
+                "SELECT quick_query_binding_json, selection_explanation_binding_json
+                 FROM app_preferences WHERE id = 1",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&bindings.0).unwrap(),
+            serde_json::json!({
+                "version": 2,
+                "kind": "chord",
+                "accelerator": "Alt+Super+Space",
+            })
+        );
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&bindings.1).unwrap(),
+            serde_json::json!({
+                "version": 2,
+                "kind": "modifierDoubleTap",
+                "modifier": "Alt",
+                "side": "left",
+            })
+        );
         assert!(path.exists());
         drop(store);
         let _ = fs::remove_dir_all(root);
@@ -5283,11 +5384,22 @@ INSERT INTO review_card_generation_failures (
         drop(connection);
 
         let upgraded = open_database(&path).unwrap();
-        let values: (i64, i64, i64, String, String, String, String) = upgraded
+        let values: (
+            i64,
+            i64,
+            i64,
+            String,
+            String,
+            String,
+            String,
+            String,
+            String,
+        ) = upgraded
             .query_row(
                 "SELECT revision, ui_font_size, learning_font_size, send_shortcut,
                         close_behavior, quick_query_shortcut,
-                        selection_explanation_shortcut
+                        selection_explanation_shortcut, quick_query_binding_json,
+                        selection_explanation_binding_json
                  FROM app_preferences WHERE id = 1",
                 [],
                 |row| {
@@ -5299,6 +5411,8 @@ INSERT INTO review_card_generation_failures (
                         row.get(4)?,
                         row.get(5)?,
                         row.get(6)?,
+                        row.get(7)?,
+                        row.get(8)?,
                     ))
                 },
             )
@@ -5310,17 +5424,28 @@ INSERT INTO review_card_generation_failures (
                 |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
             )
             .unwrap();
+        assert_eq!(values.0, 4);
+        assert_eq!(values.1, 16);
+        assert_eq!(values.2, 20);
+        assert_eq!(values.3, "ctrl_enter");
+        assert_eq!(values.4, "hide_to_tray");
+        assert_eq!(values.5, "Ctrl+Alt+R");
+        assert_eq!(values.6, "Ctrl+Alt+U");
         assert_eq!(
-            values,
-            (
-                4,
-                16,
-                20,
-                "ctrl_enter".to_string(),
-                "hide_to_tray".to_string(),
-                "Ctrl+Alt+R".to_string(),
-                "Ctrl+Alt+U".to_string(),
-            )
+            serde_json::from_str::<serde_json::Value>(&values.7).unwrap(),
+            serde_json::json!({
+                "version": 2,
+                "kind": "chord",
+                "accelerator": "Ctrl+Alt+R",
+            })
+        );
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&values.8).unwrap(),
+            serde_json::json!({
+                "version": 2,
+                "kind": "chord",
+                "accelerator": "Ctrl+Alt+U",
+            })
         );
         assert_eq!(
             theme_defaults,

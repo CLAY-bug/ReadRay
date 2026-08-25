@@ -256,7 +256,7 @@ function OverlayApp() {
   );
   const { preferences } = useAppPreferences(settingsService);
   const previewAnchorRef = useRef<HTMLDivElement>(null);
-  const [shortcutLabel, setShortcutLabel] = useState("Ctrl+Alt+R");
+  const [shortcutLabel, setShortcutLabel] = useState("Alt+Win+Space");
   const [windowCheck, setWindowCheck] = useState<CheckResult>(idle);
   const [clipboardCheck, setClipboardCheck] = useState<CheckResult>(idle);
   const [sqliteCheck, setSqliteCheck] = useState<CheckResult>(idle);

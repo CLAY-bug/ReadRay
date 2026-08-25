@@ -14,6 +14,8 @@ use tauri::{AppHandle, Emitter, Manager};
 use tauri_plugin_autostart::ManagerExt as AutostartManagerExt;
 use tauri_plugin_opener::OpenerExt;
 
+const SHORTCUT_BINDING_VERSION: u8 = 2;
+
 static BACKUP_TEMP_COUNTER: AtomicU64 = AtomicU64::new(0);
 
 #[derive(Serialize)]
@@ -129,6 +131,66 @@ impl SendShortcut {
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
+#[serde(tag = "kind", rename_all = "camelCase", deny_unknown_fields)]
+pub enum ShortcutBinding {
+    Chord {
+        version: u8,
+        accelerator: String,
+    },
+    ModifierDoubleTap {
+        version: u8,
+        modifier: ShortcutModifier,
+        side: ShortcutModifierSide,
+    },
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq, Serialize)]
+pub enum ShortcutModifier {
+    Alt,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum ShortcutModifierSide {
+    Left,
+}
+
+impl ShortcutBinding {
+    pub(crate) fn chord(accelerator: impl Into<String>) -> Self {
+        Self::Chord {
+            version: SHORTCUT_BINDING_VERSION,
+            accelerator: accelerator.into(),
+        }
+    }
+
+    pub(crate) fn double_left_alt() -> Self {
+        Self::ModifierDoubleTap {
+            version: SHORTCUT_BINDING_VERSION,
+            modifier: ShortcutModifier::Alt,
+            side: ShortcutModifierSide::Left,
+        }
+    }
+
+    pub(crate) fn validate_version(&self, label: &str) -> Result<(), String> {
+        let version = match self {
+            Self::Chord { version, .. } | Self::ModifierDoubleTap { version, .. } => *version,
+        };
+        if version != SHORTCUT_BINDING_VERSION {
+            return Err(format!("{label}快捷键版本不受支持。"));
+        }
+        Ok(())
+    }
+
+    fn storage_json(&self, label: &str) -> Result<String, String> {
+        serde_json::to_string(self).map_err(|error| format!("无法保存{label}快捷键：{error}"))
+    }
+
+    fn from_storage(value: &str, label: &str) -> Result<Self, String> {
+        serde_json::from_str(value).map_err(|error| format!("数据库中的{label}快捷键无效：{error}"))
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct AppPreferences {
     pub(crate) revision: i64,
@@ -138,8 +200,8 @@ pub struct AppPreferences {
     learning_font_size: i64,
     send_shortcut: SendShortcut,
     pub(crate) close_behavior: CloseBehavior,
-    pub(crate) quick_query_shortcut: String,
-    pub(crate) selection_explanation_shortcut: String,
+    pub(crate) quick_query_binding: ShortcutBinding,
+    pub(crate) selection_explanation_binding: ShortcutBinding,
 }
 
 impl Default for AppPreferences {
@@ -152,9 +214,10 @@ impl Default for AppPreferences {
             learning_font_size: 17,
             send_shortcut: SendShortcut::Enter,
             close_behavior: CloseBehavior::HideToTray,
-            quick_query_shortcut: desktop_lifecycle::DEFAULT_QUICK_QUERY_SHORTCUT.to_string(),
-            selection_explanation_shortcut:
-                desktop_lifecycle::DEFAULT_SELECTION_EXPLANATION_SHORTCUT.to_string(),
+            quick_query_binding: ShortcutBinding::chord(
+                desktop_lifecycle::DEFAULT_QUICK_QUERY_SHORTCUT,
+            ),
+            selection_explanation_binding: ShortcutBinding::double_left_alt(),
         }
     }
 }
@@ -170,8 +233,8 @@ fn validate_app_preferences(preferences: &AppPreferences) -> Result<(), String> 
         return Err("学习内容字号必须在 14–24 px 之间。".to_string());
     }
     desktop_lifecycle::validate_shortcut_pair(
-        &preferences.quick_query_shortcut,
-        &preferences.selection_explanation_shortcut,
+        &preferences.quick_query_binding,
+        &preferences.selection_explanation_binding,
     )?;
     Ok(())
 }
@@ -180,7 +243,7 @@ fn read_app_preferences(connection: &Connection) -> Result<AppPreferences, Strin
     let stored = connection
         .query_row(
             "SELECT revision, ui_font, ui_font_size, learning_font, learning_font_size, send_shortcut, \
-                    close_behavior, quick_query_shortcut, selection_explanation_shortcut \
+                    close_behavior, quick_query_binding_json, selection_explanation_binding_json \
              FROM app_preferences WHERE id = 1",
             [],
             |row| {
@@ -206,8 +269,8 @@ fn read_app_preferences(connection: &Connection) -> Result<AppPreferences, Strin
         learning_font_size: stored.4,
         send_shortcut: SendShortcut::from_storage(&stored.5)?,
         close_behavior: CloseBehavior::from_storage(&stored.6)?,
-        quick_query_shortcut: stored.7,
-        selection_explanation_shortcut: stored.8,
+        quick_query_binding: ShortcutBinding::from_storage(&stored.7, "快速查询")?,
+        selection_explanation_binding: ShortcutBinding::from_storage(&stored.8, "选区解释")?,
     };
     validate_app_preferences(&preferences)?;
     Ok(preferences)
@@ -226,8 +289,8 @@ fn save_app_preferences(
             "UPDATE app_preferences \
              SET revision = revision + 1, ui_font = ?1, ui_font_size = ?2, \
                  learning_font = ?3, learning_font_size = ?4, send_shortcut = ?5, \
-                 close_behavior = ?6, quick_query_shortcut = ?7, \
-                 selection_explanation_shortcut = ?8 \
+                 close_behavior = ?6, quick_query_binding_json = ?7, \
+                 selection_explanation_binding_json = ?8 \
              WHERE id = 1 AND revision = ?9",
             params![
                 preferences.ui_font.storage_value(),
@@ -236,8 +299,10 @@ fn save_app_preferences(
                 preferences.learning_font_size,
                 preferences.send_shortcut.storage_value(),
                 preferences.close_behavior.storage_value(),
-                preferences.quick_query_shortcut,
-                preferences.selection_explanation_shortcut,
+                preferences.quick_query_binding.storage_json("快速查询")?,
+                preferences
+                    .selection_explanation_binding
+                    .storage_json("选区解释")?,
                 preferences.revision,
             ],
         )
@@ -930,7 +995,7 @@ mod tests {
     fn ambiguous_preference_save_only_confirms_matching_advanced_authority() {
         let candidate = AppPreferences {
             revision: 3,
-            quick_query_shortcut: "Ctrl+Shift+R".to_string(),
+            quick_query_binding: ShortcutBinding::chord("Ctrl+Shift+R"),
             ..AppPreferences::default()
         };
         assert!(is_expected_saved_candidate(
@@ -944,7 +1009,7 @@ mod tests {
         assert!(!is_expected_saved_candidate(
             &AppPreferences {
                 revision: 4,
-                quick_query_shortcut: "Ctrl+Alt+R".to_string(),
+                quick_query_binding: ShortcutBinding::chord("Ctrl+Alt+R"),
                 ..candidate.clone()
             },
             &candidate,

@@ -180,6 +180,22 @@ export function isUsableEnglishText(value?: string | null) {
   return latinCount >= 8 && !hasCjk(text);
 }
 
+// UIA 的 contextText 是原始追踪信息，最多可到 4096 个字符；它可能是整页内容、
+// 终端输出或带 Powerline 私有区字符的窗口文本。复习单词时只接受紧凑的自然语境，
+// 过长/带终端装饰的原文回退到目标词，避免把整段日志渲染成一张词汇卡。
+const MAX_RECORDED_REVIEW_CONTEXT_CHARS = 640;
+
+function hasPrivateUseCharacters(value: string) {
+  return [...value].some((character) => {
+    const codePoint = character.codePointAt(0) ?? 0;
+    return (
+      (codePoint >= 0xe000 && codePoint <= 0xf8ff) ||
+      (codePoint >= 0xf0000 && codePoint <= 0xffffd) ||
+      (codePoint >= 0x100000 && codePoint <= 0x10fffd)
+    );
+  });
+}
+
 function splitAroundNeedle(source: string, needle: string) {
   if (!source || !needle) return undefined;
   const sourceLower = source.toLocaleLowerCase("en-US");
@@ -210,6 +226,12 @@ function splitAroundNeedle(source: string, needle: string) {
 
 export function isUsableEnglishContext(value: string | null | undefined, query: string) {
   const text = cleanText(value);
+  if (
+    [...text].length > MAX_RECORDED_REVIEW_CONTEXT_CHARS ||
+    hasPrivateUseCharacters(text)
+  ) {
+    return false;
+  }
   const match = splitAroundNeedle(text, query);
   if (!isUsableEnglishText(text) || !match) return false;
   const surroundingLatinCount = [...`${match.before}${match.after}`].filter(

@@ -513,6 +513,7 @@ where
 
     let response = shared_http_client()?
         .get(format!("{DEEPSEEK_BASE_URL}{path}"))
+        .header("Accept", "application/json")
         .bearer_auth(api_key)
         .send()
         .await
@@ -534,6 +535,8 @@ async fn decode_deepseek_response_value(
             .get("error")
             .and_then(|error| error.get("message"))
             .and_then(Value::as_str)
+            .or_else(|| value.get("error").and_then(Value::as_str))
+            .or_else(|| value.get("message").and_then(Value::as_str))
             .unwrap_or("DeepSeek API 返回非成功状态。");
         return Err(format!(
             "{operation} 请求返回 HTTP {status_code}：{message}"

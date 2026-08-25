@@ -17,6 +17,7 @@ import {
   validateApiKeyDraft,
 } from "../src/settingsViewModel.ts";
 import {
+  BALANCE_RETRY_INTERVAL_MS,
   BALANCE_REFRESH_INTERVAL_MS,
   BalanceRefreshController,
   reduceBalanceRefreshState,
@@ -25,8 +26,11 @@ import {
   DEFAULT_APP_PREFERENCES,
   appPreferenceCssVariables,
   parseFontSizeCandidate,
+  shortcutBindingIdentity,
+  shortcutBindingParts,
   shouldSendMultilineMessage,
   validateAppPreferences,
+  validateShortcutBinding,
 } from "../src/appPreferences.ts";
 import { AppPreferenceSaveCoordinator } from "../src/appPreferenceSaveCoordinator.ts";
 
@@ -179,6 +183,8 @@ test("Tauri 设置 repository 通过有类型 command 和原生保存对话框�
   await repository.get();
   await repository.getPreferences();
   await repository.updatePreferences(preferences({ uiFontSize: 16 }));
+  await repository.beginShortcutRecording("quickQuery");
+  await repository.cancelShortcutRecording();
   await repository.getAutostartEnabled();
   await repository.setAutostartEnabled(true);
   await repository.validateAndSaveApiKey("candidate-secret");
@@ -195,6 +201,8 @@ test("Tauri 设置 repository 通过有类型 command 和原生保存对话框�
       command: "update_app_preferences",
       args: { preferences: preferences({ uiFontSize: 16 }) },
     },
+    { command: "begin_shortcut_recording", args: { action: "quickQuery" } },
+    { command: "cancel_shortcut_recording", args: undefined },
     { command: "get_autostart_enabled", args: undefined },
     { command: "set_autostart_enabled", args: { enabled: true } },
     {
@@ -280,6 +288,31 @@ test("偏好设置校验、字体作用域与两种发送方式保持确定语�
   assert.throws(
     () => validateAppPreferences(preferences({ learningFontSize: 13 })),
     /14–24/,
+  );
+  assert.equal(
+    shortcutBindingIdentity(DEFAULT_APP_PREFERENCES.quickQueryBinding),
+    "chord:Alt+Super+Space",
+  );
+  assert.deepEqual(
+    shortcutBindingParts(DEFAULT_APP_PREFERENCES.quickQueryBinding),
+    ["Alt", "Win", "Space"],
+  );
+  assert.deepEqual(
+    shortcutBindingParts(DEFAULT_APP_PREFERENCES.selectionExplanationBinding),
+    ["左 Alt", "×2"],
+  );
+  assert.throws(
+    () => validateShortcutBinding(
+      { version: 2, kind: "chord", accelerator: "Space" },
+      "快速查询",
+    ),
+    /必须包含修饰键/,
+  );
+  assert.throws(
+    () => validateAppPreferences(preferences({
+      quickQueryBinding: DEFAULT_APP_PREFERENCES.selectionExplanationBinding,
+    })),
+    /不能使用同一个快捷键/,
   );
   const variables = appPreferenceCssVariables(
     preferences({
@@ -514,6 +547,37 @@ test("余额进入栏目自动查询、五分钟刷新，手动刷新会重新�
   assert.equal(calls, 3, "手动刷新后从完成时重新计时");
   scheduler.advance(1);
   assert.equal(calls, 4);
+  controller.dispose();
+});
+
+test("余额首次查询失败后短暂自动重试，成功后恢复五分钟刷新", async () => {
+  const scheduler = new FakeBalanceScheduler();
+  const events = [];
+  let calls = 0;
+  const controller = new BalanceRefreshController(
+    async () => {
+      calls += 1;
+      if (calls === 1) throw new Error("temporary balance failure");
+      return { request: calls };
+    },
+    (event) => events.push(event),
+    scheduler,
+  );
+
+  controller.updateContext({ active: true, visible: true, apiKeyConfigured: true });
+  await flushAsyncWork();
+  assert.equal(calls, 1);
+  assert.equal(events.at(-1).type, "error");
+
+  scheduler.advance(BALANCE_RETRY_INTERVAL_MS - 1);
+  assert.equal(calls, 1, "首次失败的短暂重试不应提前触发");
+  scheduler.advance(1);
+  assert.equal(calls, 2, "首次失败后应在短暂延迟后自动重试");
+  await flushAsyncWork();
+  assert.deepEqual(events.at(-1), { type: "success", value: { request: 2 } });
+
+  scheduler.advance(BALANCE_REFRESH_INTERVAL_MS - 1);
+  assert.equal(calls, 2, "成功后的刷新仍按五分钟计时");
   controller.dispose();
 });
 
@@ -858,14 +922,21 @@ test("正式设置页保持五类设计结构，确定性操作已接线且不�
   assert.doesNotMatch(page, /themeController\.delete/);
   assert.doesNotMatch(page, /ReadRay 内置主题不能删除/);
   assert.match(page, /录制新快捷键/);
-  assert.match(page, /shortcutFromKeyEvent/);
+  assert.match(page, /listenShortcutRecording/);
+  assert.match(page, /beginShortcutRecording/);
+  assert.match(page, /cancelShortcutRecording/);
+  assert.doesNotMatch(page, /shortcutFromKeyEvent|onKeyDown=\{recordShortcut\}/);
+  assert.match(repository, /begin_shortcut_recording/);
+  assert.match(repository, /readray:\/\/shortcut-recorded/);
   assert.match(page, /恢复默认快捷键/);
   assert.match(page, /onClick=\{refreshBalance\}/);
   assert.match(page, /new BalanceRefreshController/);
+  assert.match(page, /rr-settings-balance-error/);
   assert.doesNotMatch(page, /rr-settings-balance-meta/);
   assert.equal([...page.matchAll(/\.replaceCredential\(/g)].length, 2);
   assert.match(page, /visibilitychange/);
   assert.match(balanceRefresh, /5 \* 60 \* 1_000/);
+  assert.match(balanceRefresh, /3 \* 1_000/);
   assert.doesNotMatch(page, /赠送|充值|尚未查询/);
   assert.match(page, /onClick=\{\(\) => void openDataDirectory\(\)\}/);
   assert.match(page, /onClick=\{\(\) => void createDatabaseBackup\(\)\}/);
@@ -899,6 +970,10 @@ test("正式设置页保持五类设计结构，确定性操作已接线且不�
   assert.match(page, /function SettingsSelect/);
   assert.doesNotMatch(page, /<select\b/);
   assert.match(styles, /\.rr-settings-select-menu\s*\{/);
+  assert.match(
+    styles,
+    /\.rr-settings-select-menu\s*\{[\s\S]*?box-shadow:\s*0 12px 28px color-mix\(in oklab, var\(--rr-main-shadow\), transparent 48%\)/,
+  );
   assert.match(styles, /\.rr-settings-link-row\s*\{[\s\S]*?border:\s*0 !important/);
   assert.match(styles, /\.rr-settings-link-row\s*\{[\s\S]*?border-radius:\s*0 !important/);
   assert.match(styles, /\.rr-settings-link-row\s*\{[\s\S]*?min-height:\s*54px !important/);
@@ -912,6 +987,7 @@ test("正式设置页保持五类设计结构，确定性操作已接线且不�
   assert.match(sidebar, /className="rr-main-settings-footer"/);
   assert.match(mainStyles, /\.rr-main-settings-footer\s*\{[\s\S]*?border-top:/);
   assert.match(mainStyles, /\.rr-main-settings-footer\s*\{[\s\S]*?padding-top:\s*calc\(6px/);
+  assert.match(mainStyles, /\.rr-main-settings-footer\s*\{[\s\S]*?transform:\s*translateY\(calc\(3px[\s\S]*?border-top:/);
   assert.match(mainStyles, /\.rr-main-settings\s*\{[\s\S]*?min-height:\s*calc\(34px[\s\S]*?border:\s*0 !important[\s\S]*?border-radius:\s*calc\(9px/);
   assert.match(mainStyles, /\.rr-main-settings\.is-active\s*\{[\s\S]*?background:\s*var\(--rr-main-surface-subtle\)/);
   assert.doesNotMatch(mainStyles, /\.rr-main-settings\.is-active::before/);
@@ -972,4 +1048,51 @@ test("正式设置页保持五类设计结构，确定性操作已接线且不�
     deepSeekClient.indexOf("async fn send_chat_completion_value"),
   );
   assert.doesNotMatch(candidateKeyBoundary, /record_for_app|ModelUsageCategory/);
+});
+
+test("主窗口检测未配置 API Key 并提供直达 AI 设置的非模态入口", async () => {
+  const shell = await readFile("src/components/MainAppShell.tsx", "utf8");
+  const settingsPage = await readFile("src/components/SettingsPage.tsx", "utf8");
+  const setupCard = await readFile("src/components/ApiKeySetupCard.tsx", "utf8");
+  const themeHook = await readFile("src/useAppTheme.ts", "utf8");
+  const styles = await readFile("src/styles/main-app.css", "utf8");
+  const settingsStyles = await readFile("src/styles/settings-page.css", "utf8");
+
+  assert.match(shell, /settingsService\.loadSettings\(\)/);
+  assert.match(shell, /setApiKeyConfigured\(snapshot\.apiKeyConfigured\)/);
+  assert.match(shell, /activePageId !== "settings"/);
+  assert.match(shell, /handleOpenApiKeySettings/);
+  assert.match(shell, /setSettingsInitialSection\("ai"\)/);
+  assert.match(shell, /initialSection=\{settingsInitialSection\}/);
+  assert.match(shell, /onApiKeyConfiguredChange=\{handleApiKeyConfiguredChange\}/);
+  assert.match(settingsPage, /initialSection\?: SettingsSection/);
+  assert.match(settingsPage, /onApiKeyConfiguredChange\?: \(configured: boolean\)/);
+  assert.match(settingsPage, /onApiKeyConfiguredChange\?\.\(nextSnapshot\.apiKeyConfigured\)/);
+  assert.match(setupCard, /先配置 AI 服务/);
+  assert.match(setupCard, /配置 API Key/);
+  assert.match(setupCard, /稍后再说/);
+  assert.match(styles, /\.rr-main-api-key-setup-card\s*\{/);
+  assert.match(styles, /bottom: calc\(68px \* var\(--rr-main-design-scale\)\)/);
+  assert.match(styles, /left: calc\(12px \* var\(--rr-main-design-scale\)\)/);
+  assert.match(styles, /width: min\(360px, calc\(100% - 24px\)\)/);
+  assert.match(styles, /flex-direction: column/);
+  assert.match(styles, /padding-left: 38px/);
+  assert.match(styles, /background: color-mix\(in oklab, var\(--rr-main-bg\), var\(--rr-main-surface\) 34%\)/);
+  assert.match(settingsStyles, /\.rr-settings-text-input:focus-visible[\s\S]*box-shadow: 0 0 0 2px/);
+  assert.match(settingsPage, /useState<ModelUsageRange>\("today"\)/);
+});
+
+test("主题下拉导航只预览配色，确认或取消后分别保存或恢复权威主题", async () => {
+  const page = await readFile("src/components/SettingsPage.tsx", "utf8");
+  const themeHook = await readFile("src/useAppTheme.ts", "utf8");
+
+  assert.match(page, /onPreview=\{\(value\) => previewTheme\(value\)\}/);
+  assert.match(page, /onPreviewCancel=\{restoreThemePreview\}/);
+  assert.match(page, /const committed = onChange\(option\.value\)/);
+  assert.match(page, /if \(committed === false\) onPreviewCancel\?\.\(\)/);
+  assert.match(page, /event\.key === "ArrowDown" \|\| event\.key === "ArrowUp"/);
+  assert.match(page, /scrollIntoView\(\{ block: "nearest" \}\)/);
+  assert.match(themeHook, /preview\(themeId: string, mode: ThemeMode\): void/);
+  assert.match(themeHook, /restorePreview\(\): void/);
+  assert.match(themeHook, /不推进 snapshotRef 或 SQLite 权威状态/);
 });

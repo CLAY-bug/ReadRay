@@ -1,18 +1,26 @@
 # ReadRay 交接记录
 
-最后更新：2026-08-20
+最后更新：2026-08-25
 
 ## TL;DR
 
 - 当前状态：阶段一至阶段八已经完成；阶段八基于真实学习记录的复习闭环已通过独立审核、自动验证和真实 Tauri/SQLite/DeepSeek 与视觉交互人工验收。
-- 主题状态：ReadRayThemeV1、安全解析、SQLite v8、设置页导入/选择/删除、主窗口恢复以及随包 Flexoki（Light/Dark）与 30 个内置主题已通过独立审核和真实 Tauri 人工验收；主题工作不改变 DEVELOPMENT_PLAN 阶段状态。
+- 主题状态：ReadRayThemeV1、安全解析、SQLite v8、设置页导入/选择/删除、主窗口恢复以及随包 Flexoki（Light/Dark）与 17 个内置主题已通过独立审核和真实 Tauri 人工验收；当前内置列表保留 ReadRay Default、Flexoki 与 15 个同时支持 Light/Dark 的 Codex 主题；主题工作不改变 DEVELOPMENT_PLAN 阶段状态。
 - 当前路线：Windows 原生，Tauri + React + TypeScript + Rust + SQLite。
 - 划词优化：本轮方案已于 2026-08-12 正式收口。任务 1～4 均已完成实现、必要验证和用户真实使用验收；任务 4“SQLite 精确缓存与 single-flight”已合回主项目。SQLite v18 增加 7 天、256 条的 ExplanationCard 精确缓存；同 key 的 SQLite lookup/provider/usage/upsert 由 single-flight 共享，每个请求继续独立核对 requestKey/generation 并保存自己的真实学习事件，取消或迟到请求不能落库或写缓存。原任务 5 不含新功能，基于投入产出不再单独执行；其跨模块完整回归清单仅保留为未来正式发布、参赛演示打包或相关模块大改时的检查参考，不得记作本轮已运行。
 - 单 token 语境消歧返修（2026-08-20）：在上述划词优化收口后，针对缩写、全大写词、点号/加号/井号标识符、下划线标识符和混合大小写标识符增加结构化的 context-sensitive word 判断，不绑定 FDE 等词库，也不新增 abbreviation 卡片类型，仍统一按 `word` 处理。UIA 对这类选区优先扩展 `TextUnit_Document`，失败再回退 `TextUnit_Paragraph`；模型在完整捕获上下文不超过 4096 字符且包含选中词时优先使用它，否则使用围绕选区的 bounded context。Prompt/cache identity 已升级到 v7，模型返回的 abbreviation/acronym/initialism 别名会归一为 `word`，并要求利用选中词之后的角色、产品、组织或领域线索消歧。`deepseek_explanation` 定向测试 28 项通过（1 项联网测试 ignored），`windows_uia` 定向测试 11 项通过，最终定向编译、fmt 与 diff 检查通过；用户已确认实际样本的翻译准确度明显改善。
 - 学习目标聚合（2026-08-14 已验收）：SQLite v19、稳定 target/occurrence、目标级复习状态、历史 Feed/card/attempt/feedback 追溯、`legacy_compat` 隔离、Memory 聚合次数与全部真实出现、Review 同轮去重/跨轮 occurrence 轮换和精确目标相邻避让均已完成。Memory 搜索保留历史语境与解释命中，但优先精确目标、目标前缀/包含和原始查询，同级再按最近 occurrence 排序。实现经过自动验证、父任务代码审查、真实 v18→v19 启动修复及用户真实 Tauri/SQLite 人工验收；未进入画像、记忆注入、个性化排序、效果评估或语义聚类。
 - 主窗口体验（2026-08-15 已验收）：今天页正文与底部输入框、完整对话输入区已共用稳定的内容宽度和离散断点；textarea 自动增高与最大化状态查询不再随每一帧 resize 强制布局。主窗口会在首次显示前恢复上次正常尺寸、位置和最大化状态，越界或显示器变化时自动约束到当前工作区；无历史状态时按工作区约 86% 自适应。展开态主侧栏宽度以 `readray.main.sidebar-width.v1` 独立记忆，折叠和 hover 预览不覆盖该值。用户已完成真实 Tauri 拖拽、重启和侧栏宽度人工验收；窗口状态仅属于 `main`，不影响 overlay、SQLite schema 或阶段九范围。
 - 侧栏自动收放与缩放抖动修复（2026-08-16 已完成真实 Tauri 验收）：首轮已把写作/对话逐帧强制布局改为 120ms resize-settle，并加入 `src/sidebarAutoCollapse.ts`（<1000 收、>1080 放、80px 迟滞、手动折叠优先）与 `is-sidebar-resizing`。真实视频复验曾出现强烈黑/白 L 形色带，逐帧对照 Codex 桌面后确认主因是 Windows 外层窗口先变化、WebView2 内容面迟一两帧，而 ReadRay 暴露了高对比默认底板；并非侧栏状态机本身。第二轮直接按应用收口：main 恢复 `transparent:true` 合成路径，静态 `backgroundColor:#f2f1ed` 兜住启动与默认主题；新增 `src/mainWindowBackground.ts`，每次应用主题时同时同步原生窗口层和 WebView2 默认底色；`MainAppShell` 在宽度或高度连续变化时挂出 `is-window-resizing`，120ms 稳定后才结算侧栏自动收放，期间禁用侧栏/标题栏宽度过渡。用户 16:21 复验确认效果已经好很多；随后参照同机 150% 缩放下 Codex 约 720px 的物理最小宽度，把 main 逻辑最小宽度从 840 调为 480（高度仍为 600），并同步 Rust 历史窗口恢复约束。折叠态的 hover 预览入口也从整条左边缘收窄到状态按钮；按钮打开后移入侧栏可继续保持，移开后关闭。16:29 视频进一步暴露两个窄窗细节：临时预览关闭时侧栏从 absolute 切回 flex 再做宽度动画，导致主页面被短暂推动；现改为整个折叠/预览生命周期始终 absolute。另因 Tauri 480 是外层窗口宽度、实际 WebView 客户区略小，CSS 再设 480px min-width 会产生横向溢出并裁掉输入框右边距；现由原生层独占窗口下限，`.rr-main-app` 使用 `min-width:0` 服从实际客户区，composer 继续按 `calc(100% - 28px)` 和 `margin-inline:auto` 保持左右对称。最终又完成固定侧栏连续推出/收回、hover 覆盖预览、两态按钮图标，以及“正式应用 Icon + ReadRay + 右侧状态按钮”的标题栏视觉收口；用户已确认整体效果验收完毕。本轮验证：`test:settings` 57/57、`test:conversation` 28/28、`test:writing` 30/30、`pnpm build`、YAML 与 diff 检查均通过。
-- 阶段八点五（Agent Runtime）：任务 0 协议、任务 1 Rust Agent Kernel、任务 2 通用对话接入与 SQLite run/step 恢复、任务 3 自动联网纵切、任务 4 日常使用交互、任务 5 长上下文与 compaction、任务 6 Writing Coach 适配均已通过调度者独立评审并正式收口（任务 3/4 含真实 Tauri 使用验收；任务 5 为预算驱动长上下文投影 + 方案 A/方案三最简折叠兜底；任务 6 合并"检查慢"流式状态/可取消与检查方式 B(1) 修正，含已知问题"检查曾返回 0 个问题"记录待后续处理）。**阶段八点五 Agent Runtime 升级全部完成**。实现集中在 `agent-runtime` 分支（原 `feat/agent-runtime-task1` 改名），按约定任务 1-6 全部完成评审后一次性合入 main，main 保持干净；等待合入 main。
+- 阶段八点五（Agent Runtime）：任务 0 协议、任务 1 Rust Agent Kernel、任务 2 通用对话接入与 SQLite run/step 恢复、任务 3 自动联网纵切、任务 4 日常使用交互、任务 5 长上下文与 compaction、任务 6 Writing Coach 适配均已通过调度者独立评审并正式收口（任务 3/4 含真实 Tauri 使用验收；任务 5 为预算驱动长上下文投影 + 方案 A/方案三最简折叠兜底；任务 6 合并"检查慢"流式状态/可取消与检查方式 B(1) 修正，含已知问题"检查曾返回 0 个问题"记录待后续处理）。**阶段八点五 Agent Runtime 升级全部完成**。实现最初集中在 `agent-runtime` 分支（原 `feat/agent-runtime-task1` 改名），按约定任务 1-6 全部完成评审后已一次性合入 main，main 保持干净。
+- 首版发布候选（2026-08-24）：已按 `v0.1.0 Preview` 重新生成 Windows x64 NSIS 安装包 `src-tauri/target/release/bundle/nsis/ReadRay_0.1.0_x64-setup.exe`，包含未配置 API Key 时的主窗口引导卡片和直达“设置 → AI 服务”入口。本次构建产物大小为 41,650,032 bytes，SHA-256 为 `D0B38D14BD3C91BE890163434C7AA43ACB0F65CBF1EF5F99A7593F1106B139EC`。安装包尚未代码签名、上传或创建 GitHub Release；干净 Windows 的真实安装/升级/卸载验收仍需发布者完成。
+- 发布暂缓（2026-08-24）：因当前仍有待修复问题，后续源码修改默认只做开发构建与自动验证，不执行 `release:build`，也不更新上述安装包或 SHA-256。当前源码中的 API Key 卡片左下横向浮层、允许跨过侧栏、浅色样式、输入框细焦点光晕和使用量默认“今天”尚未回灌到该安装包；重新发布前需统一重建并重新验收。
+- 主题精简（2026-08-24）：按用户决定，随包 Codex 主题只保留同时提供 Light/Dark 配色的 15 个主题，移除 Ayu、Dracula、Lobster、Material、Matrix、Monokai、Night Owl、Nord、Oscurange、Proof、Sentry、Tokyo Night、Temple；ReadRay Default 作为默认浅色主题继续保留。生成脚本、前端/Rust 主题数据、测试与当前主题协议说明已同步更新，未执行 release 构建。
+- 主题选择预览（2026-08-24）：设置页主题与主题模式下拉在上下键、Home/End 或鼠标悬停移动高亮项时，只临时应用当前 WebView/原生背景配色；Enter、空格或点击选项才提交 SQLite，Esc、再次关闭下拉或点击外部区域会恢复数据库权威主题。预览不推进 `snapshotRef`，不会把浏览过程写成多次主题保存；主题列表键盘移动会自动滚动到当前项。
+- 深色主题下拉阴影修复（2026-08-24）：设置页自定义下拉菜单不再用深色主题的浅色前景色生成阴影，改用 `--rr-main-shadow` 语义 token，消除菜单周围泛白光晕；浅色/深色主题均保持随主题切换的边缘层次。
+- ReadRay Default 深色模式（2026-08-24）：Default 主题现补齐 `light + dark` 双模式，深色配色以浅色主题的语义层级为骨架，采用 overlay 的 Graphite 基底与 Amber 强调色（不直接复制 overlay 紧凑浮层样式）；前后端 canonical、模式校验和主题测试已同步，未执行 release 构建。
+- DeepSeek 余额查询稳定性（2026-08-25）：确认当前保存的 Windows 凭据通过与应用相同的 Rust `get_deepseek_balance` 路径可正常取得官方 `/user/balance` 响应；设置页现按官方 JSON 请求显式声明 `Accept`，首次查询失败后 3 秒自动重试一次，仍失败则回到 5 分钟刷新节奏，并在余额卡片展示非敏感错误详情，便于区分瞬时网络问题、HTTP 拒绝和响应结构问题。`pnpm test:settings` 61/61、设置 Rust 17/17、`cargo check`、`cargo fmt --check`、`pnpm build` 均通过；未执行 release 构建。
+- 复习原始语境过滤返修（2026-08-24）：确认 Windows Terminal 的 UIA `contextText` 可能把约 4,000 字符的 PowerShell/Powerline 原始窗口文本带入单词记录；目标词本身仍正确（例如 `features`），问题发生在 Review 映射把原始上下文直接当作单词完形语境。`src/reviewService.ts` 现对已记录的单词/短语英文语境设置 640 字符上限并拒绝私有区终端装饰，异常上下文回退到目标词并交给现有后台制卡，原始 `learning_records` 不删除、不改写。`pnpm test:review` 51/51、`pnpm build` 已通过；真实 Tauri 视觉复验仍由用户完成，Release 继续暂缓。
 - 下一步：学习目标聚合任务已经收口；阶段九继续暂停。已新增 `docs/STAGE_NINE_LEARNER_MODEL_PLAN.md` 保存学习证据、熟练状态、自动复习与写作强化的讨论草案，后续新会话从该文档继续，不因建立草案而自动进入实现。
 - 阶段八：基于真实 `learning_records` 的最小复习闭环、后台英文制卡、学习结果/撤销、来源追溯、卡片质量反馈、缓存与重启恢复均已收口；写作、Quick AI、长期学习者记忆、主动表达和 Markdown 未并入本阶段，基于长期记忆的个性化排序属于阶段九。
 - 整体性能探查（2026-08-07）：按四层（启动/前端渲染/SQLite/内存体积）实测，当前真实数据规模下**无用户可感知瓶颈**。SQLite 查询全部走索引且冷热均 <4ms；每 command 重开连接 + 8 次迁移检查经真实 rusqlite 基准测得约 1.45ms（迁移去重实测无效，1.450 vs 1.452ms，已回退）；前端流式渲染每 delta 约 0.68ms（520ms 节流下无感知）；首屏 204 DOM 节点；全部对话页实际只渲染 26 个有标题会话。明确**不要**为性能引入 SQLite 连接复用（rusqlite Connection 虽 Send，但 guard 跨 await 编译失败、流式 record_for_app 持锁会冻结 UI、Mutex 非重入、backup VACUUM 长持锁，四重风险而收益 <10ms/操作）。后续若数据规模显著增长（如数万学习记录），再重测 `list_all_quick_ai_conversations` 全量列表与流式重建成本。
@@ -48,7 +56,7 @@
 - 原生桌面能力通过 Rust / Tauri commands 实现。
 - 本地存储使用 SQLite。
 - ReadRayThemeV1 是唯一稳定内部主题协议；Codex、Obsidian 或其他来源以后只能通过各自独立 adapter 转换，不能把外部 CSS 直接交给浏览器。
-- 主题只影响主应用配色，不改变 overlay、划词卡、UIA、布局、字体、字号或业务交互；当前内置 ReadRay Default 只有真实浅色模式。
+- 主题只影响主应用配色，不改变 overlay、划词卡、UIA、布局、字体、字号或业务交互；当前内置 ReadRay Default 与 Flexoki 均支持真实浅色/深色模式。
 - 第一版 LLM 供应商使用 DeepSeek OpenAI-compatible API。
 - MVP 阶段不使用 LangChain、LangGraph、Pi、Agno 等通用 Agent 框架。
 - 自己实现 ReadRay 专属的轻量 Agent 层。
@@ -187,6 +195,8 @@
 - 桌面生命周期新增官方 `tauri-plugin-single-instance`、`tauri-plugin-autostart` 和 `tauri` 的 `tray-icon` feature；替代方案分别是自建 Windows mutex/IPC、手写注册表和 Win32 Shell_NotifyIcon，均会复制平台能力。两个插件只在 Rust 使用，未新增前端依赖或 capability；single-instance 按官方要求最先注册，第二进程在 setup/SQLite/托盘前即被拦截，再次手动启动只恢复、显示并聚焦已有 main。
 - 托盘使用现有应用图标，左键恢复主窗口，右键菜单严格只有“打开 ReadRay”“快速查询”“退出 ReadRay”；快速查询复用既有 overlay intent/尺寸/聚焦链路。overlay 失焦/Esc 隐藏和锚定窗口边界未改。main 静态配置先隐藏，手动启动由 Rust setup 正常显示；仅携带专用 autostart 参数时 main/overlay 都保持隐藏。
 - SQLite v7 只向 v6 `app_preferences` 追加 `close_behavior`、`quick_query_shortcut` 和 `selection_explanation_shortcut`，保留同一 revision 权威。开机启动不写 SQLite，设置快照和切换 command 每次读取官方插件的 Windows 实际状态。快捷键运行时元数据同时保存 SQLite 映射、实际 `registered_shortcuts` 和两项独立 startup error；任意偏好保存失败时，物理注册与完整 active 元数据一起恢复，两组快捷键无需重启即可继续响应。启动时两项都冲突也不改写 SQLite；修改一项只尝试注册该项，另一项错误继续显示，之后可单独恢复第二项。
+- 全局快捷键升级（2026-08-25）：快捷键权威模型改为 `version=2` 的 `chord` / `modifierDoubleTap` 判别联合。SQLite v22 追加两项 binding JSON 列并保留 v7 历史字符串列：新数据库默认快速查询 `Alt+Super+Space`（设置页显示为 Alt+Win+Space）、选区解释双击左 Alt；已有数据库只把自己的两项历史字符串转换成 chord JSON，不替换旧默认或用户自定义值。普通组合键继续由 Tauri global-shortcut 注册，双击左 Alt 由 `advanced_shortcuts.rs` 的 Windows `WH_KEYBOARD_LL` 层识别，运行时不吞键；设置页录制只通过 typed command/event 进入原生层，录制期间临时抑制按键并在切页时取消，不再依赖 WebView `keydown`。
+- 本轮自动验证已覆盖新装/旧库迁移、普通注册集合与高级动作分流、350ms 双击状态机及插入键取消、原生录制接线、偏好校验和前端构建：`pnpm test:settings` 60/60、Rust `cargo test --lib` 418 passed / 6 ignored、`pnpm build`、`cargo check`、`cargo fmt --check`、RESOURCE_MAP YAML 与 `git diff --check` 均通过；未启动真实 Tauri 窗口，也未构建 release。仍需用户在真实 Windows 分别验收：中文/英文输入法下 `Alt+Win+Space` 是否触发且不出现系统菜单或切换输入法；双击左 Alt 在浏览器、编辑器、Office/Obsidian 和带菜单应用中的误触/菜单行为；隐藏 main、重启、快捷键冲突；管理员窗口的 UIA 选区捕获。安全桌面（UAC 提示、锁屏）不属于支持范围，普通权限进程也不能保证读取高权限窗口选区。
 - 默认关闭 main 隐藏到托盘并保留快捷键和后台保存；选择“退出 ReadRay”后与托盘退出共用安全退出。持续存活的应用级协调器跟踪偏好、Key 保存/清除、开机启动写入并 flush 全部防抖写作草稿，切离 SettingsPage 后仍会等待操作，卸载组件不接收迟到状态；模型请求不加入等待。收到退出请求即激活 mutation gate，并显示阻断交互的“正在保存并退出”，设置和写作编辑入口拒绝新修改，flush 以 generation 确认静默。失败后解除 gate、恢复 main，并提供重试、取消和仍然退出。取消先让 Rust 清除 pending ID；窗口显示/聚焦失败只记录警告并仍返回取消成功，前端失败分支还会重读 pending 状态，避免困在过期请求。
 - 本轮复审修复后自动验证通过：设置/生命周期前端 25 项、会话前端回归 18 项、写作前端回归 26 项；完整 Rust 103 项通过，2 项真实 DeepSeek 联网测试按既有 ignored 标记跳过；`pnpm build`、`cargo fmt --check`、`cargo check`、RESOURCE_MAP YAML 解析和 `git diff --check` 均通过。自动测试未修改本机开机启动项，也没有使用浏览器、Computer Use 或真实 Tauri 窗口替代人工验收。
 - 阶段七复审与真实 Tauri 人工验收已经通过：托盘左右键与菜单、两种关闭策略、安全退出成功/失败/取消/强制退出、开机启动注册/注销及隐藏启动、第二次手动启动恢复、快捷键录制/冲突/逐项恢复/重启恢复，以及隐藏主窗口后的快捷键和后台自动保存均已验收；阶段七正式收口。
@@ -342,7 +352,7 @@ Quick AI 浮层升级任务 7、主窗口静态品牌启动层、WebView 默认�
 - **解释体验限制**：查询类型依赖本地结构启发式规则；缩写和标识符保持 `word`，不创建单独卡片类型，也不为 FDE 等个别词增加词库特判。很短的多句文本或缺少句末标点的长句仍可能落入相邻类型；优先用真实样本调整，不为分类再增加一次 LLM 请求。
 - **解释体验限制**：CaptureInput 和 ExplanationCard 当前上限为 4096 字符，长段落还受模型 JSON 稳定性与浮窗最大高度约束，不代表整页翻译能力。
 - **阶段八与 v19 聚合边界**：原始 `learning_records` 继续作为追加式真实查询事件完整保留；正式聚合只合并 queryType 相同且英文学习目标在大小写、首尾空白和连续空白规范化后精确一致的记录，不做语义、相近词、同义词或词形聚类。聚合目标详情可追溯全部真实 occurrence、原始来源、上下文和时间；Review 可在后续轮次轮换该目标的不同真实英文语境，但不伪造历史出现。长期学习者记忆、记忆注入与个性化 Feed 排序仍属于阶段九，不得由当前复习状态或质量反馈冒充。
-- **Agent 后续边界**：Quick AI 已支持流式输出、停止/重试、白名单 Markdown 渲染、组合式系统提示词、编辑并重新生成（hover 入口 + 行内编辑，方案 B 替代链审计）与截断诚实提示；阶段八点五任务 0/1/2/3 已通过评审，任务 3 已正式收口（Wikipedia 受控搜索 + 受控网页抓取 + 来源卡片 + 失败后可直接发新消息；集中在 `agent-runtime` 分支，任务 1-6 全部完成后再一次性合入 main）。任务 4 日常使用交互已实现并通过自动验证（含 2026-08-18 编辑并重新生成设计变更修复轮），待调度者复审与真实 Tauri 验收。记忆注入属于阶段九；截断继续/超 8K 续写和长上下文按任务 5 处理，不因文档建立自动并入正式能力。
+- **Agent 后续边界**：Quick AI 已支持流式输出、停止/重试、白名单 Markdown 渲染、组合式系统提示词、编辑并重新生成（hover 入口 + 行内编辑，方案 B 替代链审计）与截断诚实提示；阶段八点五任务 0-6 已通过评审并合入 main，任务 3/4 含真实 Tauri 验收。记忆注入属于阶段九；截断继续/超 8K 续写和长上下文按任务 5 处理，不因文档建立自动并入正式能力。
 - **主题后续边界**：Flexoki 与 Codex 主题已作为随包内置主题接入；当前不包含外部主题 adapter、社区商店、在线下载或自动更新。新增 adapter 仍必须转换到 ReadRayThemeV1 并通过同一安全校验，不能放宽任意 CSS、字体、图片或网络资源边界。
 - **对话后续边界**：阶段六的查看全部、重命名、删除和原生导出已经完成；"编辑并重新生成"已按任务 4 开放（最后一条输入 hover 入口 + 行内编辑，方案 B 替代链审计），记忆引用聚合仍属更后续能力，当前 UI 继续诚实禁用。
 - **阶段七范围**：三批设置功能与桌面生命周期已经通过复审和真实 Tauri 人工验收，阶段七已完成；阶段八新增实现不得回改其已验收行为。

@@ -6,7 +6,7 @@
 
 <p align="center">
   <img alt="Version" src="https://img.shields.io/badge/version-0.1.0-26221f">
-  <img alt="Status" src="https://img.shields.io/badge/status-alpha-cf5b2e">
+  <img alt="Status" src="https://img.shields.io/badge/status-preview-cf5b2e">
   <img alt="Platform" src="https://img.shields.io/badge/platform-Windows-0078d4">
   <img alt="Desktop" src="https://img.shields.io/badge/desktop-Tauri%202-24c8db">
   <img alt="Local first" src="https://img.shields.io/badge/data-local--first-2f7d68">
@@ -143,7 +143,7 @@ pnpm install
 pnpm tauri dev
 ```
 
-API Key 可以在应用设置页中配置。开发环境也可以复制 `.env.example` 为 `.env` 并填写 `DEEPSEEK_API_KEY`；真实 `.env` 已被忽略，不应提交到仓库。
+API Key 可以在应用设置页中配置；首次启动且尚未配置时，主窗口会显示引导卡片，可点击直达“设置 → AI 服务”。开发环境也可以复制 `.env.example` 为 `.env` 并填写 `DEEPSEEK_API_KEY`；真实 `.env` 已被忽略，不应提交到仓库。
 
 ### 构建与验证
 
@@ -163,19 +163,19 @@ cargo test --manifest-path src-tauri\Cargo.toml
 生成桌面安装包：
 
 ```powershell
-pnpm tauri build
+pnpm release:build
 ```
 
-真实托盘、快捷键、开机启动、单实例、输入法和窗口生命周期仍需要在真实 Tauri 窗口中验收，不能仅用浏览器预览或自动测试替代。
+该命令生成 Windows x64 NSIS 安装包，通常位于 `src-tauri/target/release/bundle/nsis/`。安装包包含安装目录选择、开始菜单快捷方式、MIT 许可页和 WebView2 bootstrapper；当前版本使用当前用户安装模式，不要求管理员权限。正式发布前仍需在干净 Windows 环境验证安装、升级、卸载、首次配置、快捷键、托盘和核心流程。
 
 ## 项目状态
 
-ReadRay 当前处于积极开发的 **Alpha** 阶段，应用版本为 `0.1.0`。
+ReadRay 当前发布 **0.1.0 Preview**，应用版本为 `0.1.0`。
 
 - 已完成核心学习链路、写作、会话管理、设置、Windows 桌面生命周期和基于真实学习记录的复习闭环。
-- 当前进入长期学习者记忆与个性化能力的设计阶段。
+- 长期学习者记忆、个性化排序和效果评估仍属于后续阶段，首个 Preview 不承诺这些能力。
 - 目前以 Windows 为唯一正式目标。
-- 当前尚未发布公开安装包，请从源码启动或自行构建。
+- Windows 安装包将在 [GitHub Releases](https://github.com/CLAY-bug/ReadRay/releases) 发布；首次启动后按引导卡片进入“设置 → AI 服务”填写并验证 DeepSeek API Key。
 - OCR、本地大模型、浏览器插件和 macOS 支持不在当前范围内。
 
 ## 参与项目

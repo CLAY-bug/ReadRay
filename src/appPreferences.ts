@@ -3,6 +3,19 @@ export type LearningFont = "newsreaderSourceHanSerif" | "sourceHanSerif";
 export type SendShortcut = "enter" | "ctrlEnter";
 export type CloseBehavior = "hideToTray" | "exit";
 
+export type ShortcutBinding =
+  | {
+      version: 2;
+      kind: "chord";
+      accelerator: string;
+    }
+  | {
+      version: 2;
+      kind: "modifierDoubleTap";
+      modifier: "Alt";
+      side: "left";
+    };
+
 export type AppPreferences = {
   revision: number;
   uiFont: UiFont;
@@ -11,8 +24,8 @@ export type AppPreferences = {
   learningFontSize: number;
   sendShortcut: SendShortcut;
   closeBehavior: CloseBehavior;
-  quickQueryShortcut: string;
-  selectionExplanationShortcut: string;
+  quickQueryBinding: ShortcutBinding;
+  selectionExplanationBinding: ShortcutBinding;
 };
 
 export const UI_FONT_SIZE_MIN = 12;
@@ -42,8 +55,17 @@ export const DEFAULT_APP_PREFERENCES: AppPreferences = {
   learningFontSize: 17,
   sendShortcut: "enter",
   closeBehavior: "hideToTray",
-  quickQueryShortcut: "Ctrl+Alt+R",
-  selectionExplanationShortcut: "Ctrl+Alt+U",
+  quickQueryBinding: {
+    version: 2,
+    kind: "chord",
+    accelerator: "Alt+Super+Space",
+  },
+  selectionExplanationBinding: {
+    version: 2,
+    kind: "modifierDoubleTap",
+    modifier: "Alt",
+    side: "left",
+  },
 };
 
 const uiFonts: UiFont[] = ["geistSourceHanSans", "sourceHanSans"];
@@ -86,13 +108,12 @@ export function validateAppPreferences(
   if (!closeBehaviors.includes(preferences.closeBehavior)) {
     throw new Error("设置返回了未知的主窗口关闭策略。");
   }
+  validateShortcutBinding(preferences.quickQueryBinding, "快速查询");
+  validateShortcutBinding(preferences.selectionExplanationBinding, "选区解释");
   if (
-    !preferences.quickQueryShortcut?.trim() ||
-    !preferences.selectionExplanationShortcut?.trim()
+    shortcutBindingIdentity(preferences.quickQueryBinding) ===
+    shortcutBindingIdentity(preferences.selectionExplanationBinding)
   ) {
-    throw new Error("设置返回的全局快捷键不完整。");
-  }
-  if (preferences.quickQueryShortcut === preferences.selectionExplanationShortcut) {
     throw new Error("快速查询和选区解释不能使用同一个快捷键。");
   }
   assertIntegerInRange(
@@ -108,6 +129,50 @@ export function validateAppPreferences(
     "学习内容字号",
   );
   return { ...preferences };
+}
+
+export function validateShortcutBinding(
+  binding: ShortcutBinding,
+  label = "全局",
+): ShortcutBinding {
+  if (!binding || typeof binding !== "object" || binding.version !== 2) {
+    throw new Error("设置返回的全局快捷键不完整。");
+  }
+  if (binding.kind === "chord") {
+    if (!binding.accelerator?.trim() || !binding.accelerator.includes("+")) {
+      throw new Error(`${label}快捷键必须包含修饰键。`);
+    }
+    return binding;
+  }
+  if (
+    binding.kind === "modifierDoubleTap" &&
+    binding.modifier === "Alt" &&
+    binding.side === "left"
+  ) {
+    return binding;
+  }
+  throw new Error(`${label}快捷键包含尚未支持的高级手势。`);
+}
+
+export function shortcutBindingIdentity(binding: ShortcutBinding) {
+  return binding.kind === "chord"
+    ? `chord:${binding.accelerator}`
+    : `double:${binding.side}:${binding.modifier}`;
+}
+
+export function shortcutBindingLabel(binding: ShortcutBinding) {
+  return binding.kind === "chord"
+    ? binding.accelerator.replace(/\bSuper\b/g, "Win")
+    : "左 Alt × 2";
+}
+
+export function shortcutBindingParts(binding: ShortcutBinding) {
+  return binding.kind === "chord"
+    ? binding.accelerator
+        .split("+")
+        .filter(Boolean)
+        .map((part) => part === "Super" ? "Win" : part)
+    : ["左 Alt", "×2"];
 }
 
 export function appPreferenceCssVariables(

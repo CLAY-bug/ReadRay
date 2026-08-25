@@ -1,4 +1,4 @@
-use crate::settings::{AppPreferences, CloseBehavior};
+use crate::settings::{AppPreferences, CloseBehavior, ShortcutBinding};
 use serde::Serialize;
 use std::collections::HashSet;
 use std::str::FromStr;
@@ -9,8 +9,9 @@ use tauri::{AppHandle, Emitter, Manager, Monitor, PhysicalPosition, PhysicalSize
 use tauri_plugin_global_shortcut::{GlobalShortcutExt, Shortcut};
 use tauri_plugin_window_state::{AppHandleExt as WindowStateAppHandleExt, StateFlags, WindowExt};
 
-pub const DEFAULT_QUICK_QUERY_SHORTCUT: &str = "Ctrl+Alt+R";
-pub const DEFAULT_SELECTION_EXPLANATION_SHORTCUT: &str = "Ctrl+Alt+U";
+pub const DEFAULT_QUICK_QUERY_SHORTCUT: &str = "Alt+Super+Space";
+pub const LEGACY_QUICK_QUERY_SHORTCUT: &str = "Ctrl+Alt+R";
+pub const LEGACY_SELECTION_EXPLANATION_SHORTCUT: &str = "Ctrl+Alt+U";
 pub const AUTOSTART_ARGUMENT: &str = "--readray-autostart";
 
 const MAIN_WINDOW_LABEL: &str = "main";
@@ -136,8 +137,20 @@ fn main_close_action(behavior: CloseBehavior) -> MainCloseAction {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct ShortcutPair {
-    quick_query: Shortcut,
-    selection_explanation: Shortcut,
+    quick_query: RuntimeShortcutBinding,
+    selection_explanation: RuntimeShortcutBinding,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ShortcutPhase {
+    Pressed,
+    Released,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum RuntimeShortcutBinding {
+    Chord(Shortcut),
+    DoubleLeftAlt,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -207,17 +220,28 @@ fn tauri_error(error: impl std::fmt::Display) -> String {
     error.to_string()
 }
 
-fn parse_shortcut(value: &str, label: &str) -> Result<Shortcut, String> {
-    let trimmed = value.trim();
-    let shortcut =
-        Shortcut::from_str(trimmed).map_err(|error| format!("{label}快捷键格式无效：{error}"))?;
-    if shortcut.mods.is_empty() {
-        return Err(format!("{label}快捷键不能使用裸按键。"));
+fn parse_shortcut(
+    binding: &ShortcutBinding,
+    label: &str,
+) -> Result<RuntimeShortcutBinding, String> {
+    binding.validate_version(label)?;
+    match binding {
+        ShortcutBinding::Chord { accelerator, .. } => {
+            let shortcut = Shortcut::from_str(accelerator.trim())
+                .map_err(|error| format!("{label}快捷键格式无效：{error}"))?;
+            if shortcut.mods.is_empty() {
+                return Err(format!("{label}快捷键不能使用裸按键。"));
+            }
+            Ok(RuntimeShortcutBinding::Chord(shortcut))
+        }
+        ShortcutBinding::ModifierDoubleTap { .. } => Ok(RuntimeShortcutBinding::DoubleLeftAlt),
     }
-    Ok(shortcut)
 }
 
-fn parse_shortcut_pair(quick_query: &str, selection: &str) -> Result<ShortcutPair, String> {
+fn parse_shortcut_pair(
+    quick_query: &ShortcutBinding,
+    selection: &ShortcutBinding,
+) -> Result<ShortcutPair, String> {
     let quick_query = parse_shortcut(quick_query, "快速查询")?;
     let selection_explanation = parse_shortcut(selection, "选区解释")?;
     if quick_query == selection_explanation {
@@ -232,8 +256,8 @@ fn parse_shortcut_pair(quick_query: &str, selection: &str) -> Result<ShortcutPai
 fn runtime_from(preferences: &AppPreferences) -> Result<RuntimePreferences, String> {
     Ok(RuntimePreferences {
         shortcuts: parse_shortcut_pair(
-            &preferences.quick_query_shortcut,
-            &preferences.selection_explanation_shortcut,
+            &preferences.quick_query_binding,
+            &preferences.selection_explanation_binding,
         )?,
         close_behavior: preferences.close_behavior,
         registered_shortcuts: HashSet::new(),
@@ -241,7 +265,10 @@ fn runtime_from(preferences: &AppPreferences) -> Result<RuntimePreferences, Stri
     })
 }
 
-pub(crate) fn validate_shortcut_pair(quick_query: &str, selection: &str) -> Result<(), String> {
+pub(crate) fn validate_shortcut_pair(
+    quick_query: &ShortcutBinding,
+    selection: &ShortcutBinding,
+) -> Result<(), String> {
     parse_shortcut_pair(quick_query, selection).map(|_| ())
 }
 
@@ -271,7 +298,41 @@ impl ShortcutRegistrar for TauriShortcutRegistrar<'_> {
 fn pair_set(pair: ShortcutPair) -> HashSet<Shortcut> {
     [pair.quick_query, pair.selection_explanation]
         .into_iter()
+        .filter_map(|binding| match binding {
+            RuntimeShortcutBinding::Chord(shortcut) => Some(shortcut),
+            RuntimeShortcutBinding::DoubleLeftAlt => None,
+        })
         .collect()
+}
+
+fn binding_chord(binding: RuntimeShortcutBinding) -> Option<Shortcut> {
+    match binding {
+        RuntimeShortcutBinding::Chord(shortcut) => Some(shortcut),
+        RuntimeShortcutBinding::DoubleLeftAlt => None,
+    }
+}
+
+fn display_shortcut(shortcut: &Shortcut) -> String {
+    shortcut
+        .to_string()
+        .split('+')
+        .map(|part| match part.to_ascii_lowercase().as_str() {
+            "ctrl" | "control" => "Ctrl".to_string(),
+            "alt" => "Alt".to_string(),
+            "shift" => "Shift".to_string(),
+            "super" | "meta" | "win" => "Win".to_string(),
+            _ => part.to_string(),
+        })
+        .collect::<Vec<_>>()
+        .join("+")
+}
+
+fn advanced_action_for(pair: ShortcutPair) -> Option<ShortcutAction> {
+    match (pair.quick_query, pair.selection_explanation) {
+        (RuntimeShortcutBinding::DoubleLeftAlt, _) => Some(ShortcutAction::QuickQuery),
+        (_, RuntimeShortcutBinding::DoubleLeftAlt) => Some(ShortcutAction::SelectionExplanation),
+        _ => None,
+    }
 }
 
 fn rollback_registration<R: ShortcutRegistrar>(
@@ -282,12 +343,18 @@ fn rollback_registration<R: ShortcutRegistrar>(
     let mut errors = Vec::new();
     for shortcut in unregistered_old.iter().copied() {
         if let Err(error) = registrar.register(shortcut) {
-            errors.push(format!("恢复 {} 失败：{error}", shortcut));
+            errors.push(format!(
+                "恢复 {} 失败：{error}",
+                display_shortcut(&shortcut)
+            ));
         }
     }
     for shortcut in registered_new.iter().copied() {
         if let Err(error) = registrar.unregister(shortcut) {
-            errors.push(format!("撤销 {} 失败：{error}", shortcut));
+            errors.push(format!(
+                "撤销 {} 失败：{error}",
+                display_shortcut(&shortcut)
+            ));
         }
     }
     if errors.is_empty() {
@@ -319,7 +386,7 @@ fn stage_registration_from_active<R: ShortcutRegistrar>(
             let rollback = rollback_registration(registrar, &registered_new, &[]);
             return Err(format!(
                 "快捷键 {} 无法注册：{error}{}",
-                shortcut,
+                display_shortcut(&shortcut),
                 rollback
                     .err()
                     .map(|detail| format!("；运行时回滚失败：{detail}"))
@@ -334,7 +401,7 @@ fn stage_registration_from_active<R: ShortcutRegistrar>(
             let rollback = rollback_registration(registrar, &registered_new, &unregistered_old);
             return Err(format!(
                 "旧快捷键 {} 无法注销：{error}{}",
-                shortcut,
+                display_shortcut(&shortcut),
                 rollback
                     .err()
                     .map(|detail| format!("；运行时回滚失败：{detail}"))
@@ -353,26 +420,30 @@ fn register_startup_shortcuts<R: ShortcutRegistrar>(
 ) -> (HashSet<Shortcut>, ShortcutRegistrationErrors) {
     let mut registered = HashSet::new();
     let mut errors = ShortcutRegistrationErrors::default();
-    match registrar.register(shortcuts.quick_query) {
-        Ok(()) => {
-            registered.insert(shortcuts.quick_query);
-        }
-        Err(error) => {
-            errors.quick_query = Some(format!(
-                "快速查询快捷键 {} 无法注册：{error}",
-                shortcuts.quick_query
-            ));
+    if let Some(shortcut) = binding_chord(shortcuts.quick_query) {
+        match registrar.register(shortcut) {
+            Ok(()) => {
+                registered.insert(shortcut);
+            }
+            Err(error) => {
+                errors.quick_query = Some(format!(
+                    "快速查询快捷键 {} 无法注册：{error}",
+                    display_shortcut(&shortcut)
+                ));
+            }
         }
     }
-    match registrar.register(shortcuts.selection_explanation) {
-        Ok(()) => {
-            registered.insert(shortcuts.selection_explanation);
-        }
-        Err(error) => {
-            errors.selection_explanation = Some(format!(
-                "选区解释快捷键 {} 无法注册：{error}",
-                shortcuts.selection_explanation
-            ));
+    if let Some(shortcut) = binding_chord(shortcuts.selection_explanation) {
+        match registrar.register(shortcut) {
+            Ok(()) => {
+                registered.insert(shortcut);
+            }
+            Err(error) => {
+                errors.selection_explanation = Some(format!(
+                    "选区解释快捷键 {} 无法注册：{error}",
+                    display_shortcut(&shortcut)
+                ));
+            }
         }
     }
     (registered, errors)
@@ -389,18 +460,30 @@ fn stage_runtime_registration<R: ShortcutRegistrar>(
 
     let mut target_registered = active.registered_shortcuts.clone();
     if quick_changed {
-        target_registered.insert(candidate.shortcuts.quick_query);
+        if let Some(shortcut) = binding_chord(candidate.shortcuts.quick_query) {
+            target_registered.insert(shortcut);
+        }
     }
     if selection_changed {
-        target_registered.insert(candidate.shortcuts.selection_explanation);
+        if let Some(shortcut) = binding_chord(candidate.shortcuts.selection_explanation) {
+            target_registered.insert(shortcut);
+        }
     }
 
     let candidate_pair = pair_set(candidate.shortcuts);
-    if quick_changed && !candidate_pair.contains(&active.shortcuts.quick_query) {
-        target_registered.remove(&active.shortcuts.quick_query);
+    if quick_changed {
+        if let Some(shortcut) = binding_chord(active.shortcuts.quick_query) {
+            if !candidate_pair.contains(&shortcut) {
+                target_registered.remove(&shortcut);
+            }
+        }
     }
-    if selection_changed && !candidate_pair.contains(&active.shortcuts.selection_explanation) {
-        target_registered.remove(&active.shortcuts.selection_explanation);
+    if selection_changed {
+        if let Some(shortcut) = binding_chord(active.shortcuts.selection_explanation) {
+            if !candidate_pair.contains(&shortcut) {
+                target_registered.remove(&shortcut);
+            }
+        }
     }
 
     let (registered_new, unregistered_old) = stage_registration_from_active(
@@ -431,7 +514,22 @@ pub(crate) fn initialize_runtime_preferences(
 ) -> Result<(), String> {
     let mut runtime = runtime_from(preferences)?;
     let registrar = TauriShortcutRegistrar(app);
-    let (registered, errors) = register_startup_shortcuts(&registrar, runtime.shortcuts);
+    let (registered, mut errors) = register_startup_shortcuts(&registrar, runtime.shortcuts);
+    #[cfg(desktop)]
+    if let Err(error) = crate::advanced_shortcuts::configure_double_left_alt(
+        app,
+        advanced_action_for(runtime.shortcuts),
+    ) {
+        match advanced_action_for(runtime.shortcuts) {
+            Some(ShortcutAction::QuickQuery) => {
+                errors.quick_query = Some(format!("快速查询高级快捷键无法启动：{error}"));
+            }
+            Some(ShortcutAction::SelectionExplanation) => {
+                errors.selection_explanation = Some(format!("选区解释高级快捷键无法启动：{error}"));
+            }
+            None => {}
+        }
+    }
     if let Some(detail) = errors.summary() {
         eprintln!("READRAY_SHORTCUT_REGISTRATION_ERROR={detail}");
     }
@@ -466,7 +564,31 @@ pub(crate) fn stage_runtime_preferences(
     {
         return Err("运行时设置与 SQLite 权威值不一致，请重启 ReadRay 后重试。".to_string());
     }
-    stage_runtime_registration(&TauriShortcutRegistrar(app), active, candidate_runtime)
+    let staged =
+        stage_runtime_registration(&TauriShortcutRegistrar(app), active, candidate_runtime)?;
+    #[cfg(desktop)]
+    if let Err(error) = crate::advanced_shortcuts::configure_double_left_alt(
+        app,
+        advanced_action_for(staged.new.shortcuts),
+    ) {
+        let rollback = rollback_registration(
+            &TauriShortcutRegistrar(app),
+            &staged.registered_new,
+            &staged.unregistered_old,
+        );
+        let _ = crate::advanced_shortcuts::configure_double_left_alt(
+            app,
+            advanced_action_for(staged.old.shortcuts),
+        );
+        return Err(format!(
+            "高级快捷键无法启用：{error}{}",
+            rollback
+                .err()
+                .map(|detail| format!("；普通快捷键回滚失败：{detail}"))
+                .unwrap_or_default()
+        ));
+    }
+    Ok(staged)
 }
 
 pub(crate) fn rollback_runtime_preferences(
@@ -479,12 +601,21 @@ pub(crate) fn rollback_runtime_preferences(
         &staged.registered_new,
         &staged.unregistered_old,
     );
+    #[cfg(desktop)]
+    let advanced_rollback = crate::advanced_shortcuts::configure_double_left_alt(
+        app,
+        advanced_action_for(staged.old.shortcuts),
+    );
     *runtime_preferences()
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(staged.old);
-    match rollback {
-        Ok(()) => original_error,
-        Err(detail) => format!("{original_error}；全局快捷键回滚失败：{detail}"),
+    match (rollback, advanced_rollback) {
+        (Ok(()), Ok(())) => original_error,
+        (Err(detail), Ok(())) => format!("{original_error}；全局快捷键回滚失败：{detail}"),
+        (Ok(()), Err(detail)) => format!("{original_error}；高级快捷键回滚失败：{detail}"),
+        (Err(standard), Err(advanced)) => format!(
+            "{original_error}；普通快捷键回滚失败：{standard}；高级快捷键回滚失败：{advanced}"
+        ),
     }
 }
 
@@ -512,6 +643,22 @@ pub(crate) fn shortcut_action(shortcut: &Shortcut) -> Option<ShortcutAction> {
     shortcut_action_for(runtime, shortcut)
 }
 
+pub(crate) fn quick_query_shortcut_label() -> String {
+    runtime_preferences()
+        .lock()
+        .ok()
+        .and_then(|runtime| {
+            runtime
+                .as_ref()
+                .map(|runtime| runtime.shortcuts.quick_query)
+        })
+        .map(|binding| match binding {
+            RuntimeShortcutBinding::Chord(shortcut) => display_shortcut(&shortcut),
+            RuntimeShortcutBinding::DoubleLeftAlt => "左 Alt × 2".to_string(),
+        })
+        .unwrap_or_else(|| DEFAULT_QUICK_QUERY_SHORTCUT.to_string())
+}
+
 fn shortcut_action_for(
     runtime: &RuntimePreferences,
     shortcut: &Shortcut,
@@ -519,9 +666,9 @@ fn shortcut_action_for(
     if !runtime.registered_shortcuts.contains(shortcut) {
         return None;
     }
-    if shortcut == &runtime.shortcuts.quick_query {
+    if binding_chord(runtime.shortcuts.quick_query).as_ref() == Some(shortcut) {
         Some(ShortcutAction::QuickQuery)
-    } else if shortcut == &runtime.shortcuts.selection_explanation {
+    } else if binding_chord(runtime.shortcuts.selection_explanation).as_ref() == Some(shortcut) {
         Some(ShortcutAction::SelectionExplanation)
     } else {
         None
@@ -879,7 +1026,11 @@ mod tests {
     }
 
     fn pair(quick: &str, selection: &str) -> ShortcutPair {
-        parse_shortcut_pair(quick, selection).unwrap()
+        parse_shortcut_pair(
+            &ShortcutBinding::chord(quick),
+            &ShortcutBinding::chord(selection),
+        )
+        .unwrap()
     }
 
     fn runtime(shortcuts: ShortcutPair) -> RuntimePreferences {
@@ -893,13 +1044,50 @@ mod tests {
 
     #[test]
     fn shortcut_validation_rejects_bare_duplicate_and_invalid_values() {
-        assert!(validate_shortcut_pair("R", "Ctrl+Alt+U")
-            .unwrap_err()
-            .contains("裸按键"));
-        assert!(validate_shortcut_pair("Ctrl+Alt+R", "Ctrl+Alt+R")
-            .unwrap_err()
-            .contains("同一个"));
-        assert!(validate_shortcut_pair("Ctrl+NoSuchKey", "Ctrl+Alt+U").is_err());
+        assert!(validate_shortcut_pair(
+            &ShortcutBinding::chord("R"),
+            &ShortcutBinding::chord("Ctrl+Alt+U")
+        )
+        .unwrap_err()
+        .contains("裸按键"));
+        assert!(validate_shortcut_pair(
+            &ShortcutBinding::chord("Ctrl+Alt+R"),
+            &ShortcutBinding::chord("Ctrl+Alt+R")
+        )
+        .unwrap_err()
+        .contains("同一个"));
+        assert!(validate_shortcut_pair(
+            &ShortcutBinding::chord("Ctrl+NoSuchKey"),
+            &ShortcutBinding::chord("Ctrl+Alt+U")
+        )
+        .is_err());
+        assert!(validate_shortcut_pair(
+            &ShortcutBinding::double_left_alt(),
+            &ShortcutBinding::double_left_alt()
+        )
+        .unwrap_err()
+        .contains("同一个"));
+    }
+
+    #[test]
+    fn advanced_binding_stays_out_of_standard_registration_set() {
+        let shortcuts = parse_shortcut_pair(
+            &ShortcutBinding::chord("Alt+Super+Space"),
+            &ShortcutBinding::double_left_alt(),
+        )
+        .unwrap();
+        let standard = pair_set(shortcuts);
+        assert_eq!(standard.len(), 1);
+        assert!(standard.contains(&binding_chord(shortcuts.quick_query).unwrap()));
+        assert_eq!(
+            display_shortcut(&binding_chord(shortcuts.quick_query).unwrap()),
+            "Alt+Win+Space"
+        );
+        assert!(binding_chord(shortcuts.selection_explanation).is_none());
+        assert_eq!(
+            advanced_action_for(shortcuts),
+            Some(ShortcutAction::SelectionExplanation)
+        );
     }
 
     #[test]
@@ -908,7 +1096,11 @@ mod tests {
         let new = pair("Ctrl+Shift+R", "Ctrl+Alt+U");
         let registrar = FakeRegistrar {
             registered: RefCell::new(pair_set(old)),
-            fail_register: RefCell::new([new.quick_query].into_iter().collect()),
+            fail_register: RefCell::new(
+                [binding_chord(new.quick_query).unwrap()]
+                    .into_iter()
+                    .collect(),
+            ),
             fail_unregister: None,
         };
         assert!(stage_registration(&registrar, old, new).is_err());
@@ -920,12 +1112,16 @@ mod tests {
         let shortcuts = pair("Ctrl+Alt+R", "Ctrl+Alt+U");
         let registrar = FakeRegistrar {
             registered: RefCell::new(HashSet::new()),
-            fail_register: RefCell::new([shortcuts.quick_query].into_iter().collect()),
+            fail_register: RefCell::new(
+                [binding_chord(shortcuts.quick_query).unwrap()]
+                    .into_iter()
+                    .collect(),
+            ),
             fail_unregister: None,
         };
         let (registered, errors) = register_startup_shortcuts(&registrar, shortcuts);
-        assert!(!registered.contains(&shortcuts.quick_query));
-        assert!(registered.contains(&shortcuts.selection_explanation));
+        assert!(!registered.contains(&binding_chord(shortcuts.quick_query).unwrap()));
+        assert!(registered.contains(&binding_chord(shortcuts.selection_explanation).unwrap()));
         assert!(errors.summary().unwrap().contains("已继续启动"));
     }
 
@@ -969,11 +1165,14 @@ mod tests {
             restored.registered_shortcuts
         );
         assert_eq!(
-            shortcut_action_for(&restored, &shortcuts.quick_query),
+            shortcut_action_for(&restored, &binding_chord(shortcuts.quick_query).unwrap()),
             Some(ShortcutAction::QuickQuery)
         );
         assert_eq!(
-            shortcut_action_for(&restored, &shortcuts.selection_explanation),
+            shortcut_action_for(
+                &restored,
+                &binding_chord(shortcuts.selection_explanation).unwrap()
+            ),
             Some(ShortcutAction::SelectionExplanation)
         );
         assert!(restored.shortcut_registration_errors.summary().is_some());
@@ -999,7 +1198,10 @@ mod tests {
         let first =
             stage_runtime_registration(&registrar, active, runtime(quick_recovered)).unwrap();
         assert_eq!(
-            shortcut_action_for(&first.new, &quick_recovered.quick_query),
+            shortcut_action_for(
+                &first.new,
+                &binding_chord(quick_recovered.quick_query).unwrap()
+            ),
             Some(ShortcutAction::QuickQuery)
         );
         assert!(first.new.shortcut_registration_errors.quick_query.is_none());
@@ -1018,11 +1220,17 @@ mod tests {
         assert_eq!(*registrar.registered.borrow(), pair_set(all_recovered));
         assert!(second.new.shortcut_registration_errors.summary().is_none());
         assert_eq!(
-            shortcut_action_for(&second.new, &all_recovered.quick_query),
+            shortcut_action_for(
+                &second.new,
+                &binding_chord(all_recovered.quick_query).unwrap()
+            ),
             Some(ShortcutAction::QuickQuery)
         );
         assert_eq!(
-            shortcut_action_for(&second.new, &all_recovered.selection_explanation),
+            shortcut_action_for(
+                &second.new,
+                &binding_chord(all_recovered.selection_explanation).unwrap()
+            ),
             Some(ShortcutAction::SelectionExplanation)
         );
     }

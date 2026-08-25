@@ -1,4 +1,5 @@
 export const BALANCE_REFRESH_INTERVAL_MS = 5 * 60 * 1_000;
+export const BALANCE_RETRY_INTERVAL_MS = 3 * 1_000;
 
 export type BalanceRefreshContext = {
   active: boolean;
@@ -71,6 +72,8 @@ export class BalanceRefreshController<T> {
 
   private refreshAfterCurrent = false;
 
+  private retryAttempt = 0;
+
   private disposed = false;
 
   constructor(
@@ -89,6 +92,7 @@ export class BalanceRefreshController<T> {
     this.context = { ...context };
     const isEligible = this.isEligible();
     if (!isEligible) {
+      this.retryAttempt = 0;
       this.pause();
       return;
     }
@@ -106,6 +110,7 @@ export class BalanceRefreshController<T> {
       return false;
     }
     this.clearTimer();
+    this.retryAttempt = 0;
     this.startRequest();
     return true;
   }
@@ -115,6 +120,7 @@ export class BalanceRefreshController<T> {
     this.clearTimer();
     this.requestGeneration += 1;
     this.refreshAfterCurrent = false;
+    this.retryAttempt = 0;
     this.context = { ...context };
     this.notify({ type: "reset" });
     if (!this.isEligible()) return false;
@@ -145,6 +151,7 @@ export class BalanceRefreshController<T> {
     this.clearTimer();
     this.requestGeneration += 1;
     this.refreshAfterCurrent = false;
+    this.retryAttempt = 0;
   }
 
   private clearTimer() {
@@ -153,13 +160,13 @@ export class BalanceRefreshController<T> {
     this.timer = undefined;
   }
 
-  private scheduleNext() {
+  private scheduleNext(delayMs = BALANCE_REFRESH_INTERVAL_MS) {
     this.clearTimer();
     if (!this.isEligible() || this.requestInFlight) return;
     this.timer = this.scheduler.set(() => {
       this.timer = undefined;
       this.startRequest();
-    }, BALANCE_REFRESH_INTERVAL_MS);
+    }, delayMs);
   }
 
   private startRequest() {
@@ -189,6 +196,14 @@ export class BalanceRefreshController<T> {
       return;
     }
     this.notify(event);
-    this.scheduleNext();
+    if (event.type === "success") {
+      this.retryAttempt = 0;
+      this.scheduleNext();
+    } else if (this.retryAttempt === 0) {
+      this.retryAttempt = 1;
+      this.scheduleNext(BALANCE_RETRY_INTERVAL_MS);
+    } else {
+      this.scheduleNext();
+    }
   }
 }

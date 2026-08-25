@@ -1,5 +1,6 @@
-// 一次性生成脚本：把 core-palette.json 展开为完整 28-token ReadRayThemeV1，
-// 生成 Rust 与 TypeScript 两侧的完整内置主题数据（不运行时派生，两端字节级一致）。
+// 一次性生成脚本：把 core-palette.json 中同时提供 dark/light 的主题展开为
+// 完整 28-token ReadRayThemeV1，生成 Rust 与 TypeScript 两侧的内置主题数据
+// （不运行时派生，两端字节级一致）。ReadRay Default 在 themeProtocol.ts 中单独保留。
 // 数据来自同一份 core-palette.json + 单一权威派生实现。
 import { readFileSync, writeFileSync } from "node:fs";
 
@@ -40,10 +41,12 @@ const THEME_META = {
   xcode: { license: "MIT", sourceUrl: "https://github.com/matt-deboer/xcode", author: "Matt DeBoer" },
 };
 
-const themes = Object.values(core).map((theme) => ({
-  ...theme,
-  ...(THEME_META[theme.id] || { license: "详见 README 主题归属", sourceUrl: "https://openai.com/codex", author: "Codex" }),
-}));
+const themes = Object.values(core)
+  .filter((theme) => theme.dark && theme.light)
+  .map((theme) => ({
+    ...theme,
+    ...(THEME_META[theme.id] || { license: "详见 README 主题归属", sourceUrl: "https://openai.com/codex", author: "Codex" }),
+  }));
 
 // ---------- 权威派生实现（与 Rust/TS 不再重复实现）----------
 function clampByte(v) {

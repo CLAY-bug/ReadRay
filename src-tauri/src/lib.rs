@@ -4,10 +4,12 @@ use std::path::PathBuf;
 use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, Instant};
 use tauri::{
-    Emitter, LogicalPosition, LogicalSize, Manager, PhysicalPosition, PhysicalSize, WebviewWindow,
-    WindowEvent,
+    AppHandle, Emitter, LogicalPosition, LogicalSize, Manager, PhysicalPosition, PhysicalSize,
+    WebviewWindow, WindowEvent,
 };
 
+#[cfg(desktop)]
+mod advanced_shortcuts;
 mod agent_runtime;
 pub mod conversations;
 pub mod deepseek_client;
@@ -461,8 +463,8 @@ fn stage1_status(window: tauri::WebviewWindow) -> Result<WindowState, String> {
 }
 
 #[tauri::command]
-fn shortcut_label() -> &'static str {
-    desktop_lifecycle::DEFAULT_QUICK_QUERY_SHORTCUT
+fn shortcut_label() -> String {
+    desktop_lifecycle::quick_query_shortcut_label()
 }
 
 #[tauri::command]
@@ -772,6 +774,91 @@ async fn deepseek_smoke_test(prompt: Option<String>) -> Result<DeepSeekSmokeResu
     })
 }
 
+pub(crate) fn handle_shortcut_action(
+    app: &AppHandle,
+    action: desktop_lifecycle::ShortcutAction,
+    phase: desktop_lifecycle::ShortcutPhase,
+) {
+    #[cfg(target_os = "windows")]
+    if action == desktop_lifecycle::ShortcutAction::SelectionExplanation {
+        match phase {
+            desktop_lifecycle::ShortcutPhase::Pressed => {
+                let capture = windows_uia::capture_foreground_with_retry();
+                eprintln!(
+                    "READRAY_UIA_CAPTURE ok={} selected_chars={} has_context={} has_minimal_context={} has_anchor={} text_pattern={}",
+                    capture.ok,
+                    capture
+                        .selected_text
+                        .as_deref()
+                        .map(|text| text.chars().count())
+                        .unwrap_or(0),
+                    capture.context_text.is_some(),
+                    capture.minimal_context.is_some(),
+                    capture.anchor_rect.is_some(),
+                    capture.text_pattern.unwrap_or("none")
+                );
+                match pending_uia_capture().lock() {
+                    Ok(mut pending) => *pending = Some(capture),
+                    Err(error) => eprintln!("READRAY_UIA_PENDING_CAPTURE_ERROR={error}"),
+                }
+            }
+            desktop_lifecycle::ShortcutPhase::Released => {
+                let capture = match pending_uia_capture().lock() {
+                    Ok(mut pending) => pending.take(),
+                    Err(error) => {
+                        eprintln!("READRAY_UIA_PENDING_CAPTURE_ERROR={error}");
+                        None
+                    }
+                };
+                if let Some(capture) = capture {
+                    let loading_anchor = capture.anchor_rect.clone().filter(|_| {
+                        capture
+                            .selected_text
+                            .as_deref()
+                            .is_some_and(|text| !text.trim().is_empty())
+                    });
+                    if let Err(error) =
+                        set_pending_overlay_intent(OverlayIntent::uia_capture(capture))
+                    {
+                        eprintln!("READRAY_OVERLAY_INTENT_ERROR={error}");
+                        return;
+                    }
+                    if let Some(anchor_rect) = loading_anchor {
+                        if let Some(window) = app.get_webview_window(OVERLAY_WINDOW_LABEL) {
+                            if let Err(error) = show_anchored_overlay_window(
+                                &window,
+                                AnchoredOverlayStage::Loading,
+                                &anchor_rect,
+                            ) {
+                                eprintln!("READRAY_ANCHORED_OVERLAY_WAKE_ERROR={error}");
+                            } else {
+                                eprintln!("READRAY_ANCHORED_OVERLAY_WAKE=ok");
+                            }
+                        }
+                    }
+                    if let Err(error) =
+                        app.emit_to(OVERLAY_WINDOW_LABEL, "readray://overlay-intent", ())
+                    {
+                        eprintln!("READRAY_OVERLAY_INTENT_EMIT_ERROR={error}");
+                    }
+                }
+            }
+        }
+        return;
+    }
+
+    if action == desktop_lifecycle::ShortcutAction::QuickQuery
+        && phase == desktop_lifecycle::ShortcutPhase::Released
+    {
+        eprintln!("READRAY_OVERLAY_SHORTCUT=released");
+        if let Err(error) = wake_quick_query(app) {
+            eprintln!("READRAY_OVERLAY_SHOW_ERROR={error}");
+        } else {
+            eprintln!("READRAY_OVERLAY_SHOW=ok");
+        }
+    }
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     load_project_env();
@@ -799,99 +886,12 @@ pub fn run() {
             #[cfg(desktop)]
             tauri_plugin_global_shortcut::Builder::new()
                 .with_handler(move |app, shortcut, event| {
-                    #[cfg(target_os = "windows")]
-                    if desktop_lifecycle::shortcut_action(shortcut)
-                        == Some(desktop_lifecycle::ShortcutAction::SelectionExplanation)
-                    {
-                        match event.state() {
-                            ShortcutState::Pressed => {
-                                let capture = windows_uia::capture_foreground_with_retry();
-                                eprintln!(
-                                    "READRAY_UIA_CAPTURE ok={} selected_chars={} has_context={} has_minimal_context={} has_anchor={} text_pattern={}",
-                                    capture.ok,
-                                    capture
-                                        .selected_text
-                                        .as_deref()
-                                        .map(|text| text.chars().count())
-                                        .unwrap_or(0),
-                                    capture.context_text.is_some(),
-                                    capture.minimal_context.is_some(),
-                                    capture.anchor_rect.is_some(),
-                                    capture.text_pattern.unwrap_or("none")
-                                );
-
-                                match pending_uia_capture().lock() {
-                                    Ok(mut pending) => *pending = Some(capture),
-                                    Err(error) => {
-                                        eprintln!("READRAY_UIA_PENDING_CAPTURE_ERROR={error}")
-                                    }
-                                }
-                            }
-                            ShortcutState::Released => {
-                                let capture = match pending_uia_capture().lock() {
-                                    Ok(mut pending) => pending.take(),
-                                    Err(error) => {
-                                        eprintln!("READRAY_UIA_PENDING_CAPTURE_ERROR={error}");
-                                        None
-                                    }
-                                };
-
-                                if let Some(capture) = capture {
-                                    let loading_anchor = capture.anchor_rect.clone().filter(|_| {
-                                        capture
-                                            .selected_text
-                                            .as_deref()
-                                            .is_some_and(|text| !text.trim().is_empty())
-                                    });
-
-                                    if let Err(error) = set_pending_overlay_intent(
-                                        OverlayIntent::uia_capture(capture),
-                                    ) {
-                                        eprintln!("READRAY_OVERLAY_INTENT_ERROR={error}");
-                                        return;
-                                    }
-
-                                    if let Some(anchor_rect) = loading_anchor {
-                                        if let Some(window) =
-                                            app.get_webview_window(OVERLAY_WINDOW_LABEL)
-                                        {
-                                            if let Err(error) = show_anchored_overlay_window(
-                                                &window,
-                                                AnchoredOverlayStage::Loading,
-                                                &anchor_rect,
-                                            ) {
-                                                eprintln!(
-                                                    "READRAY_ANCHORED_OVERLAY_WAKE_ERROR={error}"
-                                                );
-                                            } else {
-                                                eprintln!("READRAY_ANCHORED_OVERLAY_WAKE=ok");
-                                            }
-                                        }
-                                    }
-
-                                    if let Err(error) = app.emit_to(
-                                        OVERLAY_WINDOW_LABEL,
-                                        "readray://overlay-intent",
-                                        (),
-                                    ) {
-                                        eprintln!("READRAY_OVERLAY_INTENT_EMIT_ERROR={error}");
-                                    }
-                                }
-                            }
-                        }
-                        return;
-                    }
-
-                    if desktop_lifecycle::shortcut_action(shortcut)
-                        == Some(desktop_lifecycle::ShortcutAction::QuickQuery)
-                        && matches!(event.state(), ShortcutState::Released)
-                    {
-                        eprintln!("READRAY_OVERLAY_SHORTCUT=released");
-                        if let Err(error) = wake_quick_query(app) {
-                            eprintln!("READRAY_OVERLAY_SHOW_ERROR={error}");
-                        } else {
-                            eprintln!("READRAY_OVERLAY_SHOW=ok");
-                        }
+                    if let Some(action) = desktop_lifecycle::shortcut_action(shortcut) {
+                        let phase = match event.state() {
+                            ShortcutState::Pressed => desktop_lifecycle::ShortcutPhase::Pressed,
+                            ShortcutState::Released => desktop_lifecycle::ShortcutPhase::Released,
+                        };
+                        handle_shortcut_action(app, action, phase);
                     }
                 })
                 .build(),
@@ -954,6 +954,10 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             stage1_status,
             shortcut_label,
+            #[cfg(desktop)]
+            advanced_shortcuts::begin_shortcut_recording,
+            #[cfg(desktop)]
+            advanced_shortcuts::cancel_shortcut_recording,
             toggle_overlay_window,
             set_overlay_window_always_on_top,
             deepseek_smoke_test,

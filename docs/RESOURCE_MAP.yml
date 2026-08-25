@@ -4,8 +4,8 @@ project:
   repo_root: "."
 
 meta:
-  version: "1.79"
-  last_updated: "2026-08-16"
+  version: "1.85"
+  last_updated: "2026-08-25"
   updated_by: "Codex"
   source_of_truth: "docs/RESOURCE_MAP.yml"
   language: "zh-CN"
@@ -82,6 +82,25 @@ core_docs:
     notes: "记录可复用环境经验和本机命令/发布基线，不写成每次操作流水账；已有基线应优先复用，不要先走通用工具探测。"
     risk: "不要手动移动 VS 或 SDK 目录；迁移前先确认安装器、缓存和 Junction 策略。"
 
+  - path: "docs/RELEASE_CHECKLIST.md"
+    purpose: "ReadRay v0.1.0 Preview 的 Windows 安装包构建、人工验收、签名和 GitHub Release 发布边界。"
+    status: "active"
+    read_when:
+      - "准备首版 Preview 安装包。"
+      - "执行安装、升级、卸载、WebView2 和首次 API Key 配置验收。"
+      - "判断哪些发布动作可以由 Codex 完成，哪些需要发布者授权或亲自操作。"
+    notes: "当前只分发 Windows x64 NSIS 安装包；自动更新、代码签名和 GitHub Release 发布需要单独的密钥或外部授权。"
+    risk: "不要把未签名构建冒充为正式签名版本，不要在未完成人工安装/卸载验收前宣称发布完成。"
+
+  - path: "docs/RELEASE_NOTES_v0.1.0.md"
+    purpose: "v0.1.0 Preview 面向下载用户的功能、首次配置、已知边界和安装包校验说明。"
+    status: "active"
+    read_when:
+      - "创建 GitHub Release 的说明正文。"
+      - "需要向 Preview 用户解释 API Key 配置、隐私边界或已知限制。"
+    notes: "发布页应同步最终上传文件的 SHA-256；阶段九未完成必须保持公开说明一致。"
+    risk: "不得把 Preview 描述成阶段九已实现，也不得在发布说明中暴露真实 API Key 或本机路径。"
+
   - path: "docs/AGENT_UPGRADE.md"
     purpose: "ReadRay 内置 Agent 体验升级（流式输出、Markdown 渲染、系统提示词）的任务书、已确认决策与验收标准。"
     status: "active"
@@ -98,7 +117,7 @@ core_docs:
       - "讨论、实现或验收主应用聊天、Quick AI overlay 或 Writing Coach 的 Agent loop、tool call、联网搜索、来源、运行恢复或长上下文。"
       - "判断 pi Agent Core 与 ReadRay Rust/Tauri/SQLite 的适配边界。"
       - "继续阶段八点五之后的实现或恢复其上下文。"
-    notes: "任务 0/1/2/3/4/5/6 全部通过评审并正式收口（任务 3/4 含真实 Tauri 使用验收），**阶段八点五 Agent Runtime 升级全部完成**，等待合入 main。采用 Rust 原生 pi-style 共享 Runtime，不直接嵌入 pi coding-agent，不增加 Node/Python sidecar。主应用聊天与 Quick AI overlay 共享 ChatSurfaceAdapter；Writing Coach 经任务 6 以独立 WritingSurfaceAdapter 接入共享内核并保留 writing revision 权威。任务 5 长上下文为预算驱动投影 + 方案 A 最简折叠（投影态 user 摘要，不落库/不新增 migration）；任务 6 合并检查体验收敛（流式状态/取消、检查方式 B(1) 场景判断建议）。已知问题：写作检查曾返回 0 个问题（示例文章 'What is Love ?'），prompt 已强化但未经真实 Tauri 复验，已记录待后续处理。"
+    notes: "任务 0/1/2/3/4/5/6 全部通过评审并正式收口（任务 3/4 含真实 Tauri 使用验收），**阶段八点五 Agent Runtime 升级全部完成并已合入 main**。采用 Rust 原生 pi-style 共享 Runtime，不直接嵌入 pi coding-agent，不增加 Node/Python sidecar。主应用聊天与 Quick AI overlay 共享 ChatSurfaceAdapter；Writing Coach 经任务 6 以独立 WritingSurfaceAdapter 接入共享内核并保留 writing revision 权威。任务 5 长上下文为预算驱动投影 + 方案 A 最简折叠（投影态 user 摘要，不落库/不新增 migration）；任务 6 合并检查体验收敛（流式状态/取消、检查方式 B(1) 场景判断建议）。已知问题：写作检查曾返回 0 个问题（示例文章 'What is Love ?'），prompt 已强化但未经真实 Tauri 复验，已记录待后续处理。"
     risk: "不得一次性整包实现，不得开放 Bash、任意文件读写、动态扩展或通用系统权限；不得提前接学习者画像、记忆注入、个性化排序或其他阶段九语义。"
 
   - path: "doc/quick-ai-overlay-upgrade-task.md"
@@ -126,7 +145,7 @@ core_docs:
     read_when:
       - "创建、导入或排查 ReadRay 主题包。"
       - "以后设计 Codex、Obsidian 或其他外部主题 adapter。"
-    notes: "ReadRayThemeV1 是唯一稳定内部协议；theme.css 永远只作为文本解析，当前只内置 ReadRay Default 浅色模式。"
+    notes: "ReadRayThemeV1 是唯一稳定内部协议；theme.css 永远只作为文本解析，当前内置 ReadRay Default 与 Flexoki 双模式，以及 15 个双模式 Codex 预设。"
     risk: "不得为兼容外部主题开放任意 CSS、布局、字体、图片、远程资源或网络下载。"
 
 competition_resources:
@@ -256,8 +275,16 @@ source_areas:
     read_when:
       - "调整正常主应用壳、标题栏、侧栏折叠或首页装配。"
       - "将主应用接入独立 Tauri 窗口。"
-    notes: "当前通过 ?view=main 进入主应用，并在同一外壳内切换“今天”“复习”“写作”“记忆”“对话”“全部对话”和“设置”；由装配层加载 TodayService、ReviewService、MemoryService、ConversationService、WritingService、SettingsService 与最近 Quick AI 对话，页面组件不直接读取数据库。侧栏和全部历史的右键管理统一由外壳装配，成功后复用既有刷新令牌同步列表；只有实时页面、请求键和目标 ID 仍匹配时才同步当前标题或删除后进入空会话。复习来源可按 learningRecordId 进入记忆详情；写作页保持挂载并在离开时隐藏，使失败草稿仍可返回重试。外壳从 mainSidebarWidth 读取和提交展开态侧栏宽度，并通过 sidebarAutoCollapse 状态机随窗口宽度自动收放侧栏（<1000 收、>1080 放、迟滞带防抖、手动折叠优先）；侧栏调宽期间挂出 is-sidebar-resizing，窗口尺寸连续变化期间挂出 is-window-resizing 并在 120ms 稳定后才结算自动收放，避免过渡和 WebView2 尺寸追赶叠加。固定收放由独立 rr-main-sidebar-slot 连续改变布局占位，侧栏本体同步整体滑入/滑出，正文因而形成连续推开/收回。展开态标题栏左侧显示正式应用 Icon + ReadRay，状态按钮锚定侧栏标题区右缘；折叠时品牌淡出，按钮随标题区宽度连续移动到左上角，经过该按钮打开覆盖式 hover 预览，整条左边缘不触发，预览也不改变正文布局。按钮按当前固定状态切换 panel-open/panel-closed 两枚独立图标，不再旋转同一图标。应用四周保留 8 个方向的自定义 resize 手柄，透明窗口下替代系统 resize 命中区，mousedown 经 onStartResize 调用前端 getCurrentWindow().startResizeDragging。"
+    notes: "当前通过 ?view=main 进入主应用，并在同一外壳内切换“今天”“复习”“写作”“记忆”“对话”“全部对话”和“设置”；由装配层加载 TodayService、ReviewService、MemoryService、ConversationService、WritingService、SettingsService 与最近 Quick AI 对话，页面组件不直接读取数据库。启动时由 SettingsService.loadSettings 读取不含明文密钥的 apiKeyConfigured；未配置时显示位于左下的非模态 API Key 引导卡片，卡片使用宽矩形外形、说明与操作上下分层，并允许跨过侧栏进入主内容区，点击直达“设置 → AI 服务”，保存/清除后由 SettingsPage 回调同步卡片状态。侧栏和全部历史的右键管理统一由外壳装配，成功后复用既有刷新令牌同步列表；只有实时页面、请求键和目标 ID 仍匹配时才同步当前标题或删除后进入空会话。复习来源可按 learningRecordId 进入记忆详情；写作页保持挂载并在离开时隐藏，使失败草稿仍可返回重试。外壳从 mainSidebarWidth 读取和提交展开态侧栏宽度，并通过 sidebarAutoCollapse 状态机随窗口宽度自动收放侧栏（<1000 收、>1080 放、迟滞带防抖、手动折叠优先）；侧栏调宽期间挂出 is-sidebar-resizing，窗口尺寸连续变化期间挂出 is-window-resizing 并在 120ms 稳定后才结算自动收放，避免过渡和 WebView2 尺寸追赶叠加。固定收放由独立 rr-main-sidebar-slot 连续改变布局占位，侧栏本体同步整体滑入/滑出，正文因而形成连续推开/收回。展开态标题栏左侧显示正式应用 Icon + ReadRay，状态按钮锚定侧栏标题区右缘；折叠时品牌淡出，按钮随标题区宽度连续移动到左上角，经过该按钮打开覆盖式 hover 预览，整条左边缘不触发，预览也不改变正文布局。按钮按当前固定状态切换 panel-open/panel-closed 两枚独立图标，不再旋转同一图标。应用四周保留 8 个方向的自定义 resize 手柄，透明窗口下替代系统 resize 命中区，mousedown 经 onStartResize 调用前端 getCurrentWindow().startResizeDragging。"
     risk: "不要把快捷 overlay 状态机或 invoke 迁入页面组件；正式 Tauri 对话、复习、写作和设置必须使用真实 service。"
+
+  - path: "src/components/ApiKeySetupCard.tsx"
+    purpose: "主窗口未配置 DeepSeek API Key 时的非模态引导卡片。"
+    status: "active"
+    read_when:
+      - "调整首启 AI 配置提示或直达设置入口。"
+    notes: "只消费外壳传入的打开设置/稍后再说回调，不读取凭据、不持久化 dismiss 状态；配置状态由 SettingsService.loadSettings 的 apiKeyConfigured 决定。视觉上从左下锚定、使用宽矩形外形、说明与操作上下分层并允许跨过侧栏，采用浅色主题表面、低对比边框和轻阴影，不使用深色实心徽标或按钮。"
+    risk: "不得显示 API Key 明文，不得把提示卡片变成阻塞式登录或绕过 SettingsService。"
 
   - path: "src/components/MainSidebar.tsx"
     purpose: "主应用全局左侧栏，包含新对话、学习导航、最近对话、查看全部和设置入口。"
@@ -323,7 +350,7 @@ source_areas:
     status: "active"
     read_when:
       - "调整真实复习卡映射、来源统计、推荐理由或 mutation 结果应用。"
-    notes: "显式区分 learningTargetId（调度/revision 身份）与 learningRecordId（本卡真实 occurrence 身份）；分页合并、状态写回按 targetId 传播，卡片内容、generated card、failure 和 quality feedback 仍严格核对具体 record/feed/card。卡片标题、完形答案与制卡输入统一消费 learningTargetText；queryText/contextText 只作为可追溯来源。无可用英文语境或进入后续轮次时标记为待制卡，接收 Rust 已持久化并验证的 AI 英文语境。按最终英文内容稳定映射密度与视觉类型。"
+    notes: "显式区分 learningTargetId（调度/revision 身份）与 learningRecordId（本卡真实 occurrence 身份）；分页合并、状态写回按 targetId 传播，卡片内容、generated card、failure 和 quality feedback 仍严格核对具体 record/feed/card。卡片标题、完形答案与制卡输入统一消费 learningTargetText；queryText/contextText 只作为可追溯来源。无可用英文语境或进入后续轮次时标记为待制卡，接收 Rust 已持久化并验证的 AI 英文语境。为避免 UIA 原始整页/终端输出污染单词卡，已记录的单词/短语语境仅接受不超过 640 字符且不含私有区终端装饰的紧凑文本，否则回退目标词并走既有后台制卡；原始 contextText 仍保留在学习记录中。按最终英文内容稳定映射密度与视觉类型。"
     risk: "不得把 targetId 与 recordId 再次耦合、按文本在前端合并、把中文上下文冒充英文卡、在前端自行生成 AI 语境，或根据质量反馈声称已改变策略。"
 
   - path: "src/reviewRequestIdentity.ts"
@@ -389,7 +416,7 @@ source_areas:
     status: "active"
     read_when:
       - "修改复习前端协议、装配、统计、request 身份或文案边界。"
-    notes: "使用 Node 内置 test runner，不新增依赖；覆盖本机日历边界、学习时英文语境选择、ExplanationCard AI 例句隔离、后台生成映射、稳定内容密度、pending 隐藏、跨轮次同目标、分页统计/合并、任意结果撤销、卡片级即时反馈（含页面只消费应用级协调器、不自行调用反馈 service 的静态守卫），以及外部刷新等待 mutation 后用 SQLite 条目快照对账。"
+    notes: "使用 Node 内置 test runner，不新增依赖；覆盖本机日历边界、学习时英文语境选择、过长/Powerline 原始上下文过滤、ExplanationCard AI 例句隔离、后台生成映射、稳定内容密度、pending 隐藏、跨轮次同目标、分页统计/合并、任意结果撤销、卡片级即时反馈（含页面只消费应用级协调器、不自行调用反馈 service 的静态守卫），以及外部刷新等待 mutation 后用 SQLite 条目快照对账。"
     risk: "静态和纯逻辑测试不替代真实 Tauri/SQLite 与视觉人工验收。"
 
   - path: "tests/reviewPreparationCoordinator.test.mjs"
@@ -484,19 +511,19 @@ source_areas:
     read_when:
       - "调整设置页、DeepSeek Key 首次配置/更新/清除或失败重试。"
       - "排查设置页 loading、重启恢复或窄窗口布局。"
-    notes: "复用 MainAppShell、MainSidebar 和标题栏；页面只消费 SettingsService 与应用级 AppThemeController。主题区只提供随包内置主题的选择与 light/dark 模式切换，暂不开放导入或删除入口；主题失败不得覆盖当前权威配色。既有 Key、余额、Token、数据、字体字号、发送键、全局快捷键、开机启动和关闭策略保持原正式链路。"
+    notes: "复用 MainAppShell、MainSidebar 和标题栏；页面只消费 SettingsService 与应用级 AppThemeController。支持由外壳传入 initialSection 直达 AI 服务分类，并在加载、保存或清除 Key 后通过 onApiKeyConfiguredChange 回报 apiKeyConfigured。ReadRay 使用量默认选择“今天”，其余范围仍由用户手动切换。主题区只提供随包内置主题的选择与 light/dark 模式切换，暂不开放导入或删除入口；下拉上下键、Home/End 与鼠标悬停只临时预览主题，确认后才保存，取消会恢复数据库权威配色；主题失败不得覆盖当前权威配色。全局快捷键录制只发起原生 command 并消费 readray://shortcut-recorded，WebView 不再从 keydown 推断系统级按键；切页或卸载会取消原生录制。既有 Key、余额、Token、数据、字体字号、发送键、开机启动和关闭策略保持原正式链路。"
     risk: "不得直接 invoke、读主题文件、读取 localStorage/sessionStorage、显示或返回已保存 Key 明文；主题失败不得覆盖当前权威配色。"
 
   - path: "src/themeProtocol.ts"
-    purpose: "ReadRayThemeV1 前端类型、严格快照校验、内置主题（ReadRay Default、Flexoki 与 28 个 Codex 预设）和白名单 CSS 变量应用。"
+    purpose: "ReadRayThemeV1 前端类型、严格快照校验、内置主题（ReadRay Default、Flexoki 与 15 个双模式 Codex 预设）和白名单 CSS 变量应用。"
     status: "active"
     read_when:
       - "调整主题语义 token、默认回退、内置主题、运行时变量或 adapter 边界。"
-    notes: "只把规范化颜色逐项写入既有 rr-main 变量；应用中途失败会恢复全部旧值，ReadRay Default 保留当前浅色视觉。字符串长度按 Unicode code point 计数（Array.from().length），与 Rust chars().count() 一致，保证含 emoji 的 manifest 在前端校验与 Rust 安全预检结果相同。内置主题列表由 READRAY_BUILTIN_THEME_IDS 定义（30 个随包主题），快照校验要求所有已知内置主题与 canonical 完全一致并拒绝未知内置标记；Codex 内置主题完整配色来自 codexThemeData.ts（由生成脚本产出，与 Rust 端字节级一致），不运行时派生。"
+    notes: "只把规范化颜色逐项写入既有 rr-main 变量；应用中途失败会恢复全部旧值，ReadRay Default 的深色模式沿用浅色的语义层级，并以 overlay 的 Graphite + Amber 作为品牌色来源。字符串长度按 Unicode code point 计数（Array.from().length），与 Rust chars().count() 一致，保证含 emoji 的 manifest 在前端校验与 Rust 安全预检结果相同。内置主题列表由 READRAY_BUILTIN_THEME_IDS 定义（17 个随包主题：ReadRay Default、Flexoki 与 15 个双模式 Codex 预设），快照校验要求所有已知内置主题与 canonical 完全一致并拒绝未知内置标记；Codex 内置主题完整配色来自 codexThemeData.ts（由生成脚本产出，与 Rust 端字节级一致），不运行时派生。"
     risk: "不得接收或插入原始 CSS，也不得把主题应用到 overlay、字体、字号或布局。"
 
   - path: "src/codexThemeData.ts"
-    purpose: "28 个 Codex 预设内置主题的完整展开配色与 manifest 数据表。"
+    purpose: "15 个双模式 Codex 预设内置主题的完整展开配色与 manifest 数据表。"
     status: "active"
     read_when:
       - "调整 Codex 内置主题配色、来源或许可证归属。"
@@ -532,7 +559,7 @@ source_areas:
     status: "active"
     read_when:
       - "排查主题重启恢复、即时应用、窗口重新显示或设置页卸载后的回滚。"
-    notes: "只在主应用实例化 ThemeService；主题变量仅写入 .rr-main-app，非 Tauri 预览使用 ReadRay Default。每次应用已校验主题后还会通过 mainWindowBackground 同步 main 原生窗口层与 WebView2 默认底色；同步失败只记录，不反向破坏已经成功的主题切换。"
+    notes: "只在主应用实例化 ThemeService；主题变量仅写入 .rr-main-app，非 Tauri 预览使用 ReadRay Default。每次应用已校验主题后还会通过 mainWindowBackground 同步 main 原生窗口层与 WebView2 默认底色；同步失败只记录，不反向破坏已经成功的主题切换。preview/restorePreview 只改运行时变量与窗口底色，不推进 snapshotRef 或 SQLite 权威状态，供设置页键盘浏览主题时临时预览。"
     risk: "不得在 overlay 创建主题服务，不得使用 localStorage/sessionStorage 或直接 invoke。"
 
   - path: "src/mainWindowBackground.ts"
@@ -549,7 +576,7 @@ source_areas:
     status: "active"
     read_when:
       - "修改主题前端协议、内置主题、运行时应用或设置页正式路径。"
-    notes: "由 test:settings 统一运行；聚焦覆盖 Rust/前端规范颜色、按 code point 的字符串长度边界、内置主题列表与 Flexoki 双模式运行时变量映射、28 个 Codex 内置主题的清单/模式支持/唯一 ID/删除限制/运行时变量映射、builtin 删除限制、导入精确目标、提交未确认对账、并发冲突、默认变量、运行时回滚、主窗口背景颜色转换/配置/权限接线和阴影 token 静态守卫；Rust 配套测试覆盖 CSS 文本解析、限制、可读性、SQLite lifecycle、重启恢复、Flexoki 与 Codex 内置主题保护。"
+    notes: "由 test:settings 统一运行；聚焦覆盖 Rust/前端规范颜色、按 code point 的字符串长度边界、内置主题列表与 Flexoki 双模式运行时变量映射、15 个双模式 Codex 内置主题的清单/模式支持/唯一 ID/删除限制/运行时变量映射、builtin 删除限制、导入精确目标、提交未确认对账、并发冲突、默认变量、运行时回滚、主窗口背景颜色转换/配置/权限接线和阴影 token 静态守卫；Rust 配套测试覆盖 CSS 文本解析、限制、可读性、SQLite lifecycle、重启恢复、Flexoki 与 Codex 内置主题保护。"
     risk: "自动测试不替代真实 Tauri 的原生目录选择、即时视觉和重启人工验收。"
 
   - path: "src/settingsBalanceRefresh.ts"
@@ -565,7 +592,7 @@ source_areas:
     status: "active"
     read_when:
       - "调整设置快照、Key 验证保存或清除 command 参数。"
-    notes: "调用设置快照、SQLite 偏好读取/更新、Windows 开机启动读取/切换、Key 保存/清除、余额、按显式本机日历边界聚合使用量、打开数据目录和 SQLite 备份 commands；备份取消时不调用 Rust。Key 只作为用户本次输入提交，不做前端持久化。"
+    notes: "调用设置快照、SQLite 偏好读取/更新、Windows 原生快捷键录制/取消/结果事件、开机启动读取/切换、Key 保存/清除、余额、按显式本机日历边界聚合使用量、打开数据目录和 SQLite 备份 commands；备份取消时不调用 Rust。Key 只作为用户本次输入提交，不做前端持久化。"
     risk: "不得缓存 Key、记录 Key 或把原生存储实现移入前端。"
 
   - path: "src/settingsService.ts"
@@ -589,7 +616,7 @@ source_areas:
     status: "active"
     read_when:
       - "调整字体选项、字号范围、发送快捷键或 IME 行为。"
-    notes: "只允许随包的 Geist/思源黑体与 Newsreader/思源宋体组合；默认界面 14px、学习内容 17px。字号输入候选只接受范围内整数；CSS 同时提供基准字号和相对默认值的缩放变量，用于在主窗口/overlay 保留既有文字层级，并让写作编辑、辅导、完成稿和模式内容与工具栏保持作用域隔离。shouldSendMultilineMessage 供今天、完整对话、overlay Quick AI 和写作辅导共用，组合输入期间始终拒绝发送。"
+    notes: "只允许随包的 Geist/思源黑体与 Newsreader/思源宋体组合；默认界面 14px、学习内容 17px。全局快捷键使用 version=2 的 chord / modifierDoubleTap 判别联合；新装默认快速查询 Alt+Super+Space、选区解释双击左 Alt，身份比较与显示不再把高级手势降格为组合字符串。字号输入候选只接受范围内整数；CSS 同时提供基准字号和相对默认值的缩放变量，用于在主窗口/overlay 保留既有文字层级，并让写作编辑、辅导、完成稿和模式内容与工具栏保持作用域隔离。shouldSendMultilineMessage 供今天、完整对话、overlay Quick AI 和写作辅导共用，组合输入期间始终拒绝发送。"
     risk: "不得扫描系统字体、添加主题/语言选项，或让单行解释查询跟随多行发送偏好。"
 
   - path: "src/appPreferenceSaveCoordinator.ts"
@@ -609,12 +636,12 @@ source_areas:
     risk: "不得使用 localStorage/sessionStorage 或在 hook 中直接 invoke。"
 
   - path: "src/desktopLifecycle.ts"
-    purpose: "前端应用级保存等待、安全退出结果隔离和全局快捷键录制纯逻辑。"
+    purpose: "前端应用级保存等待、安全退出结果隔离和原生快捷键录制事件类型。"
     status: "active"
     read_when:
       - "调整安全退出保存等待、强制退出确认或快捷键录制。"
       - "排查迟到退出结果、设置保存或写作 flush 未被等待。"
-    notes: "DesktopSaveCoordinator 持续跟踪设置 mutation 的 promise/失败和写作草稿 flush；即使 SettingsPage 已卸载，安全退出仍等待进行中操作并报告未解决失败。退出 request ID 激活 mutation gate 后，设置 mutation 与写作编辑入口拒绝新修改，flush 以 mutation generation 确认静默后才调用 typed Rust 退出 command；失败或取消会解除 gate。快捷键录制拒绝裸按键并生成稳定组合字符串。"
+    notes: "DesktopSaveCoordinator 持续跟踪设置 mutation 的 promise/失败和写作草稿 flush；即使 SettingsPage 已卸载，安全退出仍等待进行中操作并报告未解决失败。退出 request ID 激活 mutation gate 后，设置 mutation 与写作编辑入口拒绝新修改，flush 以 mutation generation 确认静默后才调用 typed Rust 退出 command；失败或取消会解除 gate。快捷键录制结果只定义有类型事件协议，按键识别与录制抑制属于 Rust Windows 原生层。"
     risk: "不得把模型请求加入退出等待，也不得在此直接操作托盘、窗口、注册表或 SQLite。"
 
   - path: "src/desktopContextMenu.ts"
@@ -646,7 +673,7 @@ source_areas:
     status: "active"
     read_when:
       - "修改设置前端协议、安全边界或桌面能力呈现。"
-    notes: "与 desktopLifecycle.test.mjs 由 test:settings 统一运行，覆盖既有设置边界，以及偏好保存 flush、开机启动 typed commands、快捷键录制、安全退出、单实例/托盘静态装配和正式路径隔离；自动测试不触碰真实 Windows 开机启动项。"
+    notes: "与 desktopLifecycle.test.mjs 由 test:settings 统一运行，覆盖既有设置边界，以及偏好保存 flush、开机启动 typed commands、快捷键录制、安全退出、单实例/托盘静态装配、正式路径隔离和未配置 API Key 引导卡片的静态接线；自动测试不触碰真实 Windows 开机启动项。"
     risk: "不触碰真实 Windows 凭据，也不替代真实 Tauri/DeepSeek 与重启人工验收。"
 
   - path: "src/components/MemoryPage.tsx"
@@ -862,7 +889,7 @@ source_areas:
     status: "active"
     read_when:
       - "调整 readray-today-2 主应用视觉、响应式布局或侧栏状态。"
-    notes: "样式全部使用 rr-main-* / rr-memory-* 作用域；全局外壳、今天页和记忆页以 1440×900 / scale 1 作为设计基线，但真实启动尺寸由 Rust 窗口状态恢复或工作区自适应决定。480px 是 Tauri 外层窗口下限；Windows 无边框 resize 边界会使实际 WebView 客户区略小，因此 `.rr-main-app` 不再重复声明 480px CSS 最小宽度，而是以 `inset:0; min-width:0` 服从真实客户区，避免窄窗横向溢出裁掉 composer 右边距。浏览器预览排版固定 1440×900 画布后整体等比缩放，响应式规则按应用容器尺寸触发；今天页正文与底部 composer 共用 --rr-main-dialogue-width（默认最大 736px，窄档按 48/40/28px 稳定对称边距），不使用随每个像素连续变化的 cqw 几何。侧栏固定收放由 --rr-main-sidebar-layout-width 驱动 rr-main-sidebar-slot，槽宽与侧栏 translateX 共用 260ms 缓动，正文连续推开/收回；折叠后仅左上角固定按钮 hover 临时预览，预览只改变绝对定位侧栏的 translateX，布局槽保持 0，因此关闭时不挤动主页面。侧栏调宽时由 is-sidebar-resizing、窗口连续缩放时由 is-window-resizing 禁用槽、侧栏与标题栏过渡。真实主窗口主体使用 position:absolute + inset:0 贴合系统窗口边界并保留圆角，阴影交给 Tauri/Windows 原生无装饰阴影；浏览器预览保留独立留白和柔和 CSS 阴影；侧栏右缘提供拖拽调整手柄。"
+    notes: "样式全部使用 rr-main-* / rr-memory-* 作用域；包含未配置 API Key 引导卡片的左下侧栏定位、浅色主题表面、低对比边框/轻阴影和直达设置按钮样式；侧栏底部设置 footer（分隔线与按钮）整体视觉下移 3px，使分隔线、按钮与窗口底部留白更均衡。全局外壳、今天页和记忆页以 1440×900 / scale 1 作为设计基线，但真实启动尺寸由 Rust 窗口状态恢复或工作区自适应决定。480px 是 Tauri 外层窗口下限；Windows 无边框 resize 边界会使实际 WebView 客户区略小，因此 `.rr-main-app` 不再重复声明 480px CSS 最小宽度，而是以 `inset:0; min-width:0` 服从真实客户区，避免窄窗横向溢出裁掉 composer 右边距。浏览器预览排版固定 1440×900 画布后整体等比缩放，响应式规则按应用容器尺寸触发；今天页正文与底部 composer 共用 --rr-main-dialogue-width（默认最大 736px，窄档按 48/40/28px 稳定对称边距），不使用随每个像素连续变化的 cqw 几何。侧栏固定收放由 --rr-main-sidebar-layout-width 驱动 rr-main-sidebar-slot，槽宽与侧栏 translateX 共用 260ms 缓动，正文连续推开/收回；折叠后仅左上角固定按钮 hover 临时预览，预览只改变绝对定位侧栏的 translateX，布局槽保持 0，因此关闭时不挤动主页面。侧栏调宽时由 is-sidebar-resizing、窗口连续缩放时由 is-window-resizing 禁用槽、侧栏与标题栏过渡。真实主窗口主体使用 position:absolute + inset:0 贴合系统窗口边界并保留圆角，阴影交给 Tauri/Windows 原生无装饰阴影；浏览器预览保留独立留白和柔和 CSS 阴影；侧栏右缘提供拖拽调整手柄。"
     risk: "不要把主应用浅色 token 写回 overlay 的 tokens.css。"
 
   - path: "src/styles/conversation-page.css"
@@ -886,7 +913,7 @@ source_areas:
     status: "active"
     read_when:
       - "调整设置页视觉、1440×900/840×600 或两档侧栏布局。"
-    notes: "全部使用 rr-settings-* 作用域并复用 main-app.css 变量；包含余额、使用量 loading/error/retry、数据操作和确认框状态。分类导航默认是 52px 顶部横向导航；应用容器不超过 900px 时表单与数据行纵向排列。所有 select 使用 appearance:none + 自定义 chevron、hover/focus 边框过渡与主题色焦点光晕。"
+    notes: "全部使用 rr-settings-* 作用域并复用 main-app.css 变量；包含余额、使用量 loading/error/retry、数据操作和确认框状态。API Key 输入框聚焦只保留细窄主题色光晕，不使用大范围模糊阴影。分类导航默认是 52px 顶部横向导航；应用容器不超过 900px 时表单与数据行纵向排列。所有 select 使用 appearance:none + 自定义 chevron、hover/focus 边框过渡与主题色焦点光晕；下拉菜单阴影使用 --rr-main-shadow，避免深色主题前景色造成泛白光晕。"
     risk: "不要复制 App Shell、重定义全局 token 或影响今天、写作、记忆、对话、overlay 和 UIA。"
 
   - path: "src/styles/review-page.css"
@@ -1015,7 +1042,7 @@ source_areas:
     status: "active"
     read_when:
       - "开发全局快捷键、剪贴板、窗口行为、SQLite 命令、原生配置。"
-    notes: "当前包含 Tauri v2 配置、Rust入口和桌面插件。single-instance 按官方要求最先注册；setup 初始化 SQLite 权威偏好、动态全局快捷键和仅三项菜单的托盘。持久化快捷键被占用时记录实际注册状态与错误但继续 setup，不改写 SQLite；手动启动仍显示 main。带专用参数的开机启动保持 main/overlay 隐藏；overlay 既有失焦/Esc 隐藏和意图领取边界不变。"
+    notes: "当前包含 Tauri v2 配置、Rust入口和桌面插件。single-instance 按官方要求最先注册；setup 初始化 SQLite 权威偏好、动态全局快捷键、Windows 高级快捷键监听和仅三项菜单的托盘。普通 chord 继续由 Tauri global-shortcut 注册；双击左 Alt 与设置录制由独立 Windows 原生层处理。持久化快捷键被占用时记录实际注册状态与错误但继续 setup，不改写 SQLite；手动启动仍显示 main。带专用参数的开机启动保持 main/overlay 隐藏；overlay 既有失焦/Esc 隐藏和意图领取边界不变。"
     risk: "不要把 UI 状态和业务展示逻辑塞进 Rust 层。"
 
   - path: "src-tauri/tauri.conf.json"
@@ -1044,8 +1071,17 @@ source_areas:
       - "调整托盘菜单、主窗口关闭/恢复、快捷键注册或安全退出。"
       - "排查手动/开机启动可见性、第二实例或运行时与 SQLite 偏好不一致。"
       - "排查窗口重启后尺寸、位置、最大化状态未恢复，或显示器/DPI 变化后窗口越界。"
-    notes: "托盘左键恢复主窗口，右键菜单仅打开/快速查询/退出；快速查询复用既有 overlay intent。main 使用官方 tauri-plugin-window-state 的独立 .main-window-state.json，只保存 SIZE、POSITION、MAXIMIZED；setup 在首次显示前手动恢复，并把无效或离屏几何约束到当前/主显示器工作区。无历史状态时按工作区约 86% 生成不小于 480×600、不大于 1440×900 的默认边界；历史尺寸也按相同 DPI 感知最小值约束，最大化恢复保留修正后的普通窗口边界。运行时同时保存 SQLite 快捷键映射、实际 registered set 和两项独立 startup error；任意偏好保存失败会把物理注册与完整 active 元数据一起回滚。单实例回调只对再次手动启动恢复主窗口。真正退出由主窗口先完成设置写入和写作 flush；取消先清除 pending ID，窗口显示/聚焦失败仅记录警告而不把前端留在过期请求上。"
+    notes: "托盘左键恢复主窗口，右键菜单仅打开/快速查询/退出；快速查询复用既有 overlay intent。main 使用官方 tauri-plugin-window-state 的独立 .main-window-state.json，只保存 SIZE、POSITION、MAXIMIZED；setup 在首次显示前手动恢复，并把无效或离屏几何约束到当前/主显示器工作区。无历史状态时按工作区约 86% 生成不小于 480×600、不大于 1440×900 的默认边界；历史尺寸也按相同 DPI 感知最小值约束，最大化恢复保留修正后的普通窗口边界。运行时把 version=2 binding 解析为普通 chord 或双击左 Alt；registered set 只包含 chord，高级动作交给 advanced_shortcuts。任意偏好保存失败会把普通注册、原生高级动作与完整 active 元数据一起回滚。单实例回调只对再次手动启动恢复主窗口。真正退出由主窗口先完成设置写入和写作 flush；取消先清除 pending ID，窗口显示/聚焦失败仅记录警告而不把前端留在过期请求上。"
     risk: "不得让托盘退出绕过安全退出，或让开机启动、第二实例创建额外托盘和数据库连接；overlay 窗口边界不得在此改写。"
+
+  - path: "src-tauri/src/advanced_shortcuts.rs"
+    purpose: "Windows 低级键盘监听、双击左 Alt 状态机和原生快捷键录制。"
+    status: "active"
+    read_when:
+      - "调整双击修饰键、录制抑制、按键命名或原生快捷键事件。"
+      - "排查系统菜单、输入法切换或高级快捷键无法响应。"
+    notes: "WH_KEYBOARD_LL 安装在独立消息线程，回调只更新小型状态并把动作交给工作线程；运行时双击左 Alt 使用 350ms 窗口且不吞键，设置录制期间临时抑制本次按键直到全部释放，避免 WebView 焦点、Windows 系统菜单或输入法先消费录制动作。任何插入键都会取消双击判定；注入按键不参与。"
+    risk: "低级钩子不能跨越安全桌面，普通权限进程对管理员窗口的 UIA 捕获仍受 UIPI/权限边界影响；运行时不吞 Alt，因此应用菜单、输入法与辅助功能冲突必须在真实 Windows 环境人工验证。"
 
   - path: "src-tauri/src/explanation.rs"
     purpose: "阶段二 ExplanationCard 中间协议、CaptureInput 类型和 Rust validator。"
@@ -1149,7 +1185,7 @@ source_areas:
     status: "active"
     read_when:
       - "调整设置 Rust 协议、Key 验证或 SQLite 数据概览。"
-    notes: "返回无明文的 Key configured/source、实际模型、数据目录、三类计数、版本、Windows 实际开机启动状态、可选快捷键注册错误和非敏感偏好。偏好更新除既有校验外还校验关闭策略与两组全局快捷键；先阶段化运行时注册，再按 revision 保存 SQLite，提交模糊错误会回读权威值决定确认或回滚。开机启动 command 直接读写官方插件状态，不写 SQLite。"
+    notes: "返回无明文的 Key configured/source、实际模型、数据目录、三类计数、版本、Windows 实际开机启动状态、可选快捷键注册错误和非敏感偏好；余额复用 DeepSeek 官方 GET /user/balance，显式声明 JSON 响应，首次失败由前端短暂自动重试一次并展示非敏感错误详情。偏好更新校验 version=2 chord / modifierDoubleTap、关闭策略与两项 binding；先阶段化普通注册和原生高级动作，再按 revision 保存 SQLite，提交模糊错误会回读权威值决定确认或回滚。开机启动 command 直接读写官方插件状态，不写 SQLite。"
     risk: "失败不得替换现有 Key 或报告保存成功；不得记录、序列化返回或在错误消息中拼接候选 Key。备份失败必须清理临时数据库及 sidecar，不得覆盖源库或把残缺文件当成成功结果。"
 
   - path: "src-tauri/src/themes.rs"
@@ -1157,11 +1193,11 @@ source_areas:
     status: "active"
     read_when:
       - "调整主题协议、安全白名单、路径限制、可读性或导入/选择/删除持久化。"
-    notes: "只读所选目录直属普通文件；拒绝 at-rule、URL、脚本、嵌套和超限输入，忽略未知选择器/变量并返回警告；颜色输出为前后端共用的唯一规范形式；导入支持只读安全预检并在写入时重新解析核对目标 ID；数据库只保存规范化主题，不保存原始 CSS。内置主题由 builtin_theme_ids() 统一维护（readray-default、flexoki 与 28 个 Codex 预设），随包主题不可删除、不可被自定义 ID 冲突覆盖，模式选择按各内置主题实际声明的 modes 校验。Flexoki 配色映射只读取自本机 Obsidian Flexoki 1.1.0（Steph Ango，MIT）；Codex 预设主题完整配色来自 codex_themes_data.rs（生成脚本产出，与前端字节级一致），各主题标注来源与许可证。"
+    notes: "只读所选目录直属普通文件；拒绝 at-rule、URL、脚本、嵌套和超限输入，忽略未知选择器/变量并返回警告；颜色输出为前后端共用的唯一规范形式；导入支持只读安全预检并在写入时重新解析核对目标 ID；数据库只保存规范化主题，不保存原始 CSS。内置主题由 builtin_theme_ids() 统一维护（readray-default、flexoki 与 15 个双模式 Codex 预设），随包主题不可删除、不可被自定义 ID 冲突覆盖，模式选择按各内置主题实际声明的 modes 校验。Flexoki 配色映射只读取自本机 Obsidian Flexoki 1.1.0（Steph Ango，MIT）；Codex 预设主题完整配色来自 codex_themes_data.rs（生成脚本产出，与前端字节级一致），各主题标注来源与许可证。"
     risk: "不得执行 CSS、联网下载、静默覆盖同 ID、放宽目录边界或把内置默认主题重复写入数据库。"
 
   - path: "src-tauri/src/codex_themes_data.rs"
-    purpose: "28 个 Codex 预设内置主题的完整展开配色与 manifest 数据表（Rust 侧）。"
+    purpose: "15 个双模式 Codex 预设内置主题的完整展开配色与 manifest 数据表（Rust 侧）。"
     status: "active"
     read_when:
       - "调整 Codex 内置主题配色、来源或许可证归属。"
@@ -1202,7 +1238,7 @@ source_areas:
       - "调整学习记录 schema、迁移或存储字段。"
       - "实现学习记录窗口、搜索、筛选、单条读取或删除。"
       - "排查自动保存或应用数据目录中的 SQLite 问题。"
-    notes: "使用 rusqlite bundled；v1～v18 保持既有 schema 不变。v19 一次新增 learning_targets、learning_target_occurrences 与 learning_target_review_states，并在同一事务回填稳定目标、以强 NOT NULL target 身份重建 Feed/generated-card/attempt 表、按 createdAt/id 重放全部未撤销 attempt、隐藏而不删除同轮历史重复 target，最后执行数量、身份、代表记录、状态重放、来源和外键一致性审计。正常目标唯一身份显式为 canonicalizationVersion + queryType + normalizedTargetText，规范化只合并大小写和空白格式；缺少 v17 可靠英文投影的旧记录各自绑定 targetKind=legacy_compat、canonicalizationVersion=0、normalizedTargetText=NULL 的不可聚合兼容身份，旧 Feed 与子链路保留但 active 槽关闭，Memory 和未来 Review 候选统一排除。新学习事件仍追加 learning_records，并与 v17 投影、稳定 target/occurrence 同事务保存。Memory target commands 的搜索/分页/总数均按正常目标；搜索保留目标、历史原文、解释与上下文多字段命中，但按精确目标、目标前缀、目标包含、原始查询、语境/解释的相关度排序，同级再按最近 occurrence 排序。"
+    notes: "使用 rusqlite bundled；v1～v18 保持既有 schema 不变。v19 一次新增 learning_targets、learning_target_occurrences 与 learning_target_review_states，并在同一事务回填稳定目标、以强 NOT NULL target 身份重建 Feed/generated-card/attempt 表、按 createdAt/id 重放全部未撤销 attempt、隐藏而不删除同轮历史重复 target，最后执行数量、身份、代表记录、状态重放、来源和外键一致性审计。正常目标唯一身份显式为 canonicalizationVersion + queryType + normalizedTargetText，规范化只合并大小写和空白格式；缺少 v17 可靠英文投影的旧记录各自绑定 targetKind=legacy_compat、canonicalizationVersion=0、normalizedTargetText=NULL 的不可聚合兼容身份，旧 Feed 与子链路保留但 active 槽关闭，Memory 和未来 Review 候选统一排除。v22 向 app_preferences 追加两项 nullable binding JSON 权威列：新数据库写入 Alt+Super+Space / 双击左 Alt，已有数据库把 v7 历史字符串逐项转换为 chord JSON，历史列保留且不改写。新学习事件仍追加 learning_records，并与 v17 投影、稳定 target/occurrence 同事务保存。Memory target commands 的搜索/分页/总数均按正常目标；搜索保留目标、历史原文、解释与上下文多字段命中，但按精确目标、目标前缀、目标包含、原始查询、语境/解释的相关度排序，同级再按最近 occurrence 排序。"
     risk: "learning_records 继续只做不可修改的原始事件，不做去重或覆盖；不得修改已发布 v1～v18，后续 target 重绑/拆分必须保持原始 occurrence 和历史 Feed/card/attempt 追溯。"
 
   - path: "src-tauri/src/review.rs"

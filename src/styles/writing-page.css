@@ -1405,7 +1405,7 @@
   font-family: var(--rr-learning-font-family);
   font-size: calc(30px * var(--rr-learning-font-scale));
   font-weight: 540;
-  line-height: 1.05;
+  line-height: 1.15;
   letter-spacing: -0.025em;
 }
 
@@ -1603,7 +1603,7 @@
   font-family: var(--rr-font-body);
   font-size: calc(16.5px * var(--rr-ui-font-scale));
   font-weight: 540;
-  line-height: 1.2;
+  line-height: 1.3;
 }
 
 .rr-writing-article-row:hover .rr-writing-article-title {

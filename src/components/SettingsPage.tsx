@@ -14,19 +14,19 @@ import type {
   ThemeMutationRetry,
 } from "../themeMutationCoordinator";
 import type { ThemeMode } from "../themeProtocol";
-import {
-  desktopSaveCoordinator,
-  shortcutFromKeyEvent,
-  shortcutParts,
-} from "../desktopLifecycle";
+import { desktopSaveCoordinator } from "../desktopLifecycle";
 import {
   DEFAULT_APP_PREFERENCES,
   LEARNING_FONT_SIZE_MAX,
   LEARNING_FONT_SIZE_MIN,
   parseFontSizeCandidate,
+  shortcutBindingIdentity,
+  shortcutBindingParts,
+  validateShortcutBinding,
   UI_FONT_SIZE_MAX,
   UI_FONT_SIZE_MIN,
   type AppPreferences,
+  type ShortcutBinding,
 } from "../appPreferences";
 import {
   BalanceRefreshController,
@@ -50,13 +50,15 @@ import sourceHanSansLicense from "../assets/fonts/licenses/Source-Han-Sans-OFL.t
 import sourceHanSerifLicense from "../assets/fonts/licenses/Source-Han-Serif-OFL.txt?raw";
 import flexokiLicense from "../assets/flexoki-LICENSE.txt?raw";
 
-type SettingsSection = "general" | "appearance" | "ai" | "data" | "about";
+export type SettingsSection = "general" | "appearance" | "ai" | "data" | "about";
 type OperationState = "idle" | "saving" | "clearing";
 type RequestStatus = "idle" | "loading" | "success" | "error";
 
 type SettingsPageProps = {
   service: SettingsService | null;
   themeController: AppThemeController;
+  initialSection?: SettingsSection;
+  onApiKeyConfiguredChange?: (configured: boolean) => void;
   onPreferencesSave?: (
     candidate: AppPreferences,
     previousAuthority: AppPreferences,
@@ -207,13 +209,17 @@ function SettingsSelect({
   disabled = false,
   className,
   onChange,
+  onPreview,
+  onPreviewCancel,
 }: {
   label: string;
   value: string;
   options: readonly SettingsSelectOption[];
   disabled?: boolean;
   className?: string;
-  onChange: (value: string) => void;
+  onChange: (value: string) => boolean | void;
+  onPreview?: (value: string) => void;
+  onPreviewCancel?: () => void;
 }) {
   const selectId = useId();
   const rootRef = useRef<HTMLDivElement>(null);
@@ -225,17 +231,20 @@ function SettingsSelect({
   );
   const [activeIndex, setActiveIndex] = useState(selectedIndex);
   const selectedOption = options[selectedIndex];
+  const activeOption = options[activeIndex] ?? selectedOption;
 
   useEffect(() => {
     if (!open) return;
 
     const handlePointerDown = (event: PointerEvent) => {
       if (!rootRef.current?.contains(event.target as Node)) {
+        onPreviewCancel?.();
         setOpen(false);
       }
     };
     const handleDocumentKeyDown = (event: globalThis.KeyboardEvent) => {
       if (event.key === "Escape") {
+        onPreviewCancel?.();
         setOpen(false);
         buttonRef.current?.focus();
       }
@@ -247,7 +256,7 @@ function SettingsSelect({
       document.removeEventListener("pointerdown", handlePointerDown);
       document.removeEventListener("keydown", handleDocumentKeyDown);
     };
-  }, [open]);
+  }, [onPreviewCancel, open]);
 
   useEffect(() => {
     if (!open) {
@@ -255,10 +264,31 @@ function SettingsSelect({
     }
   }, [open, selectedIndex]);
 
+  useEffect(() => {
+    if (!open) return;
+    document
+      .getElementById(`${selectId}-option-${activeIndex}`)
+      ?.scrollIntoView({ block: "nearest" });
+  }, [activeIndex, open, selectId]);
+
+  const setActiveOption = (index: number) => {
+    const option = options[index];
+    if (!option) return;
+    setActiveIndex(index);
+    // 仅在主题下拉传入 onPreview 时临时应用配色；真正保存仍由 onChange 完成。
+    if (index !== activeIndex) onPreview?.(option.value);
+  };
+
+  const closeMenu = (restorePreview = true) => {
+    if (restorePreview) onPreviewCancel?.();
+    setOpen(false);
+  };
+
   const chooseOption = (index: number) => {
     const option = options[index];
     if (!option) return;
-    onChange(option.value);
+    const committed = onChange(option.value);
+    if (committed === false) onPreviewCancel?.();
     setOpen(false);
     buttonRef.current?.focus();
   };
@@ -276,11 +306,15 @@ function SettingsSelect({
       event.preventDefault();
       if (!open) {
         openMenu();
+        const delta = event.key === "ArrowDown" ? 1 : -1;
+        setActiveOption(
+          Math.min(Math.max(selectedIndex + delta, 0), options.length - 1),
+        );
         return;
       }
       const delta = event.key === "ArrowDown" ? 1 : -1;
-      setActiveIndex((index) =>
-        Math.min(Math.max(index + delta, 0), options.length - 1),
+      setActiveOption(
+        Math.min(Math.max(activeIndex + delta, 0), options.length - 1),
       );
       return;
     }
@@ -288,7 +322,7 @@ function SettingsSelect({
     if (event.key === "Home" || event.key === "End") {
       event.preventDefault();
       if (!open) openMenu();
-      setActiveIndex(event.key === "Home" ? 0 : options.length - 1);
+      setActiveOption(event.key === "Home" ? 0 : options.length - 1);
       return;
     }
 
@@ -322,12 +356,12 @@ function SettingsSelect({
           open ? `${selectId}-option-${activeIndex}` : undefined
         }
         disabled={disabled}
-        onClick={() => (open ? setOpen(false) : openMenu())}
+        onClick={() => (open ? closeMenu() : openMenu())}
         onKeyDown={handleKeyDown}
-        title={selectedOption?.label ?? value}
+        title={activeOption?.label ?? value}
       >
         <span className="rr-settings-select-value">
-          {selectedOption?.label ?? value}
+          {(open ? activeOption : selectedOption)?.label ?? value}
         </span>
         <ChevronDownIcon />
       </button>
@@ -348,7 +382,7 @@ function SettingsSelect({
               type="button"
               role="option"
               aria-selected={option.value === value}
-              onMouseEnter={() => setActiveIndex(index)}
+              onMouseEnter={() => setActiveOption(index)}
               onClick={() => chooseOption(index)}
             >
               {option.label}
@@ -370,7 +404,7 @@ function ShortcutRow({
   onRestore,
 }: {
   name: string;
-  value: string;
+  value: ShortcutBinding;
   recording: boolean;
   disabled: boolean;
   isDefault: boolean;
@@ -381,8 +415,11 @@ function ShortcutRow({
     <div className="rr-settings-shortcut-row">
       <div className="rr-settings-shortcut-name">{name}</div>
       <div className="rr-settings-shortcut-actions">
-        <div className="rr-settings-shortcut-value" aria-label={value}>
-          {shortcutParts(value).map((part) => <kbd key={part}>{part}</kbd>)}
+        <div
+          className="rr-settings-shortcut-value"
+          aria-label={shortcutBindingParts(value).join(" ")}
+        >
+          {shortcutBindingParts(value).map((part) => <kbd key={part}>{part}</kbd>)}
         </div>
         <button
           className="rr-settings-button"
@@ -391,7 +428,7 @@ function ShortcutRow({
           aria-pressed={recording}
           onClick={onRecord}
         >
-          {recording ? "请按组合键…" : "录制新快捷键"}
+          {recording ? "请按快捷键…" : "录制新快捷键"}
         </button>
         <button
           className="rr-settings-restore"
@@ -431,9 +468,12 @@ function SettingsLoading() {
 function SettingsPage({
   service,
   themeController,
+  initialSection = "general",
+  onApiKeyConfiguredChange,
   onPreferencesSave,
 }: SettingsPageProps) {
-  const [activeSection, setActiveSection] = useState<SettingsSection>("general");
+  const [activeSection, setActiveSection] =
+    useState<SettingsSection>(initialSection);
   const [snapshot, setSnapshot] = useState<SettingsSnapshot>();
   const [loadStatus, setLoadStatus] = useState<"loading" | "ready" | "error">(
     "loading",
@@ -453,7 +493,7 @@ function SettingsPage({
   const [documentVisible, setDocumentVisible] = useState(
     () => typeof document === "undefined" || document.visibilityState === "visible",
   );
-  const [usageRange, setUsageRange] = useState<ModelUsageRange>("last7Days");
+  const [usageRange, setUsageRange] = useState<ModelUsageRange>("today");
   const [usageStatus, setUsageStatus] = useState<RequestStatus>("idle");
   const [usageSummary, setUsageSummary] = useState<ModelUsageSummary>();
   const [usageError, setUsageError] = useState<string>();
@@ -467,14 +507,19 @@ function SettingsPage({
   const [preferenceMessage, setPreferenceMessage] = useState<string>();
   const [failedPreferences, setFailedPreferences] = useState<AppPreferences>();
   const [recordingShortcut, setRecordingShortcut] = useState<
-    "quickQueryShortcut" | "selectionExplanationShortcut"
+    "quickQueryBinding" | "selectionExplanationBinding"
   >();
+  const [shortcutRecordingReady, setShortcutRecordingReady] = useState(false);
   const [shortcutError, setShortcutError] = useState<string>();
   const [autostartStatus, setAutostartStatus] = useState<RequestStatus>("idle");
   const [autostartMessage, setAutostartMessage] = useState<string>();
   const [themeStatus, setThemeStatus] = useState<RequestStatus>("idle");
   const [themeMessage, setThemeMessage] = useState<string>();
   const [themeRetry, setThemeRetry] = useState<ThemeMutationRetry>();
+  const [themePreview, setThemePreview] = useState<{
+    themeId: string;
+    mode: ThemeMode;
+  }>();
   const mountedRef = useRef(false);
   const operationKeyRef = useRef(0);
   const balanceControllerRef = useRef<{
@@ -488,7 +533,12 @@ function SettingsPage({
   const preferenceKeyRef = useRef(0);
   const autostartKeyRef = useRef(0);
   const themeKeyRef = useRef(0);
+  const snapshotRef = useRef<SettingsSnapshot | undefined>(undefined);
+  const savePreferencesRef = useRef<
+    ((next: AppPreferences) => Promise<void>) | undefined
+  >(undefined);
   const scrollRef = useRef<HTMLDivElement>(null);
+  savePreferencesRef.current = savePreferences;
   function trackSettingsOperation<T>(label: string, start: () => Promise<T>) {
     return desktopSaveCoordinator.runMutation(label, start);
   }
@@ -508,36 +558,75 @@ function SettingsPage({
   }, []);
 
   useEffect(() => {
-    if (!recordingShortcut || !snapshot) return;
-    const activeRecording = recordingShortcut;
-    const currentSnapshot = snapshot;
-    function record(event: KeyboardEvent) {
-      event.preventDefault();
-      event.stopPropagation();
-      if (event.key === "Escape") {
+    snapshotRef.current = snapshot;
+  }, [snapshot]);
+
+  useEffect(() => {
+    setShortcutRecordingReady(false);
+    if (!service) return;
+    let disposed = false;
+    let unlisten: (() => void) | undefined;
+    void service.listenShortcutRecording((result) => {
+      if (disposed) return;
+      const field = result.action === "quickQuery"
+        ? "quickQueryBinding"
+        : "selectionExplanationBinding";
+      if (result.cancelled) {
         setRecordingShortcut(undefined);
         setShortcutError(undefined);
         return;
       }
-      try {
-        const shortcut = shortcutFromKeyEvent(event);
-        if (!shortcut) return;
-        const other = activeRecording === "quickQueryShortcut"
-          ? currentSnapshot.preferences.selectionExplanationShortcut
-          : currentSnapshot.preferences.quickQueryShortcut;
-        if (shortcut === other) {
-          throw new Error("快速查询和选区解释不能使用同一个快捷键。");
-        }
-        setShortcutError(undefined);
+      if (result.error || !result.binding) {
         setRecordingShortcut(undefined);
-        patchPreferences({ [activeRecording]: shortcut });
-      } catch (error) {
-        setShortcutError(errorMessage(error));
+        setShortcutError(result.error ?? "没有录制到有效的全局快捷键。");
+        return;
       }
-    }
-    window.addEventListener("keydown", record, true);
-    return () => window.removeEventListener("keydown", record, true);
-  }, [recordingShortcut, snapshot]);
+      let binding: ShortcutBinding;
+      try {
+        binding = validateShortcutBinding(
+          result.binding,
+          result.action === "quickQuery" ? "快速查询" : "选区解释",
+        );
+      } catch (error) {
+        setRecordingShortcut(undefined);
+        setShortcutError(errorMessage(error));
+        return;
+      }
+      const currentSnapshot = snapshotRef.current;
+      const other = field === "quickQueryBinding"
+        ? currentSnapshot?.preferences.selectionExplanationBinding
+        : currentSnapshot?.preferences.quickQueryBinding;
+      if (
+        other &&
+        shortcutBindingIdentity(other) === shortcutBindingIdentity(binding)
+      ) {
+        setRecordingShortcut(undefined);
+        setShortcutError("快速查询和选区解释不能使用同一个快捷键。");
+        return;
+      }
+      setShortcutError(undefined);
+      setRecordingShortcut(undefined);
+      if (currentSnapshot) {
+        void savePreferencesRef.current?.({
+          ...currentSnapshot.preferences,
+          [field]: binding,
+        });
+      }
+    }).then((cleanup) => {
+      if (disposed) cleanup();
+      else {
+        unlisten = cleanup;
+        setShortcutRecordingReady(true);
+      }
+    }).catch((error) => {
+      if (!disposed) setShortcutError(errorMessage(error));
+    });
+    return () => {
+      disposed = true;
+      unlisten?.();
+      void service.cancelShortcutRecording();
+    };
+  }, [service]);
 
   useEffect(() => {
     if (!service) return;
@@ -646,6 +735,7 @@ function SettingsPage({
       (nextSnapshot) => {
         if (ignore) return;
         setSnapshot(nextSnapshot);
+        onApiKeyConfiguredChange?.(nextSnapshot.apiKeyConfigured);
         setShortcutError(nextSnapshot.shortcutRegistrationError ?? undefined);
         setEditingKey(!nextSnapshot.apiKeyConfigured);
         setLoadStatus("ready");
@@ -659,7 +749,7 @@ function SettingsPage({
     return () => {
       ignore = true;
     };
-  }, [retryToken, service]);
+  }, [onApiKeyConfiguredChange, retryToken, service]);
 
   useEffect(() => {
     if (!service) {
@@ -760,6 +850,7 @@ function SettingsPage({
         return;
       }
       setSnapshot(nextSnapshot);
+      onApiKeyConfiguredChange?.(nextSnapshot.apiKeyConfigured);
       setKeyDraft("");
       setEditingKey(false);
       balanceControllerRef.current?.controller.replaceCredential({
@@ -806,6 +897,7 @@ function SettingsPage({
         return;
       }
       setSnapshot(nextSnapshot);
+      onApiKeyConfiguredChange?.(nextSnapshot.apiKeyConfigured);
       setKeyDraft("");
       setEditingKey(true);
       balanceControllerRef.current?.controller.replaceCredential({
@@ -928,8 +1020,10 @@ function SettingsPage({
     }
     const previous = snapshot.preferences;
     const shortcutsChanged =
-      next.quickQueryShortcut !== previous.quickQueryShortcut ||
-      next.selectionExplanationShortcut !== previous.selectionExplanationShortcut;
+      shortcutBindingIdentity(next.quickQueryBinding) !==
+        shortcutBindingIdentity(previous.quickQueryBinding) ||
+      shortcutBindingIdentity(next.selectionExplanationBinding) !==
+        shortcutBindingIdentity(previous.selectionExplanationBinding);
     if (!desktopSaveCoordinator.recordMutation()) return;
     const requestKey = preferenceKeyRef.current + 1;
     preferenceKeyRef.current = requestKey;
@@ -1038,6 +1132,22 @@ function SettingsPage({
     void savePreferences({ ...snapshot.preferences, ...patch });
   }
 
+  async function startShortcutRecording(
+    field: "quickQueryBinding" | "selectionExplanationBinding",
+  ) {
+    if (!service || !shortcutRecordingReady || preferenceStatus === "loading") return;
+    setShortcutError(undefined);
+    setRecordingShortcut(field);
+    try {
+      await service.beginShortcutRecording(
+        field === "quickQueryBinding" ? "quickQuery" : "selectionExplanation",
+      );
+    } catch (error) {
+      setRecordingShortcut(undefined);
+      setShortcutError(errorMessage(error));
+    }
+  }
+
   async function toggleAutostart() {
     if (!service || !snapshot || autostartStatus === "loading") return;
     const requested = !snapshot.autostartEnabled;
@@ -1140,26 +1250,51 @@ function SettingsPage({
     }
   }
 
-  function selectTheme(themeId: string, mode?: ThemeMode) {
+  function resolveThemeMode(themeId: string, mode?: ThemeMode) {
     const theme = themeController.snapshot.themes.find(
       (candidate) => candidate.manifest.id === themeId,
     );
-    if (!theme) return;
-    const selectedMode = mode ?? (
+    if (!theme) return undefined;
+    return mode ?? (
       theme.manifest.modes.includes(themeController.snapshot.currentMode)
         ? themeController.snapshot.currentMode
         : theme.manifest.modes[0]
     );
+  }
+
+  function selectTheme(themeId: string, mode?: ThemeMode): boolean {
+    const theme = themeController.snapshot.themes.find(
+      (candidate) => candidate.manifest.id === themeId,
+    );
+    const selectedMode = resolveThemeMode(themeId, mode);
+    if (!theme || !selectedMode) return false;
     if (
       themeId === themeController.snapshot.currentThemeId &&
       selectedMode === themeController.snapshot.currentMode
-    ) return;
+    ) {
+      restoreThemePreview();
+      return false;
+    }
+    setThemePreview(undefined);
     void runThemeMutation(
       "主题选择",
       { kind: "select", themeId, mode: selectedMode },
       () => themeController.select(themeId, selectedMode),
       () => `已应用 ${theme.manifest.name} · ${selectedMode === "light" ? "浅色" : "深色"}。`,
     );
+    return true;
+  }
+
+  function previewTheme(themeId: string, mode?: ThemeMode) {
+    const selectedMode = resolveThemeMode(themeId, mode);
+    if (!selectedMode) return;
+    themeController.preview(themeId, selectedMode);
+    setThemePreview({ themeId, mode: selectedMode });
+  }
+
+  function restoreThemePreview() {
+    themeController.restorePreview();
+    setThemePreview(undefined);
   }
 
   function retryThemeMutation() {
@@ -1207,12 +1342,17 @@ function SettingsPage({
 
   const balanceStatus = balanceState.status;
   const balance = balanceState.value;
+  const balanceError = balanceState.error === undefined
+    ? undefined
+    : errorMessage(balanceState.error);
   const validationMessage =
     operation === "saving"
       ? "正在验证 DeepSeek 连接，成功后才会替换现有配置…"
       : operationError ?? operationMessage;
+  const selectedThemeId = themePreview?.themeId ?? themeController.snapshot.currentThemeId;
+  const selectedThemeMode = themePreview?.mode ?? themeController.snapshot.currentMode;
   const selectedTheme = themeController.snapshot.themes.find(
-    (theme) => theme.manifest.id === themeController.snapshot.currentThemeId,
+    (theme) => theme.manifest.id === selectedThemeId,
   );
   const themeBusy =
     themeStatus === "loading" || themeController.status === "loading";
@@ -1314,30 +1454,42 @@ function SettingsPage({
                   <div className="rr-settings-panel">
                     <ShortcutRow
                       name="快速查询"
-                      value={snapshot.preferences.quickQueryShortcut}
-                      recording={recordingShortcut === "quickQueryShortcut"}
-                      disabled={preferenceStatus === "loading"}
-                      isDefault={snapshot.preferences.quickQueryShortcut === DEFAULT_APP_PREFERENCES.quickQueryShortcut}
-                      onRecord={() => {
-                        setShortcutError(undefined);
-                        setRecordingShortcut("quickQueryShortcut");
-                      }}
+                      value={snapshot.preferences.quickQueryBinding}
+                      recording={recordingShortcut === "quickQueryBinding"}
+                      disabled={
+                        !shortcutRecordingReady ||
+                        preferenceStatus === "loading" ||
+                        recordingShortcut !== undefined
+                      }
+                      isDefault={
+                        shortcutBindingIdentity(snapshot.preferences.quickQueryBinding) ===
+                        shortcutBindingIdentity(DEFAULT_APP_PREFERENCES.quickQueryBinding)
+                      }
+                      onRecord={() => void startShortcutRecording("quickQueryBinding")}
                       onRestore={() => patchPreferences({
-                        quickQueryShortcut: DEFAULT_APP_PREFERENCES.quickQueryShortcut,
+                        quickQueryBinding: DEFAULT_APP_PREFERENCES.quickQueryBinding,
                       })}
                     />
                     <ShortcutRow
                       name="选区解释"
-                      value={snapshot.preferences.selectionExplanationShortcut}
-                      recording={recordingShortcut === "selectionExplanationShortcut"}
-                      disabled={preferenceStatus === "loading"}
-                      isDefault={snapshot.preferences.selectionExplanationShortcut === DEFAULT_APP_PREFERENCES.selectionExplanationShortcut}
-                      onRecord={() => {
-                        setShortcutError(undefined);
-                        setRecordingShortcut("selectionExplanationShortcut");
-                      }}
+                      value={snapshot.preferences.selectionExplanationBinding}
+                      recording={recordingShortcut === "selectionExplanationBinding"}
+                      disabled={
+                        !shortcutRecordingReady ||
+                        preferenceStatus === "loading" ||
+                        recordingShortcut !== undefined
+                      }
+                      isDefault={
+                        shortcutBindingIdentity(
+                          snapshot.preferences.selectionExplanationBinding,
+                        ) === shortcutBindingIdentity(
+                          DEFAULT_APP_PREFERENCES.selectionExplanationBinding,
+                        )
+                      }
+                      onRecord={() => void startShortcutRecording("selectionExplanationBinding")}
                       onRestore={() => patchPreferences({
-                        selectionExplanationShortcut: DEFAULT_APP_PREFERENCES.selectionExplanationShortcut,
+                        selectionExplanationBinding:
+                          DEFAULT_APP_PREFERENCES.selectionExplanationBinding,
                       })}
                     />
                   </div>
@@ -1411,29 +1563,26 @@ function SettingsPage({
                   <GroupHeading title="主题" />
                   <div className="rr-settings-panel">
                     <div className="rr-settings-row">
-                      <SettingsCopy
-                        label="当前主题"
-                        help={selectedTheme
-                          ? `${selectedTheme.manifest.author} · ${selectedTheme.manifest.version}`
-                          : "数据库主题暂不可用"}
-                      />
+                      <SettingsCopy label="当前主题" />
                       <div className="rr-settings-stack-control">
                         <div className="rr-settings-appearance-actions">
                           <SettingsSelect
                             className="rr-settings-theme-select"
                             label="主题"
-                            value={themeController.snapshot.currentThemeId}
+                            value={selectedThemeId}
                             options={themeController.snapshot.themes.map((theme) => ({
                               value: theme.manifest.id,
                               label: theme.manifest.name,
                             }))}
                             disabled={themeBusy || themeController.status === "error"}
                             onChange={(value) => selectTheme(value)}
+                            onPreview={(value) => previewTheme(value)}
+                            onPreviewCancel={restoreThemePreview}
                           />
                           <SettingsSelect
                             className="rr-settings-theme-mode-select"
                             label="主题模式"
-                            value={themeController.snapshot.currentMode}
+                            value={selectedThemeMode}
                             options={
                               selectedTheme?.manifest.modes.map((mode) => ({
                                 value: mode,
@@ -1446,9 +1595,14 @@ function SettingsPage({
                               (selectedTheme?.manifest.modes.length ?? 0) <= 1
                             }
                             onChange={(value) => selectTheme(
-                              themeController.snapshot.currentThemeId,
+                              selectedThemeId,
                               value as ThemeMode,
                             )}
+                            onPreview={(value) => previewTheme(
+                              selectedThemeId,
+                              value as ThemeMode,
+                            )}
+                            onPreviewCancel={restoreThemePreview}
                           />
                         </div>
                       </div>
@@ -1462,15 +1616,13 @@ function SettingsPage({
                       </button>
                     </div>
                   ) : null}
-                  {themeMessage ? (
+                  {themeMessage && themeStatus === "error" ? (
                     <div
-                      className={`rr-settings-inline-message ${
-                        themeStatus === "error" ? "is-error" : "is-success"
-                      }`}
-                      role={themeStatus === "error" ? "alert" : "status"}
+                      className="rr-settings-inline-message is-error"
+                      role="alert"
                     >
                       <span>{themeMessage}</span>
-                      {themeStatus === "error" && themeRetry ? (
+                      {themeRetry ? (
                         <button type="button" onClick={retryThemeMutation}>
                           重试
                         </button>
@@ -1796,6 +1948,11 @@ function SettingsPage({
                                 : "正在准备查询…"}
                       </div>
                     )}
+                    {balanceStatus === "error" && balanceError ? (
+                      <div className="rr-settings-balance-error" role="alert">
+                        查询详情：{balanceError}
+                      </div>
+                    ) : null}
                   </div>
                   <button
                     className="rr-settings-button"
