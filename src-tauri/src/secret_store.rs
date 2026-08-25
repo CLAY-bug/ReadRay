@@ -40,6 +40,17 @@ fn normalized_environment_key(value: Option<String>) -> Option<String> {
     })
 }
 
+fn development_environment_key() -> Option<String> {
+    #[cfg(debug_assertions)]
+    {
+        std::env::var("DEEPSEEK_API_KEY").ok()
+    }
+    #[cfg(not(debug_assertions))]
+    {
+        None
+    }
+}
+
 fn resolve_api_key_state(
     stored_key: Option<String>,
     environment_disabled: bool,
@@ -60,7 +71,7 @@ pub(crate) fn deepseek_api_key_state() -> Result<ApiKeyState, String> {
     Ok(resolve_api_key_state(
         read_credential(DEEPSEEK_KEY_TARGET)?,
         read_credential(DEEPSEEK_DISABLED_TARGET)?.is_some(),
-        std::env::var("DEEPSEEK_API_KEY").ok(),
+        development_environment_key(),
     ))
 }
 

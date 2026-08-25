@@ -4,7 +4,7 @@ project:
   repo_root: "."
 
 meta:
-  version: "1.85"
+  version: "1.86"
   last_updated: "2026-08-25"
   updated_by: "Codex"
   source_of_truth: "docs/RESOURCE_MAP.yml"
@@ -1177,7 +1177,7 @@ source_areas:
     read_when:
       - "调整 Key 安全持久化、清除或重启恢复。"
       - "排查 Windows Credential Manager 读写失败。"
-    notes: "Key 以 CRED_TYPE_GENERIC 保存在当前 Windows 用户凭据管理器；清除前先写非敏感禁用标记，再删除 Key，使开发期 .env 不会在清除后偷偷重新生效。存储 Key 优先于禁用标记，避免失败清除误报成功。"
+    notes: "Key 以 CRED_TYPE_GENERIC 保存在当前 Windows 用户凭据管理器；清除前先写非敏感禁用标记，再删除 Key，使开发期 .env 不会在清除后偷偷重新生效。项目 .env 与 DEEPSEEK_API_KEY 进程环境回退只在 debug_assertions 开发构建启用；release 只读 Windows Credential Manager，不嵌入构建路径或开发 Key。存储 Key 优先于禁用标记，避免失败清除误报成功。"
     risk: "不得把 Key 写入 SQLite、localStorage、仓库、普通日志或返回前端；自动测试只覆盖纯决策，不操作用户真实凭据。"
 
   - path: "src-tauri/src/settings.rs"

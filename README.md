@@ -143,7 +143,7 @@ pnpm install
 pnpm tauri dev
 ```
 
-API Key 可以在应用设置页中配置；首次启动且尚未配置时，主窗口会显示引导卡片，可点击直达“设置 → AI 服务”。开发环境也可以复制 `.env.example` 为 `.env` 并填写 `DEEPSEEK_API_KEY`；真实 `.env` 已被忽略，不应提交到仓库。
+API Key 可以在应用设置页中配置；首次启动且尚未配置时，主窗口会显示引导卡片，可点击直达“设置 → AI 服务”。仅 debug 开发构建可以复制 `.env.example` 为 `.env` 并填写 `DEEPSEEK_API_KEY`；release 构建不读取项目 `.env` 或进程环境回退，只使用 Windows Credential Manager。真实 `.env` 已被忽略，不应提交到仓库。
 
 ### 构建与验证
 

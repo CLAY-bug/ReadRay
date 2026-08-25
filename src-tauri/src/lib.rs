@@ -290,6 +290,7 @@ fn place_default_overlay_position(
         .map_err(tauri_err)
 }
 
+#[cfg(debug_assertions)]
 fn load_project_env() {
     let env_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .parent()
@@ -861,6 +862,7 @@ pub(crate) fn handle_shortcut_action(
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    #[cfg(debug_assertions)]
     load_project_env();
 
     #[cfg(desktop)]
