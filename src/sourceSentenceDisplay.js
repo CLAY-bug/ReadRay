@@ -8,16 +8,12 @@ function isHanCharacter(character) {
 }
 
 export function isPrimarilyChineseSourceSentence(value) {
-  let hanCount = 0;
-  let latinCount = 0;
   for (const character of value) {
     if (isHanCharacter(character)) {
-      hanCount += 1;
-    } else if (/[A-Za-z]/.test(character)) {
-      latinCount += 1;
+      return true;
     }
   }
-  return hanCount > 0 && hanCount * 2 >= latinCount;
+  return false;
 }
 
 export function sourceSentenceForDisplay(sourceSentence, sourceSentenceZh) {

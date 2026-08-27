@@ -26,12 +26,15 @@ pub mod review;
 pub mod secret_store;
 pub mod settings;
 pub mod themes;
+pub mod vocabulary;
 #[cfg(target_os = "windows")]
 pub mod windows_uia;
 pub mod writing;
 
 const MAIN_WINDOW_LABEL: &str = "main";
 const OVERLAY_WINDOW_LABEL: &str = "overlay";
+/// 输入补全候选展开时 overlay 输入窗口的最大高度（逻辑像素）。
+const OVERLAY_INPUT_MAX_HEIGHT: f64 = 400.0;
 pub(crate) const DEEPSEEK_BASE_URL: &str = "https://api.deepseek.com";
 pub(crate) const DEFAULT_DEEPSEEK_MODEL: &str = "deepseek-v4-flash";
 
@@ -633,13 +636,7 @@ fn hide_anchored_overlay_window(window: WebviewWindow) -> Result<(), String> {
     window.hide().map_err(tauri_err)
 }
 
-#[tauri::command]
-fn begin_overlay_window_drag(
-    window: WebviewWindow,
-    pointer_x: f64,
-    pointer_y: f64,
-) -> Result<(), String> {
-    ensure_overlay_window(&window)?;
+fn begin_drag_state(window: &WebviewWindow, pointer_x: f64, pointer_y: f64) -> Result<(), String> {
     let position = window.outer_position().map_err(tauri_err)?;
     let scale_factor = window.scale_factor().map_err(tauri_err)?;
     let mut active_drag = active_overlay_drag().lock().map_err(tauri_err)?;
@@ -654,13 +651,12 @@ fn begin_overlay_window_drag(
     Ok(())
 }
 
-#[tauri::command]
-fn drag_overlay_window(
-    window: WebviewWindow,
+fn apply_drag_delta(
+    window: &WebviewWindow,
     pointer_x: f64,
     pointer_y: f64,
+    persist: bool,
 ) -> Result<(), String> {
-    ensure_overlay_window(&window)?;
     let Some(active_drag) = *active_overlay_drag().lock().map_err(tauri_err)? else {
         return Ok(());
     };
@@ -671,7 +667,30 @@ fn drag_overlay_window(
     window
         .set_position(LogicalPosition::new(x, y))
         .map_err(tauri_err)?;
-    save_overlay_position_from_logical(x, y)
+    if persist {
+        save_overlay_position_from_logical(x, y)?;
+    }
+    Ok(())
+}
+
+#[tauri::command]
+fn begin_overlay_window_drag(
+    window: WebviewWindow,
+    pointer_x: f64,
+    pointer_y: f64,
+) -> Result<(), String> {
+    ensure_overlay_window(&window)?;
+    begin_drag_state(&window, pointer_x, pointer_y)
+}
+
+#[tauri::command]
+fn drag_overlay_window(
+    window: WebviewWindow,
+    pointer_x: f64,
+    pointer_y: f64,
+) -> Result<(), String> {
+    ensure_overlay_window(&window)?;
+    apply_drag_delta(&window, pointer_x, pointer_y, true)
 }
 
 #[tauri::command]
@@ -679,6 +698,51 @@ fn finish_overlay_window_drag(window: WebviewWindow) -> Result<(), String> {
     ensure_overlay_window(&window)?;
     *active_overlay_drag().lock().map_err(tauri_err)? = None;
     remember_overlay_position(&window)
+}
+
+/// 划词锚定浮层的拖动：与 overlay 输入态共用拖动状态，但不写 overlay 位置
+/// 缓存——拖动只对本次显示生效，下次划词仍按选区重新锚定。
+#[tauri::command]
+fn begin_anchored_window_drag(
+    window: WebviewWindow,
+    pointer_x: f64,
+    pointer_y: f64,
+) -> Result<(), String> {
+    ensure_overlay_window(&window)?;
+    begin_drag_state(&window, pointer_x, pointer_y)
+}
+
+#[tauri::command]
+fn drag_anchored_window(
+    window: WebviewWindow,
+    pointer_x: f64,
+    pointer_y: f64,
+) -> Result<(), String> {
+    ensure_overlay_window(&window)?;
+    apply_drag_delta(&window, pointer_x, pointer_y, false)
+}
+
+#[tauri::command]
+fn finish_anchored_window_drag(window: WebviewWindow) -> Result<(), String> {
+    ensure_overlay_window(&window)?;
+    *active_overlay_drag().lock().map_err(tauri_err)? = None;
+    Ok(())
+}
+
+/// 输入补全候选显示时按前端测得的高度扩展输入窗口（宽度不变、左上角锚定
+/// 向下扩展）；候选关闭后恢复输入态标准高度。
+#[tauri::command]
+fn set_overlay_input_window_height(window: WebviewWindow, height: f64) -> Result<(), String> {
+    ensure_overlay_window(&window)?;
+    let input_size = OverlayWindowStage::Input.size();
+    let clamped = if height.is_finite() {
+        height.clamp(input_size.height, OVERLAY_INPUT_MAX_HEIGHT)
+    } else {
+        input_size.height
+    };
+    window
+        .set_size(LogicalSize::new(input_size.width, clamped))
+        .map_err(tauri_err)
 }
 
 #[tauri::command]
@@ -982,6 +1046,11 @@ pub fn run() {
             begin_overlay_window_drag,
             drag_overlay_window,
             finish_overlay_window_drag,
+            begin_anchored_window_drag,
+            drag_anchored_window,
+            finish_anchored_window_drag,
+            set_overlay_input_window_height,
+            vocabulary::suggest_vocabulary_terms_command,
             deepseek_explanation::create_explanation_card,
             deepseek_explanation::cancel_explanation_request,
             learning_records::list_learning_records,

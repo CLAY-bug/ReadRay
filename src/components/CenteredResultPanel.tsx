@@ -1,6 +1,9 @@
-import { useEffect, type KeyboardEvent, type MouseEvent } from "react";
-import { invoke } from "@tauri-apps/api/core";
+import { useEffect, type KeyboardEvent } from "react";
 import type { ExplanationResult } from "../explanationViewModel";
+import {
+  beginOverlayWindowDrag,
+  overlayWindowDragCommands,
+} from "../overlayWindowDrag";
 import ExplanationResultContent from "./ExplanationResultContent";
 
 export type CenteredResult = ExplanationResult;
@@ -46,41 +49,6 @@ function CenteredResultPanel({
     }
   }
 
-  function handleWindowDrag(event: MouseEvent<HTMLElement>) {
-    if (event.button !== 0) {
-      return;
-    }
-
-    if (
-      event.target instanceof HTMLElement &&
-      event.target.closest("input, .centered-result-panel__body")
-    ) {
-      return;
-    }
-
-    event.preventDefault();
-    invoke("begin_overlay_window_drag", {
-      pointerX: event.screenX,
-      pointerY: event.screenY,
-    }).catch(() => undefined);
-
-    function handleMouseMove(moveEvent: globalThis.MouseEvent) {
-      invoke("drag_overlay_window", {
-        pointerX: moveEvent.screenX,
-        pointerY: moveEvent.screenY,
-      }).catch(() => undefined);
-    }
-
-    function handleMouseUp() {
-      window.removeEventListener("mousemove", handleMouseMove);
-      window.removeEventListener("mouseup", handleMouseUp);
-      invoke("finish_overlay_window_drag").catch(() => undefined);
-    }
-
-    window.addEventListener("mousemove", handleMouseMove);
-    window.addEventListener("mouseup", handleMouseUp);
-  }
-
   if (!open) {
     return null;
   }
@@ -92,7 +60,13 @@ function CenteredResultPanel({
     <article
       className="centered-result-panel"
       aria-label={`${resultLabel} 的居中解释结果`}
-      onMouseDown={handleWindowDrag}
+      onMouseDown={(event) =>
+        beginOverlayWindowDrag(
+          event,
+          overlayWindowDragCommands,
+          "input, .centered-result-panel__body",
+        )
+      }
     >
       <span
         className="centered-result-panel__drag-region"

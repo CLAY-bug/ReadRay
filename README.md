@@ -184,6 +184,12 @@ ReadRay 目前由个人维护，欢迎通过 Issue 提交缺陷、体验反馈�
 
 在进行较大改动前，建议先通过 Issue 说明目标、使用场景和预期行为，以便确认功能边界与现有扩展点。
 
+## 内置数据与第三方组件
+
+- 随包英文本地词表（输入补全）提取自 [hermitdave/FrequencyWords](https://github.com/hermitdave/FrequencyWords) 的英文 OpenSubtitles 词频数据（MIT License），由 `scripts/gen-vocabulary.mjs` 一次性生成，仅保留纯拉丁词形并按使用频率降序排列。
+- 随包字体（Geist、Geist Mono、Newsreader、思源黑体、思源宋体）以 SIL OFL 授权分发，许可证文本见 `src/assets/fonts/licenses/`。
+- 内置主题中 Flexoki 来源于 Steph Ango 的 Flexoki 1.1.0（MIT）；部分 Codex 预设主题来自各开源社区（MIT）与 OpenAI Codex 产品内置主题，具体来源与许可标注在主题数据文件中。
+
 ## 许可证
 
 ReadRay 基于 [MIT License](LICENSE) 开源。

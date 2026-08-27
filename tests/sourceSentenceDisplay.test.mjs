@@ -21,6 +21,20 @@ test("中文主导且夹英文术语的旧卡片只显示原句一次", () => {
   }
 });
 
+test("含汉字的中英混排原句不再要求中译", () => {
+  for (const sourceSentence of [
+    "GLM Coding 7天体验卡",
+    "赖鑫 CLAY-bug",
+    "GLM Coding 提供了比数小时更快的体验。",
+  ]) {
+    assert.equal(isPrimarilyChineseSourceSentence(sourceSentence), true);
+    assert.deepEqual(sourceSentenceForDisplay(sourceSentence, "混排句译文"), {
+      sourceSentence,
+      sourceSentenceZh: undefined,
+    });
+  }
+});
+
 test("普通英文原句继续显示中文翻译", () => {
   const sourceSentence =
     "The request generation prevents an older result from replacing a newer one.";

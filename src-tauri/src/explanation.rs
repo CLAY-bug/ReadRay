@@ -311,23 +311,24 @@ pub fn validate_english_learning_target(value: &str) -> Result<(), String> {
 
 pub(crate) fn is_primarily_chinese_source_sentence(value: &str) -> bool {
     let mut han_count = 0_usize;
-    let mut latin_count = 0_usize;
     for character in value.chars() {
         if matches!(
             character,
             '\u{3400}'..='\u{4dbf}' | '\u{4e00}'..='\u{9fff}' | '\u{f900}'..='\u{faff}'
         ) {
             han_count += 1;
-        } else if character.is_ascii_alphabetic() {
-            latin_count += 1;
         }
     }
 
-    han_count > 0 && han_count.saturating_mul(2) >= latin_count
+    // 中英混排（如 "GLM Coding 7天体验卡"）在技术阅读场景是常态，任何人类都
+    // 会把它读成中文句子；只要含汉字就不再强制提供中译，纯拉丁原句才要求翻译。
+    han_count > 0
 }
 
-pub(crate) fn normalize_source_sentence_translation(card: &mut ExplanationCard) {
-    let (source_sentence, source_sentence_zh) = match card {
+fn source_sentence_fields_mut(
+    card: &mut ExplanationCard,
+) -> Option<(&mut Option<String>, &mut Option<String>)> {
+    match card {
         ExplanationCard::Word {
             source_sentence,
             source_sentence_zh,
@@ -337,8 +338,14 @@ pub(crate) fn normalize_source_sentence_translation(card: &mut ExplanationCard) 
             source_sentence,
             source_sentence_zh,
             ..
-        } => (source_sentence, source_sentence_zh),
-        ExplanationCard::Sentence { .. } | ExplanationCard::Paragraph { .. } => return,
+        } => Some((source_sentence, source_sentence_zh)),
+        ExplanationCard::Sentence { .. } | ExplanationCard::Paragraph { .. } => None,
+    }
+}
+
+pub(crate) fn normalize_source_sentence_translation(card: &mut ExplanationCard) {
+    let Some((source_sentence, source_sentence_zh)) = source_sentence_fields_mut(card) else {
+        return;
     };
 
     if source_sentence
@@ -347,6 +354,17 @@ pub(crate) fn normalize_source_sentence_translation(card: &mut ExplanationCard) 
     {
         *source_sentence_zh = None;
     }
+}
+
+pub(crate) fn clear_source_sentence_fields(card: &mut ExplanationCard) -> bool {
+    let Some((source_sentence, source_sentence_zh)) = source_sentence_fields_mut(card) else {
+        return false;
+    };
+
+    let had_any = source_sentence.is_some() || source_sentence_zh.is_some();
+    *source_sentence = None;
+    *source_sentence_zh = None;
+    had_any
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -1339,5 +1357,27 @@ mod tests {
         assert!(!is_primarily_chinese_source_sentence(
             "The Memory and Review pages keep the original learning record."
         ));
+    }
+
+    #[test]
+    fn mixed_han_latin_source_sentence_no_longer_requires_translation() {
+        assert!(is_primarily_chinese_source_sentence("GLM Coding 7天体验卡"));
+        assert!(is_primarily_chinese_source_sentence("赖鑫 CLAY-bug"));
+
+        let mut card = valid_word_card(None);
+        if let ExplanationCard::Word {
+            source_sentence,
+            source_sentence_zh,
+            ..
+        } = &mut card
+        {
+            *source_sentence = Some("GLM Coding 7天体验卡".into());
+            *source_sentence_zh = None;
+        }
+
+        assert!(
+            validate_explanation_card(&input("market", Some("GLM Coding 7天体验卡")), &card,)
+                .is_ok()
+        );
     }
 }

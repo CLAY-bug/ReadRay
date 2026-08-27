@@ -4,9 +4,9 @@ project:
   repo_root: "."
 
 meta:
-  version: "1.86"
-  last_updated: "2026-08-25"
-  updated_by: "Codex"
+  version: "1.98"
+  last_updated: "2026-08-27"
+  updated_by: "Claude Code"
   source_of_truth: "docs/RESOURCE_MAP.yml"
   language: "zh-CN"
 
@@ -212,6 +212,48 @@ competition_resources:
       notes: "用于快速回顾比赛建议、MVP、风险和路线。"
       risk: "这是综合分析，不替代官方附件。"
 
+    - path: "resource/readray_competitor_and_prior_work_research.md"
+      purpose: "比赛项目文档所需的竞品与已有工作调研，覆盖典型产品事实、对比矩阵和 ReadRay 可主张边界。"
+      status: "active"
+      notes: "2026-08-26 以官方产品页、帮助、隐私说明和更新日志为主完成 Markdown 初稿，并补充会员分层、模型额度、BYOK 与按 token 付费的成本边界；当前只关注事实与内容，不处理最终排版。"
+      risk: "不得把官方资料未确认写成竞品没有；有道旧帮助页和欧路历史更新日志中的当前 Windows 行为仍需安装版人工核验。"
+
+    - path: "resource/readray_project_overview.md"
+      purpose: "比赛项目文档第 1 章底稿，按官方模板整理 1.1 背景和基础、1.2 场景和价值、1.3 所需支持。"
+      status: "active"
+      notes: "2026-08-27 完成 Markdown 初稿；竞品证据留在调研底稿，正式章节只保留精炼结论和费用模式差异，暂不处理最终排版。"
+      risk: "不得把公开资料未说明写成竞品没有，不得把 OCR、本地模型、跨平台、任意模型供应商或长期学习者画像写成当前能力。"
+
+    - path: "resource/readray_project_planning.md"
+      purpose: "比赛项目文档第 2 章底稿，按官方模板整理 2.1 整体目标和 2.2 技术创新点。"
+      status: "active"
+      notes: "2026-08-27 完成 Markdown 初稿；整体目标采用可交付产品状态，创新点聚焦跨应用上下文、分层 AI 执行、可追溯学习事件和请求一致性。"
+      risk: "不得把调用大模型、跨应用取词或 BYOK 单独包装成创新，也不得重复 3.2 的代码级细节或填写未经实测的效果结论。"
+
+    - path: "resource/readray_project_document.md"
+      purpose: "按官方附件 2 章节顺序汇编的 ReadRay 完整项目文档 Markdown 主稿，覆盖第 1—4 章。"
+      status: "active"
+      notes: "2026-08-27 完成首次统一汇编；第 1、2 章使用正式项目叙述，3.1 收敛为数据、知识、算力和工程可行性，技术实现集中于 3.2，分散底稿继续作为来源保留。"
+      risk: "效果指标仍有待实测项，团队名称仍需填写；生成最终 PDF 前需补结果、核对引用并进行匿名与排版检查。"
+
+    - path: "resource/readray_technical_feasibility_analysis.md"
+      purpose: "比赛项目文档 3.1 技术可行性分析底稿，说明产品闭环、数据与知识来源、系统组成、技术栈、运行条件和已实现基础。"
+      status: "active"
+      notes: "2026-08-26 完成 Markdown 初稿；以参赛者能够理解和答辩为尺度，不展开底层数据库、并发或协议细节，暂不处理最终排版。"
+      risk: "不得把技术辅助开发包装成底层研究成果，也不得把 OCR、本地模型、多供应商、长期画像或全部 Windows 应用兼容写成已实现能力。"
+
+    - path: "resource/readray_technical_details.md"
+      purpose: "比赛项目文档 3.2 技术细节底稿，说明产品流程、系统结构、核心技术论证、技术栈选择和待实测指标。"
+      status: "active"
+      notes: "2026-08-27 按智能体赛道重点修订；Agent Runtime 是技术主轴，跨应用输入部分进一步说明捕获时机、UIA 多候选搜索、TextPattern 回退、选区矩形锚定、文本范围端点和按查询类型构造上下文，再连接结构化解释与学习闭环。"
+      risk: "效果评估前不得填写虚构数值，也不得把小规模场景测试概括为通用成功率或长期学习效果。"
+
+    - path: "resource/readray_plan_and_division.md"
+      purpose: "比赛项目文档 3.3 计划和分工底稿，按实际单人参赛情况说明阶段计划、交付物、职责和提交缓冲。"
+      status: "active"
+      notes: "2026-08-27 按官方模板完成；不虚构多人角色，8月31日安排首次上传，9月1日仅保留官网检查和必要重传。"
+      risk: "不得把计划状态写成已经完成，也不要把辅助开发工具列为参赛团队成员。"
+
 source_areas:
   - path: "index.html"
     purpose: "主窗口 React 挂载前的静态品牌启动层与关键样式入口。"
@@ -260,6 +302,15 @@ source_areas:
       - "修改 ExplanationCard 请求、取消或迟到结果生命周期。"
     notes: "零依赖纯状态模块；生产默认使用 crypto.randomUUID（缺失时使用原生 getRandomValues）生成经白名单和长度校验的实例 nonce，requestKey 格式为 scope:nonce:sequence，使旧实例迟到 cancel 与新实例 key 隔离。新请求取消同作用域旧 key，invalidateAll 用于隐藏、模式切换和卸载，失败完成后新 key 可重试。App 仍负责调用 typed Tauri command，Rust 才是落库权威。"
     risk: "前端守卫不能替代 Rust 可取消 future 与保存前权威检查；manual/anchored 不得互相误取消。"
+
+  - path: "src/anchoredWindowDrag.ts"
+    purpose: "划词锚定浮层的原生窗口拖动入口（仅本次显示生效）。"
+    status: "active"
+    read_when:
+      - "调整划词结果/加载/错误卡片的拖动行为。"
+      - "排查拖动后浮层位置或 overlay 位置缓存被污染。"
+    notes: "App 在 anchored 非 mock 分支渲染顶部透明拖动热区，mousedown 后按序调用 begin/drag/finish_anchored_window_drag；Rust 侧复用 overlay 拖动状态但不写 overlay 位置缓存，下次划词仍按选区重新锚定。拖动开始后 App 跳过后续 anchored resize 回调，防止把窗口拉回锚定位置。"
+    risk: "不得把该拖动接入 overlay 输入态的位置记忆；热区不得遮挡卡片正文选择。"
 
   - path: "tests/explanationRequestAuthority.test.mjs"
     purpose: "ExplanationCard 前端 requestKey、取消、作用域隔离、迟到和失败重试聚焦测试。"
@@ -998,8 +1049,8 @@ source_areas:
     read_when:
       - "开发无选区快捷键呼出的主动查询输入框。"
       - "调整 typing、loading 或 error-lite 状态。"
-    notes: "当前由 App 传入 value、open、loading、error 和提交回调；组件内部负责打开自动聚焦、Esc 关闭、Enter 非空提交、loading 轻量呼吸点、error-lite 轻提示和输入态拖拽区域。无选区提交已由 App 接入真实 create_explanation_card；本组件不接 UI Automation。"
-    risk: "不要扩展成命令面板、历史入口或正式结果页；它只负责无选区输入。"
+    notes: "当前由 App 传入 value、open、loading、error 和提交回调；组件内部负责打开自动聚焦、Esc 分层关闭（候选 → 清空输入 → 关窗）、Enter 提交（高亮候选优先）、↑↓ 候选选择、loading 轻量呼吸点、error-lite 轻提示和输入态拖拽区域。输入 ≥2 个拉丁字符时防抖 200ms 调用 suggest_vocabulary_terms_command 显示补全候选（历史命中置顶），候选显示时经 set_overlay_input_window_height 扩展输入窗口、关闭后恢复。无选区提交已由 App 接入真实 create_explanation_card；本组件不接 UI Automation。"
+    risk: "不要扩展成命令面板、历史入口或正式结果页；它只负责无选区输入。补全失败必须静默，不得阻塞查询提交。"
 
   - path: "src/components/CenteredResultPanel.tsx"
     purpose: "MVP compact UI 的无选区输入后居中结果面板骨架。"
@@ -1250,6 +1301,15 @@ source_areas:
     notes: "按稳定 learningTargetId 持久化无硬上限游标 Feed 和目标级调度，同一轮每个 target 只创建一个 active 项；具体 learningRecordId 继续冻结真实 occurrence、ExplanationCard 与卡片/反馈来源。跨轮按既有确定性规则轮换该目标的真实 occurrence；存在替代候选时按稳定 targetId 做跨页/跨轮边界相邻避让，不做语义主题判断。generated-card 池按具体 learning record 保持 3 张软容量，targetId 只作为强身份校验和追溯字段，卡片不跨 record 复用；attempt 同时保存 target/record，撤销后按全部未撤销 target attempt 的 createdAt/id 重放。既有幂等、失败退避、质量反馈、模糊成功权威对账和安全退出语义保持。"
     risk: "不得按文本在前端合并、修改 learning_records、让质量反馈改变学习结果、丢失具体 card/record 追溯，或把本任务扩展到阶段九长期画像、记忆注入和个性化排序。"
 
+  - path: "src-tauri/src/vocabulary.rs"
+    purpose: "输入补全的随包词表匹配、受限编辑距离纠错和 suggest_vocabulary_terms_command。"
+    status: "active"
+    read_when:
+      - "调整输入补全候选、前缀/模糊匹配或候选排序。"
+      - "更新随包词表数据或核对来源归属。"
+    notes: "include_str! 嵌入 scripts/gen-vocabulary.mjs 生成的 vocabulary_data.txt（48k+ 词形，MIT 授权的 FrequencyWords OpenSubtitles 词频数据，README 已标注归属）；启动后懒解析为静态词表。前缀命中保持词频序；查询 ≥4 字符且前缀不足时用 band 剪枝编辑距离（≤2）给纠错候选，距离升序、同级词频序。command 合并 learning_targets 小写前缀命中（最近查过优先）与词表结果并去重；单 token 拉丁查询才补全，限制 1-10 条。"
+    risk: "词表文件由脚本生成，不要手工编辑；补全是本地纯匹配，不得引入 LLM 预测或联网词库。"
+
   - path: "scripts/"
     purpose: "辅助脚本目录。"
     status: "active"
@@ -1298,6 +1358,14 @@ source_areas:
       - "调整 Codex 内置主题配色、来源或许可证归属。"
     notes: "输出 src-tauri/src/codex_themes_data.rs 与 src/codexThemeData.ts；生成后需运行 cargo fmt --check 与 pnpm test:settings 验证。"
     risk: "生成数据改动会影响全部内置主题校验；不要手工编辑生成文件，改 core-palette.json 后重跑。"
+
+  - path: "scripts/gen-vocabulary.mjs"
+    purpose: "一次性词表生成脚本：从 FrequencyWords en_50k.txt 提取随包输入补全词表。"
+    status: "active"
+    read_when:
+      - "更新输入补全词表规模、过滤规则或核对来源授权。"
+    notes: "读取 FrequencyWords（MIT，OpenSubtitles 语料）原始频率表，只保留纯 ASCII 拉丁词形（允许撇号/连字符），小写去重后按词频降序输出 src-tauri/src/vocabulary_data.txt；来源归属登记在 README。"
+    risk: "生成数据不要手工编辑；不要引入商业词典或需单独授权的词表。"
 
 app_scaffold:
   - path: ".env.example"

@@ -1,11 +1,25 @@
 import {
   useEffect,
   useRef,
+  useState,
   type FormEvent,
   type KeyboardEvent,
-  type MouseEvent,
 } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import {
+  beginOverlayWindowDrag,
+  overlayWindowDragCommands,
+} from "../overlayWindowDrag";
+
+type VocabularySuggestion = {
+  term: string;
+  fromHistory: boolean;
+};
+
+const SUGGESTION_DEBOUNCE_MS = 200;
+const SUGGESTION_MAX_ITEMS = 5;
+const INPUT_STAGE_HEIGHT = 58;
+const SUGGESTION_ROW_HEIGHT = 34;
 
 type CenteredCommandInputProps = {
   value: string;
@@ -29,7 +43,11 @@ function CenteredCommandInput({
   onOpenChange,
 }: CenteredCommandInputProps) {
   const inputRef = useRef<HTMLInputElement>(null);
+  const suggestGenerationRef = useRef(0);
+  const [suggestions, setSuggestions] = useState<VocabularySuggestion[]>([]);
+  const [highlightIndex, setHighlightIndex] = useState(-1);
   const trimmedValue = value.trim();
+  const suggestionsVisible = open && !loading && suggestions.length > 0;
 
   useEffect(() => {
     if (!open) {
@@ -41,11 +59,93 @@ function CenteredCommandInput({
     });
   }, [open]);
 
+  useEffect(() => {
+    return () => {
+      suggestGenerationRef.current += 1;
+      invoke("set_overlay_input_window_height", {
+        height: INPUT_STAGE_HEIGHT,
+      }).catch(() => undefined);
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!open) {
+      setSuggestions([]);
+      setHighlightIndex(-1);
+      return;
+    }
+
+    // 词表匹配与历史前缀均由 Rust 侧权威校验；这里只保留防抖前的廉价门槛。
+    const suggestable = trimmedValue.length >= 2 && !/\s/.test(trimmedValue);
+    if (!suggestable) {
+      clearSuggestions();
+      return;
+    }
+
+    const generation = suggestGenerationRef.current + 1;
+    suggestGenerationRef.current = generation;
+    const timer = window.setTimeout(() => {
+      invoke<VocabularySuggestion[]>("suggest_vocabulary_terms_command", {
+        query: trimmedValue,
+        limit: SUGGESTION_MAX_ITEMS,
+      })
+        .then((result) => {
+          if (suggestGenerationRef.current !== generation) {
+            return;
+          }
+          setSuggestions(Array.isArray(result) ? result : []);
+          setHighlightIndex(-1);
+        })
+        .catch(() => undefined);
+    }, SUGGESTION_DEBOUNCE_MS);
+
+    return () => window.clearTimeout(timer);
+  }, [open, trimmedValue]);
+
+  useEffect(() => {
+    if (!open) {
+      return;
+    }
+
+    const height =
+      suggestionsVisible && !loading
+        ? INPUT_STAGE_HEIGHT +
+          8 +
+          Math.min(suggestions.length, SUGGESTION_MAX_ITEMS) *
+            SUGGESTION_ROW_HEIGHT +
+          8
+        : INPUT_STAGE_HEIGHT;
+    invoke("set_overlay_input_window_height", { height }).catch(
+      () => undefined,
+    );
+  }, [loading, open, suggestions.length, suggestionsVisible]);
+
+  function clearSuggestions() {
+    suggestGenerationRef.current += 1;
+    setSuggestions([]);
+    setHighlightIndex(-1);
+  }
+
+  function submitValue(candidate: string) {
+    if (!candidate || loading) {
+      return;
+    }
+
+    clearSuggestions();
+    onSubmit(candidate);
+  }
+
   function submitCurrentValue() {
     if (!trimmedValue || loading) {
       return;
     }
 
+    if (highlightIndex >= 0 && suggestions[highlightIndex]) {
+      submitValue(suggestions[highlightIndex].term);
+      return;
+    }
+
+    clearSuggestions();
     onSubmit(trimmedValue);
   }
 
@@ -56,6 +156,11 @@ function CenteredCommandInput({
 
   function handleKeyDown(event: KeyboardEvent<HTMLInputElement>) {
     if (event.key === "Escape") {
+      if (suggestionsVisible) {
+        event.preventDefault();
+        clearSuggestions();
+        return;
+      }
       event.preventDefault();
       if (value || loading || error) {
         onValueChange("");
@@ -65,9 +170,26 @@ function CenteredCommandInput({
       return;
     }
 
+    if (event.key === "ArrowDown" && suggestionsVisible) {
+      event.preventDefault();
+      setHighlightIndex((index) =>
+        index + 1 >= suggestions.length ? 0 : index + 1,
+      );
+      return;
+    }
+
+    if (event.key === "ArrowUp" && suggestionsVisible) {
+      event.preventDefault();
+      setHighlightIndex((index) =>
+        index <= 0 ? suggestions.length - 1 : index - 1,
+      );
+      return;
+    }
+
     if (event.key === "Tab") {
       event.preventDefault();
       if (!loading) {
+        clearSuggestions();
         onQuickAi(trimmedValue);
       }
       return;
@@ -79,45 +201,13 @@ function CenteredCommandInput({
     }
   }
 
-  function handleWindowDrag(event: MouseEvent<HTMLElement>) {
-    if (event.button !== 0) {
-      return;
-    }
-
-    if (event.target instanceof HTMLElement && event.target.closest("input")) {
-      return;
-    }
-
-    event.preventDefault();
-    invoke("begin_overlay_window_drag", {
-      pointerX: event.screenX,
-      pointerY: event.screenY,
-    }).catch(() => undefined);
-
-    function handleMouseMove(moveEvent: globalThis.MouseEvent) {
-      invoke("drag_overlay_window", {
-        pointerX: moveEvent.screenX,
-        pointerY: moveEvent.screenY,
-      }).catch(() => undefined);
-    }
-
-    function handleMouseUp() {
-      window.removeEventListener("mousemove", handleMouseMove);
-      window.removeEventListener("mouseup", handleMouseUp);
-      invoke("finish_overlay_window_drag").catch(() => undefined);
-    }
-
-    window.addEventListener("mousemove", handleMouseMove);
-    window.addEventListener("mouseup", handleMouseUp);
-  }
-
   if (!open) {
     return null;
   }
 
   return (
     <section
-      className={`centered-command-input${error ? " is-error-lite" : ""}`}
+      className="centered-command-input"
       aria-label="无选区时的居中查询输入"
     >
       <form
@@ -125,7 +215,9 @@ function CenteredCommandInput({
           loading ? " is-loading" : ""
         }${error ? " is-error-lite" : ""}`}
         autoComplete="off"
-        onMouseDown={handleWindowDrag}
+        onMouseDown={(event) =>
+          beginOverlayWindowDrag(event, overlayWindowDragCommands, "input")
+        }
         onSubmit={handleSubmit}
       >
         <span
@@ -155,6 +247,34 @@ function CenteredCommandInput({
           <span className="centered-command-input__loading-dot" />
         </span>
       </form>
+      {suggestionsVisible ? (
+        <ul
+          className="centered-command-input__suggestions"
+          role="listbox"
+          aria-label="输入建议"
+        >
+          {suggestions.map((suggestion, index) => (
+            <li key={suggestion.term} role="presentation">
+              <button
+                type="button"
+                role="option"
+                aria-selected={index === highlightIndex}
+                className={
+                  index === highlightIndex ? "is-active" : undefined
+                }
+                title={suggestion.fromHistory ? "你查过的词" : undefined}
+                onMouseDown={(event) => {
+                  event.preventDefault();
+                  submitValue(suggestion.term);
+                }}
+                onMouseEnter={() => setHighlightIndex(index)}
+              >
+                {suggestion.term}
+              </button>
+            </li>
+          ))}
+        </ul>
+      ) : null}
       {error ? (
         <p
           className="centered-command-input__error"

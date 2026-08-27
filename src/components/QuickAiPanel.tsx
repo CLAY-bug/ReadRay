@@ -4,9 +4,8 @@ import {
   useRef,
   useState,
   type KeyboardEvent,
-  type MouseEvent,
 } from "react";
-import { invoke } from "@tauri-apps/api/core";
+import { beginOverlayWindowDrag, overlayWindowDragCommands } from "../overlayWindowDrag";
 import type {
   QuickAiConversation,
   RecentQuickAiConversation,
@@ -294,42 +293,6 @@ function QuickAiPanel({
     }
   }
 
-  function handleWindowDrag(event: MouseEvent<HTMLElement>) {
-    if (event.button !== 0) {
-      return;
-    }
-    if (
-      event.target instanceof HTMLElement &&
-      event.target.closest(
-        "button, input, textarea, .quick-ai-panel__messages, .quick-ai-panel__history-menu, .quick-ai-panel__history-page-body",
-      )
-    ) {
-      return;
-    }
-
-    event.preventDefault();
-    invoke("begin_overlay_window_drag", {
-      pointerX: event.screenX,
-      pointerY: event.screenY,
-    }).catch(() => undefined);
-
-    function handleMouseMove(moveEvent: globalThis.MouseEvent) {
-      invoke("drag_overlay_window", {
-        pointerX: moveEvent.screenX,
-        pointerY: moveEvent.screenY,
-      }).catch(() => undefined);
-    }
-
-    function handleMouseUp() {
-      window.removeEventListener("mousemove", handleMouseMove);
-      window.removeEventListener("mouseup", handleMouseUp);
-      invoke("finish_overlay_window_drag").catch(() => undefined);
-    }
-
-    window.addEventListener("mousemove", handleMouseMove);
-    window.addEventListener("mouseup", handleMouseUp);
-  }
-
   if (!open) {
     return null;
   }
@@ -366,7 +329,13 @@ function QuickAiPanel({
       <article
         className="quick-ai-panel quick-ai-panel__history-page"
         aria-label="全部 Quick AI 对话"
-        onMouseDown={handleWindowDrag}
+        onMouseDown={(event) =>
+          beginOverlayWindowDrag(
+            event,
+            overlayWindowDragCommands,
+            "button, input, textarea, .quick-ai-panel__messages, .quick-ai-panel__history-menu, .quick-ai-panel__history-page-body",
+          )
+        }
       >
         <header className="quick-ai-panel__header quick-ai-panel__history-page-header">
           <button
@@ -453,7 +422,13 @@ function QuickAiPanel({
     <article
       className="quick-ai-panel"
       aria-label="Quick AI 对话"
-      onMouseDown={handleWindowDrag}
+      onMouseDown={(event) =>
+        beginOverlayWindowDrag(
+          event,
+          overlayWindowDragCommands,
+          "button, input, textarea, .quick-ai-panel__messages, .quick-ai-panel__history-menu, .quick-ai-panel__history-page-body",
+        )
+      }
     >
       <header className="quick-ai-panel__header">
         <button

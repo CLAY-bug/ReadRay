@@ -3,10 +3,11 @@ use crate::deepseek_client::{
     ChatCompletionRequestPolicy, TrackedChatCompletionError,
 };
 use crate::explanation::{
-    classify_query_type, determine_query_direction, is_context_sensitive_word,
-    normalize_english_learning_target, normalize_model_english_learning_target,
-    normalize_source_sentence_translation, validate_explanation_card, CaptureInput,
-    ExplanationCard, QueryDirection, QueryType, MAX_CONTEXT_TEXT_LEN,
+    classify_query_type, clear_source_sentence_fields, determine_query_direction,
+    is_context_sensitive_word, normalize_english_learning_target,
+    normalize_model_english_learning_target, normalize_source_sentence_translation,
+    validate_explanation_card, CaptureInput, ExplanationCard, QueryDirection, QueryType,
+    MAX_CONTEXT_TEXT_LEN,
 };
 use crate::explanation_cache::{self, ExplanationCacheSpec};
 use crate::learning_records;
@@ -465,6 +466,41 @@ fn cancelled_request_error() -> String {
     EXPLANATION_REQUEST_CANCELLED.to_string()
 }
 
+fn friendly_explanation_error(error: &str) -> String {
+    if error == EXPLANATION_REQUEST_CANCELLED {
+        return error.to_string();
+    }
+    eprintln!("READRAY_EXPLANATION_FAILED={error}");
+    classify_explanation_error(error).to_string()
+}
+
+fn classify_explanation_error(error: &str) -> &'static str {
+    if error.contains("未配置 DeepSeek API Key") {
+        "未配置 DeepSeek API Key，请在“设置 → AI 服务”中完成配置。"
+    } else if error.contains("无法读取 DeepSeek API Key") {
+        "无法读取已保存的 DeepSeek API Key，请在“设置 → AI 服务”中重新保存。"
+    } else if error.contains("HTTP 401") || error.contains("HTTP 403") {
+        "DeepSeek API Key 无效或已过期，请在“设置 → AI 服务”中更新。"
+    } else if error.contains("HTTP 402") {
+        "DeepSeek 账户余额不足，请充值后重试。"
+    } else if error.contains("HTTP 429") {
+        "请求过于频繁，请稍等片刻再试。"
+    } else if error.contains("超时") {
+        "解释生成超时，请重试。"
+    } else if error.contains("网络错误") || error.contains("请求失败") {
+        "网络连接出现问题，请检查网络后重试。"
+    } else if error.contains("保存失败") {
+        "解释已生成，但保存学习记录失败，请重试。"
+    } else if error.contains("模型输出错误")
+        || error.contains("schema 错误")
+        || error.contains("usage")
+    {
+        "这次没能生成有效的解释，请重试。"
+    } else {
+        "暂时无法生成解释，请重试。"
+    }
+}
+
 pub(crate) fn cancel_explanation_scope(scope: ExplanationRequestScope) {
     explanation_request_authority().cancel(scope, None);
 }
@@ -500,7 +536,9 @@ pub async fn create_explanation_card(
     minimal_context_text: Option<String>,
 ) -> Result<ExplanationCard, String> {
     let authority = explanation_request_authority();
-    let (request, abort_registration) = authority.register(request_scope, request_key)?;
+    let (request, abort_registration) = authority
+        .register(request_scope, request_key)
+        .map_err(|error| friendly_explanation_error(&error))?;
     let request = Arc::new(request);
     let provider_request = resolve_explanation_card(
         app.clone(),
@@ -510,12 +548,15 @@ pub async fn create_explanation_card(
     );
     let card = Abortable::new(provider_request, abort_registration)
         .await
-        .map_err(|_| cancelled_request_error())??;
-    request.commit_if_current(|| {
-        learning_records::save_for_app(&app, &input, &card)
-            .map(|_| ())
-            .map_err(|error| format!("ExplanationCard 保存失败：{error}"))
-    })?;
+        .map_err(|_| cancelled_request_error())?
+        .map_err(|error| friendly_explanation_error(&error))?;
+    request
+        .commit_if_current(|| {
+            learning_records::save_for_app(&app, &input, &card)
+                .map(|_| ())
+                .map_err(|error| format!("ExplanationCard 保存失败：{error}"))
+        })
+        .map_err(|error| friendly_explanation_error(&error))?;
 
     Ok(card)
 }
@@ -760,12 +801,27 @@ pub(crate) fn parse_explanation_card_content(
         card.align_primary_result_with_learning_target();
     }
     normalize_source_sentence_translation(&mut card);
-    validate_explanation_card(input, &card).map_err(|errors| {
-        format!(
+    if let Err(errors) = validate_explanation_card(input, &card) {
+        let source_sentence_only =
+            !errors.is_empty() && errors.iter().all(|error| error.contains("sourceSentence"));
+        if source_sentence_only {
+            let mut repaired = card.clone();
+            if clear_source_sentence_fields(&mut repaired)
+                && validate_explanation_card(input, &repaired).is_ok()
+            {
+                let query_digest: String = input.query_text.chars().take(80).collect();
+                eprintln!(
+                    "READRAY_EXPLANATION_SOURCE_SENTENCE_DROPPED=query={query_digest} original_errors={}",
+                    summarize_validation_errors(&errors)
+                );
+                return Ok(repaired);
+            }
+        }
+        return Err(format!(
             "ExplanationCard schema 错误：{}",
             summarize_validation_errors(&errors)
-        )
-    })?;
+        ));
+    }
 
     Ok(card)
 }
@@ -860,7 +916,7 @@ Word rules:
 - For a context-sensitive abbreviation or identifier, inspect all of contextText, including later sentences and other occurrences of the token. Use a later, more specific role, product, organization, or domain clue to resolve the selected token when one is present; do not default to the most common expansion or report that the meaning is unknown when the context provides such a clue.
 - Prefer the contextual sense. contextMeaning is allowed only with nonblank contextText (max 800 chars).
 - Copy the contextual sentence that best supports the resolved sense, even when it is later than the selected occurrence. sourceSentence may appear without sourceSentenceZh.
-- Provide sourceSentenceZh (max 2400) only when sourceSentence (max 1200) is primarily English. When sourceSentence is primarily Chinese, including Chinese-dominant mixed text with terms such as Rust/generation or Memory/Review, sourceSentenceZh must be null. sourceSentenceZh is never allowed without sourceSentence.
+- Provide sourceSentenceZh (max 2400) only when sourceSentence (max 1200) contains no Chinese characters at all (a pure English/Latin sentence). If sourceSentence contains any Chinese characters, including mixed text with terms such as Rust/generation or GLM Coding, sourceSentenceZh must be null. sourceSentenceZh is never allowed without sourceSentence.
 - partOfSpeech and phonetic may be null. Code identifiers such as anchorRect should normally use null phonetic.
 - basicMeanings requires 1-4 concise Chinese meanings (max 400 chars each).
 - phrases and nearMeanings have at most 3 useful items each; examples have at most 2 bilingual items and may be empty.
@@ -885,7 +941,7 @@ Phrase rules:
 - contextMeaning is allowed only with nonblank contextText (max 800 chars).
 - composition is optional (max 800 chars) and only explains useful structure or usage.
 - Copy a useful contextual sentence when present. sourceSentence may appear without sourceSentenceZh.
-- Provide sourceSentenceZh (max 2400) only when sourceSentence (max 1200) is primarily English. When sourceSentence is primarily Chinese, including Chinese-dominant mixed text with terms such as Rust/generation or Memory/Review, sourceSentenceZh must be null. sourceSentenceZh is never allowed without sourceSentence.
+- Provide sourceSentenceZh (max 2400) only when sourceSentence (max 1200) contains no Chinese characters at all (a pure English/Latin sentence). If sourceSentence contains any Chinese characters, including mixed text with terms such as Rust/generation or GLM Coding, sourceSentenceZh must be null. sourceSentenceZh is never allowed without sourceSentence.
 - examples has at most 2 bilingual items and may be empty. Do not fabricate content or split the phrase into word-card fields."#
         }
         QueryType::Sentence => {
@@ -997,6 +1053,48 @@ mod tests {
             context_text: context_text.map(str::to_string),
             source_type: SourceType::Manual,
             source_app: None,
+        }
+    }
+
+    #[test]
+    fn friendly_error_classifier_tracks_producer_messages() {
+        // 这些字符串是 deepseek_client::ChatCompletionRequestError::product_message
+        // 的真实输出格式；classifier 依赖它们做子串匹配，改动 producer 文案时
+        // 此测试会失败，提醒同步更新分类。
+        let cases = [
+            ("DeepSeek ExplanationCard 超时：请重试。", "解释生成超时，请重试。"),
+            (
+                "DeepSeek ExplanationCard 网络错误：连接或响应读取失败。",
+                "网络连接出现问题，请检查网络后重试。",
+            ),
+            (
+                "DeepSeek ExplanationCard 网络错误：服务返回 HTTP 401。",
+                "DeepSeek API Key 无效或已过期，请在“设置 → AI 服务”中更新。",
+            ),
+            (
+                "DeepSeek ExplanationCard 网络错误：服务返回 HTTP 402。",
+                "DeepSeek 账户余额不足，请充值后重试。",
+            ),
+            (
+                "DeepSeek ExplanationCard 网络错误：服务返回 HTTP 429。",
+                "请求过于频繁，请稍等片刻再试。",
+            ),
+            (
+                "未配置 DeepSeek API Key，无法执行 DeepSeek ExplanationCard。",
+                "未配置 DeepSeek API Key，请在“设置 → AI 服务”中完成配置。",
+            ),
+            (
+                "ExplanationCard schema 错误：explanationCard.sourceSentenceZh 只有在 sourceSentence 存在时才允许提供。",
+                "这次没能生成有效的解释，请重试。",
+            ),
+            ("其他未知错误。", "暂时无法生成解释，请重试。"),
+        ];
+        for (producer, expected) in cases {
+            assert_eq!(
+                classify_explanation_error(producer),
+                expected,
+                "for: {producer}"
+            );
         }
     }
 
@@ -1284,10 +1382,61 @@ mod tests {
         for query_type in [QueryType::Word, QueryType::Phrase] {
             let prompt = explanation_card_system_prompt(query_type, QueryDirection::EnToZh);
             assert!(prompt.contains("sourceSentence may appear without sourceSentenceZh"));
-            assert!(prompt.contains("only when sourceSentence (max 1200) is primarily English"));
+            assert!(prompt.contains(
+                "only when sourceSentence (max 1200) contains no Chinese characters at all"
+            ));
             assert!(prompt.contains("sourceSentenceZh must be null"));
             assert!(prompt.contains("sourceSentenceZh is never allowed without sourceSentence"));
         }
+    }
+
+    #[test]
+    fn english_source_sentence_without_translation_degrades_to_valid_card() {
+        let context = "The request generation prevents an older result from replacing a newer one.";
+        let content = json!({
+            "queryType": "word",
+            "sourceText": "generation",
+            "headword": "generation",
+            "basicMeanings": ["代次；生成"],
+            "contextMeaning": "这里指请求的内部代次。",
+            "sourceSentence": context,
+            "phrases": [],
+            "nearMeanings": [],
+            "examples": []
+        })
+        .to_string();
+
+        let card =
+            parse_explanation_card_content(&input("generation", Some(context)), &content).unwrap();
+
+        assert!(matches!(
+            card,
+            ExplanationCard::Word {
+                source_sentence: None,
+                source_sentence_zh: None,
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn non_source_sentence_schema_errors_still_fail_the_card() {
+        let content = json!({
+            "queryType": "word",
+            "sourceText": "generation",
+            "headword": "generation",
+            "basicMeanings": [],
+            "sourceSentence": "The request generation prevents an older result.",
+            "phrases": [],
+            "nearMeanings": [],
+            "examples": []
+        })
+        .to_string();
+
+        let error =
+            parse_explanation_card_content(&input("generation", None), &content).unwrap_err();
+
+        assert!(error.contains("schema 错误"));
     }
 
     #[test]

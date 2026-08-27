@@ -1273,6 +1273,37 @@ impl LearningRecordStore {
             occurrences,
         }))
     }
+
+    /// 输入补全用的历史目标前缀查询：只取 learnable 目标，按最近出现排序。
+    fn prefix_target_texts(&self, prefix: &str, limit: usize) -> Result<Vec<String>, String> {
+        let sql = "SELECT lt.display_target_text, MAX(lr.created_at_unix_ms)
+                   FROM learning_targets lt
+                   JOIN learning_target_occurrences lto ON lto.learning_target_id = lt.id
+                   JOIN learning_records lr ON lr.id = lto.learning_record_id
+                   WHERE lt.target_kind = 'learnable'
+                     AND lt.normalized_target_text LIKE ?1
+                   GROUP BY lt.id
+                   ORDER BY MAX(lr.created_at_unix_ms) DESC, lt.id DESC
+                   LIMIT ?2";
+        let mut statement = self
+            .connection
+            .prepare(sql)
+            .map_err(|error| format!("学习目标补全语句无法准备：{error}"))?;
+        let rows = statement
+            .query_map(
+                params![
+                    format!("{prefix}%"),
+                    i64::try_from(limit).unwrap_or(i64::MAX)
+                ],
+                |row| row.get::<_, String>(0),
+            )
+            .map_err(|error| format!("学习目标补全读取失败：{error}"))?;
+        let mut texts = Vec::new();
+        for row in rows {
+            texts.push(row.map_err(|error| format!("学习目标补全行读取失败：{error}"))?);
+        }
+        Ok(texts)
+    }
 }
 
 pub fn initialize_for_app(app: &AppHandle) -> Result<(), String> {
@@ -1750,6 +1781,15 @@ pub fn get_learning_target(
     id: i64,
 ) -> Result<Option<LearningTargetDetail>, String> {
     LearningRecordStore::open(&database_path_for_app(&app)?)?.get_target(id)
+}
+
+/// 输入补全：按小写前缀查最近查过的学习目标文本，供 vocabulary command 合并。
+pub fn prefix_learning_target_texts(
+    app: &AppHandle,
+    prefix: &str,
+    limit: usize,
+) -> Result<Vec<String>, String> {
+    LearningRecordStore::open(&database_path_for_app(app)?)?.prefix_target_texts(prefix, limit)
 }
 
 #[tauri::command]

@@ -13,6 +13,10 @@ import { readText, writeText } from "@tauri-apps/plugin-clipboard-manager";
 import AnchoredResultPopover, {
   type AnchorRect,
 } from "./components/AnchoredResultPopover";
+import {
+  anchoredWindowDragCommands,
+  beginOverlayWindowDrag,
+} from "./overlayWindowDrag";
 import CenteredCommandInput from "./components/CenteredCommandInput";
 import CenteredResultPanel, {
   type CenteredResult,
@@ -325,6 +329,7 @@ function OverlayApp() {
     height: number;
   } | null>(null);
   const anchoredResizeGeneration = useRef(0);
+  const anchoredWindowDragged = useRef(false);
 
   const setQuickAiConversation = useCallback(
     (conversation: QuickAiConversation | null) => {
@@ -436,6 +441,7 @@ function OverlayApp() {
       anchoredResizeFrame.current = null;
     }
     anchoredResizePending.current = null;
+    anchoredWindowDragged.current = false;
   }, []);
 
   const closeAnchoredOverlay = useCallback(async () => {
@@ -545,6 +551,10 @@ function OverlayApp() {
         anchoredResizePending.current = null;
         const currentAnchorRect = anchoredSourceRect.current;
         if (!nextSize || !currentAnchorRect) {
+          return;
+        }
+        if (anchoredWindowDragged.current) {
+          // 拖动后不再按选区重新放置窗口；内容增高时由卡片内部滚动承接。
           return;
         }
 
@@ -1154,39 +1164,52 @@ function OverlayApp() {
                 highlightText="marketed"
               />
             </>
-          ) : anchoredStage === "result" ? (
-            <AnchoredResultPopover
-              result={anchoredResult}
-              anchorRect={null}
-              open={popoverOpen}
-              onOpenChange={handleAnchoredOpenChange}
-              embedded
-              highlightText={anchoredQuery}
-              onContentSizeChange={handleAnchoredContentSizeChange}
-            />
           ) : (
-            <section
-              className={`anchored-query-status is-${anchoredStage}`}
-              aria-live="polite"
-              aria-busy={anchoredStage === "loading"}
-            >
-              <div className="anchored-query-status__header">
-                <span className="anchored-query-status__query">
-                  {anchoredQuery}
-                </span>
-                {anchoredStage === "loading" ? (
-                  <span
-                    className="anchored-query-status__loading-dot"
-                    aria-hidden="true"
-                  />
-                ) : null}
-              </div>
-              <p className="anchored-query-status__message">
-                {anchoredStage === "loading"
-                  ? "正在生成语境解释…"
-                  : anchoredError ?? "解释失败，请稍后重试。"}
-              </p>
-            </section>
+            <>
+              <div
+                className="anchored-window-drag-region"
+                onMouseDown={(event) => {
+                  if (beginOverlayWindowDrag(event, anchoredWindowDragCommands)) {
+                    anchoredWindowDragged.current = true;
+                  }
+                }}
+                aria-hidden="true"
+              />
+              {anchoredStage === "result" ? (
+                <AnchoredResultPopover
+                  result={anchoredResult}
+                  anchorRect={null}
+                  open={popoverOpen}
+                  onOpenChange={handleAnchoredOpenChange}
+                  embedded
+                  highlightText={anchoredQuery}
+                  onContentSizeChange={handleAnchoredContentSizeChange}
+                />
+              ) : (
+                <section
+                  className={`anchored-query-status is-${anchoredStage}`}
+                  aria-live="polite"
+                  aria-busy={anchoredStage === "loading"}
+                >
+                  <div className="anchored-query-status__header">
+                    <span className="anchored-query-status__query">
+                      {anchoredQuery}
+                    </span>
+                    {anchoredStage === "loading" ? (
+                      <span
+                        className="anchored-query-status__loading-dot"
+                        aria-hidden="true"
+                      />
+                    ) : null}
+                  </div>
+                  <p className="anchored-query-status__message">
+                    {anchoredStage === "loading"
+                      ? "正在生成语境解释…"
+                      : anchoredError ?? "解释失败，请稍后重试。"}
+                  </p>
+                </section>
+              )}
+            </>
           )
         ) : (
           <>

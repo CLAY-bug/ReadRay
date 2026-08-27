@@ -140,6 +140,45 @@ button:active {
   cursor: grab;
 }
 
+/* 补全候选浮层：行高 34px 与 CenteredCommandInput 的 SUGGESTION_ROW_HEIGHT
+   对应；窗口高度由前端按候选条数同步扩展。 */
+.centered-command-input__suggestions {
+  position: absolute;
+  top: 66px;
+  right: 8px;
+  left: 8px;
+  z-index: 25;
+  overflow: hidden auto;
+  max-height: 178px;
+  margin: 0;
+  border: 1px solid var(--rr-color-border-strong);
+  border-radius: var(--rr-radius-md);
+  padding: 4px;
+  list-style: none;
+  background:
+    linear-gradient(180deg, rgba(39, 33, 29, 0.98), rgba(23, 21, 18, 0.98)),
+    var(--rr-color-graphite-850);
+  box-shadow: var(--rr-shadow-popover);
+}
+
+.centered-command-input__suggestions button {
+  display: block;
+  width: 100%;
+  border: 0;
+  border-radius: calc(var(--rr-radius-md) - 3px);
+  padding: 8px 12px;
+  cursor: pointer;
+  color: var(--rr-color-text-primary);
+  background: transparent;
+  font-size: calc(15px * var(--rr-ui-font-scale));
+  line-height: 1.2;
+  text-align: left;
+}
+
+.centered-command-input__suggestions button.is-active {
+  background: rgba(255, 255, 255, 0.08);
+}
+
 .centered-command-input__drag-region:active {
   cursor: grabbing;
 }
@@ -1284,6 +1323,38 @@ button:active {
   color: rgba(216, 151, 116, 0.84);
   font-size: calc(11px * var(--rr-ui-font-scale));
   line-height: 1.4;
+}
+
+.anchored-window-drag-region {
+  position: fixed;
+  top: 0;
+  right: 0;
+  left: 0;
+  z-index: 30;
+  height: 20px;
+  cursor: grab;
+}
+
+.anchored-window-drag-region:active {
+  cursor: grabbing;
+}
+
+.anchored-window-drag-region::after {
+  content: "";
+  position: absolute;
+  top: 8px;
+  left: 50%;
+  width: 28px;
+  height: 4px;
+  border-radius: 2px;
+  background: rgba(246, 240, 232, 0.28);
+  opacity: 0;
+  transform: translateX(-50%);
+  transition: opacity 150ms ease;
+}
+
+.anchored-window-drag-region:hover::after {
+  opacity: 1;
 }
 
 .anchored-result-popover {
