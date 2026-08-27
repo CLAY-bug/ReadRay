@@ -20,6 +20,7 @@ const SUGGESTION_DEBOUNCE_MS = 200;
 const SUGGESTION_MAX_ITEMS = 5;
 const INPUT_STAGE_HEIGHT = 58;
 const SUGGESTION_ROW_HEIGHT = 34;
+const SUGGESTION_PANEL_VERTICAL_SPACE = 16;
 
 type CenteredCommandInputProps = {
   value: string;
@@ -93,7 +94,11 @@ function CenteredCommandInput({
           if (suggestGenerationRef.current !== generation) {
             return;
           }
-          setSuggestions(Array.isArray(result) ? result : []);
+          setSuggestions(
+            Array.isArray(result)
+              ? result.slice(0, SUGGESTION_MAX_ITEMS)
+              : [],
+          );
           setHighlightIndex(-1);
         })
         .catch(() => undefined);
@@ -110,10 +115,9 @@ function CenteredCommandInput({
     const height =
       suggestionsVisible && !loading
         ? INPUT_STAGE_HEIGHT +
-          8 +
+          SUGGESTION_PANEL_VERTICAL_SPACE +
           Math.min(suggestions.length, SUGGESTION_MAX_ITEMS) *
-            SUGGESTION_ROW_HEIGHT +
-          8
+            SUGGESTION_ROW_HEIGHT
         : INPUT_STAGE_HEIGHT;
     invoke("set_overlay_input_window_height", { height }).catch(
       () => undefined,
@@ -213,7 +217,9 @@ function CenteredCommandInput({
       <form
         className={`centered-command-input__box${
           loading ? " is-loading" : ""
-        }${error ? " is-error-lite" : ""}`}
+        }${error ? " is-error-lite" : ""}${
+          suggestionsVisible ? " has-suggestions" : ""
+        }`}
         autoComplete="off"
         onMouseDown={(event) =>
           beginOverlayWindowDrag(event, overlayWindowDragCommands, "input")

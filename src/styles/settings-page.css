@@ -423,7 +423,7 @@
   justify-self: end;
 }
 
-.rr-settings-appearance-actions {
+.rr-settings-theme-actions {
   display: flex;
   min-width: 0;
   flex-wrap: wrap;
@@ -439,53 +439,6 @@
 
 .rr-settings-theme-mode-select {
   width: 88px;
-}
-
-.rr-settings-font-field {
-  justify-self: end;
-}
-
-.rr-settings-ui-font {
-  width: 164px;
-}
-
-.rr-settings-learning-font {
-  width: 232px;
-}
-
-.rr-settings-font-size-control {
-  display: flex;
-  align-items: center;
-  justify-content: flex-end;
-  gap: 8px;
-}
-
-.rr-settings-number-field {
-  display: flex;
-  height: 36px;
-  align-items: center;
-  border: 1px solid var(--rr-main-border);
-  border-radius: var(--rr-radius-md);
-  background: var(--rr-main-bg);
-}
-
-.rr-settings-number-field input {
-  width: 54px;
-  height: 100%;
-  border: 0;
-  outline: 0;
-  padding: 0 4px 0 10px;
-  background: transparent;
-  font-family: var(--rr-main-font-mono);
-  font-size: calc(12px * var(--rr-settings-font-scale));
-  text-align: right;
-}
-
-.rr-settings-number-field span {
-  padding: 0 10px 0 3px;
-  color: var(--rr-main-meta);
-  font-family: var(--rr-main-font-mono);
-  font-size: calc(10px * var(--rr-settings-font-scale));
 }
 
 .rr-settings-restore {
@@ -1449,23 +1402,18 @@
     text-align: left;
   }
 
-  .rr-settings-appearance-actions {
+  .rr-settings-theme-actions {
     width: auto;
     justify-content: flex-start;
     justify-self: start;
   }
 
-  .rr-settings-font-field,
   .rr-settings-send-select,
   .rr-settings-language-select,
   .rr-settings-close-select,
   .rr-settings-model-select {
     max-width: 100%;
     justify-self: start;
-  }
-
-  .rr-settings-font-size-control {
-    justify-content: flex-start;
   }
 
   .rr-settings-key-form {

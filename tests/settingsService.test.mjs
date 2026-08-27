@@ -184,6 +184,7 @@ test("Tauri 设置 repository 通过有类型 command 和原生保存对话框�
   await repository.getPreferences();
   await repository.updatePreferences(preferences({ uiFontSize: 16 }));
   await repository.beginShortcutRecording("quickQuery");
+  await repository.submitShortcutRecordingKeyEvent("ControlLeft", true);
   await repository.cancelShortcutRecording();
   await repository.getAutostartEnabled();
   await repository.setAutostartEnabled(true);
@@ -202,6 +203,10 @@ test("Tauri 设置 repository 通过有类型 command 和原生保存对话框�
       args: { preferences: preferences({ uiFontSize: 16 }) },
     },
     { command: "begin_shortcut_recording", args: { action: "quickQuery" } },
+    {
+      command: "submit_shortcut_recording_key_event",
+      args: { code: "ControlLeft", keyDown: true },
+    },
     { command: "cancel_shortcut_recording", args: undefined },
     { command: "get_autostart_enabled", args: undefined },
     { command: "set_autostart_enabled", args: { enabled: true } },
@@ -860,7 +865,7 @@ test("四处多行输入共享发送偏好与 IME 守卫，单行解释仍固定
   assert.match(singleLine, /event\.key === "Enter"/);
 });
 
-test("正式设置页保持五类设计结构，确定性操作已接线且不直接 invoke", async () => {
+test("正式设置页保持四类设置结构，确定性操作已接线且不直接 invoke", async () => {
   const page = await readFile("src/components/SettingsPage.tsx", "utf8");
   const balanceRefresh = await readFile("src/settingsBalanceRefresh.ts", "utf8");
   const styles = await readFile("src/styles/settings-page.css", "utf8");
@@ -896,7 +901,12 @@ test("正式设置页保持五类设计结构，确定性操作已接线且不�
   assert.match(preferenceHook, /service\.loadPreferences/);
   assert.match(preferenceCoordinator, /generation !== this\.generation/);
   assert.match(preferenceCoordinator, /保存失败，已恢复数据库设置/);
-  assert.match(page, /parseFontSizeCandidate/);
+  assert.doesNotMatch(page, /parseFontSizeCandidate/);
+  assert.doesNotMatch(page, /界面字体|界面字号|学习内容字体|学习内容字号/);
+  assert.doesNotMatch(page, /已保存并应用/);
+  assert.doesNotMatch(page, /已启用 Windows 开机启动|已关闭 Windows 开机启动/);
+  assert.match(page, /preferenceStatus === "error" && preferenceMessage/);
+  assert.match(page, /autostartStatus === "error" && autostartMessage/);
   assert.match(
     page,
     /await onPreferencesSave\(next, previous\)[\s\S]*?isSettingsOperationCurrent\([\s\S]*?setSnapshot/,
@@ -913,7 +923,9 @@ test("正式设置页保持五类设计结构，确定性操作已接线且不�
   assert.match(repository, /if \(!filePath\) \{[\s\S]*?return null/);
   assert.match(shell, /<SettingsPage[\s\S]*?service=\{settingsService\}[\s\S]*?onPreferencesSave=\{onPreferencesSave\}/);
   assert.match(page, /\["general", "通用"\]/);
-  assert.match(page, /\["appearance", "外观"\]/);
+  assert.doesNotMatch(page, /\["appearance", "外观"\]/);
+  assert.doesNotMatch(page, /activeSection === "appearance"/);
+  assert.match(page, /activeSection === "general"[\s\S]*?GroupHeading title="主题"/);
   assert.match(page, /\["ai", "AI 服务"\]/);
   assert.match(page, /\["data", "数据"\]/);
   assert.match(page, /\["about", "关于"\]/);
@@ -924,9 +936,16 @@ test("正式设置页保持五类设计结构，确定性操作已接线且不�
   assert.match(page, /录制新快捷键/);
   assert.match(page, /listenShortcutRecording/);
   assert.match(page, /beginShortcutRecording/);
+  assert.match(page, /submitShortcutRecordingKeyEvent/);
   assert.match(page, /cancelShortcutRecording/);
+  assert.match(page, /addEventListener\("keydown", handleKeyDown, true\)/);
+  assert.match(page, /addEventListener\("keyup", handleKeyUp, true\)/);
+  assert.match(page, /recordButtonRef\.current\?\.focus\(\{ preventScroll: true \}\)/);
+  assert.match(page, /disabled=\{disabled\}[\s\S]*?aria-pressed=\{recording\}/);
+  assert.doesNotMatch(page, /disabled=\{disabled \|\| recording\}[\s\S]*?aria-pressed/);
   assert.doesNotMatch(page, /shortcutFromKeyEvent|onKeyDown=\{recordShortcut\}/);
   assert.match(repository, /begin_shortcut_recording/);
+  assert.match(repository, /submit_shortcut_recording_key_event/);
   assert.match(repository, /readray:\/\/shortcut-recorded/);
   assert.match(page, /恢复默认快捷键/);
   assert.match(page, /onClick=\{refreshBalance\}/);
@@ -957,6 +976,7 @@ test("正式设置页保持五类设计结构，确定性操作已接线且不�
   assert.match(page, /autostart/i);
   assert.match(page, /closeBehavior/);
   assert.match(styles, /\.rr-settings-nav\s*\{[\s\S]*?width:\s*auto/);
+  assert.doesNotMatch(styles, /rr-settings-font-field|rr-settings-font-size-control|rr-settings-number-field/);
   assert.match(styles, /\.rr-settings-content\s*\{[\s\S]*?width:\s*min\(720px/);
   assert.match(styles, /\.rr-settings-page\s*\{[\s\S]*?--rr-settings-font-scale:\s*calc\(var\(--rr-ui-font-scale\) \* 0\.94\)/);
   assert.match(styles, /\.rr-settings-row\s*\{[\s\S]*?grid-template-columns:\s*minmax\(0, 1fr\) auto[\s\S]*?min-height:\s*64px/);

@@ -23,6 +23,7 @@ export interface SettingsRepository {
   getPreferences(): Promise<AppPreferences>;
   updatePreferences(preferences: AppPreferences): Promise<AppPreferences>;
   beginShortcutRecording(action: ShortcutRecordingAction): Promise<void>;
+  submitShortcutRecordingKeyEvent(code: string, keyDown: boolean): Promise<void>;
   cancelShortcutRecording(): Promise<void>;
   listenShortcutRecording(
     listener: (result: ShortcutRecordingResult) => void,
@@ -75,6 +76,13 @@ export class TauriSettingsRepository implements SettingsRepository {
 
   beginShortcutRecording(action: ShortcutRecordingAction) {
     return this.invokeCommand<void>("begin_shortcut_recording", { action });
+  }
+
+  submitShortcutRecordingKeyEvent(code: string, keyDown: boolean) {
+    return this.invokeCommand<void>("submit_shortcut_recording_key_event", {
+      code,
+      keyDown,
+    });
   }
 
   cancelShortcutRecording() {

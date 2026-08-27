@@ -24,6 +24,7 @@ export interface SettingsService {
   loadPreferences(): Promise<AppPreferences>;
   savePreferences(preferences: AppPreferences): Promise<AppPreferences>;
   beginShortcutRecording(action: ShortcutRecordingAction): Promise<void>;
+  submitShortcutRecordingKeyEvent(code: string, keyDown: boolean): Promise<void>;
   cancelShortcutRecording(): Promise<void>;
   listenShortcutRecording(
     listener: (result: ShortcutRecordingResult) => void,
@@ -205,6 +206,10 @@ export class RepositorySettingsService implements SettingsService {
 
   beginShortcutRecording(action: ShortcutRecordingAction) {
     return this.repository.beginShortcutRecording(action);
+  }
+
+  submitShortcutRecordingKeyEvent(code: string, keyDown: boolean) {
+    return this.repository.submitShortcutRecordingKeyEvent(code, keyDown);
   }
 
   cancelShortcutRecording() {

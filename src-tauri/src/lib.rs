@@ -977,6 +977,11 @@ pub fn run() {
             {
                 desktop_lifecycle::setup_main_window_state(app.handle())
                     .map_err(std::io::Error::other)?;
+                advanced_shortcuts::install_webview_accelerator_recording(
+                    app.handle(),
+                    MAIN_WINDOW_LABEL,
+                )
+                .map_err(std::io::Error::other)?;
                 settings::initialize_desktop_preferences(app.handle())
                     .map_err(std::io::Error::other)?;
                 desktop_lifecycle::setup_tray(app).map_err(std::io::Error::other)?;
@@ -1023,6 +1028,8 @@ pub fn run() {
             shortcut_label,
             #[cfg(desktop)]
             advanced_shortcuts::begin_shortcut_recording,
+            #[cfg(desktop)]
+            advanced_shortcuts::submit_shortcut_recording_key_event,
             #[cfg(desktop)]
             advanced_shortcuts::cancel_shortcut_recording,
             toggle_overlay_window,

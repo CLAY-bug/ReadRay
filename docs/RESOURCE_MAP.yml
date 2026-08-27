@@ -4,9 +4,9 @@ project:
   repo_root: "."
 
 meta:
-  version: "1.98"
+  version: "1.99"
   last_updated: "2026-08-27"
-  updated_by: "Claude Code"
+  updated_by: "Codex"
   source_of_truth: "docs/RESOURCE_MAP.yml"
   language: "zh-CN"
 
@@ -557,12 +557,12 @@ source_areas:
     risk: "该 service 不持久化 thread、不读取真实历史，也不请求 DeepSeek；不得由正式 Tauri 装配读取或实例化。"
 
   - path: "src/components/SettingsPage.tsx"
-    purpose: "主应用设置页的真实加载、主题、DeepSeek 配置、字体字号、发送快捷键、余额、本地 Token 使用量、本地数据操作和运行时信息状态。"
+    purpose: "主应用设置页的真实加载、通用主题、DeepSeek 配置、发送快捷键、余额、本地 Token 使用量、本地数据操作和运行时信息状态；历史字体字号偏好保持兼容。"
     status: "active"
     read_when:
       - "调整设置页、DeepSeek Key 首次配置/更新/清除或失败重试。"
       - "排查设置页 loading、重启恢复或窄窗口布局。"
-    notes: "复用 MainAppShell、MainSidebar 和标题栏；页面只消费 SettingsService 与应用级 AppThemeController。支持由外壳传入 initialSection 直达 AI 服务分类，并在加载、保存或清除 Key 后通过 onApiKeyConfiguredChange 回报 apiKeyConfigured。ReadRay 使用量默认选择“今天”，其余范围仍由用户手动切换。主题区只提供随包内置主题的选择与 light/dark 模式切换，暂不开放导入或删除入口；下拉上下键、Home/End 与鼠标悬停只临时预览主题，确认后才保存，取消会恢复数据库权威配色；主题失败不得覆盖当前权威配色。全局快捷键录制只发起原生 command 并消费 readray://shortcut-recorded，WebView 不再从 keydown 推断系统级按键；切页或卸载会取消原生录制。既有 Key、余额、Token、数据、字体字号、发送键、开机启动和关闭策略保持原正式链路。"
+    notes: "复用 MainAppShell、MainSidebar 和标题栏；页面只消费 SettingsService 与应用级 AppThemeController。支持由外壳传入 initialSection 直达 AI 服务分类，并在加载、保存或清除 Key 后通过 onApiKeyConfiguredChange 回报 apiKeyConfigured。ReadRay 使用量默认选择“今天”，其余范围仍由用户手动切换。主题区位于“通用”分类顶部，只提供随包内置主题的选择与 light/dark 模式切换，暂不开放导入或删除入口；下拉上下键、Home/End 与鼠标悬停只临时预览主题，确认后才保存，取消会恢复数据库权威配色；主题失败不得覆盖当前权威配色。字体/字号偏好字段继续由 SettingsService 与主窗口应用链路兼容读取，但当前页面不提供编辑入口。全局快捷键录制在 capture 阶段把 keydown/keyup 经 typed command 提交给 Rust，并消费 readray://shortcut-recorded；WebView2 系统加速键由 Rust 原生入口补获，两条输入共用同一录制状态机。录制按钮保持焦点，切页或卸载会取消录制。普通偏好与开机启动成功后不渲染额外成功状态行，避免设置区动态增高和滚动锚定抖动；失败提示和重试保留。既有 Key、余额、Token、数据、发送键、开机启动和关闭策略保持原正式链路。"
     risk: "不得直接 invoke、读主题文件、读取 localStorage/sessionStorage、显示或返回已保存 Key 明文；主题失败不得覆盖当前权威配色。"
 
   - path: "src/themeProtocol.ts"
@@ -643,7 +643,7 @@ source_areas:
     status: "active"
     read_when:
       - "调整设置快照、Key 验证保存或清除 command 参数。"
-    notes: "调用设置快照、SQLite 偏好读取/更新、Windows 原生快捷键录制/取消/结果事件、开机启动读取/切换、Key 保存/清除、余额、按显式本机日历边界聚合使用量、打开数据目录和 SQLite 备份 commands；备份取消时不调用 Rust。Key 只作为用户本次输入提交，不做前端持久化。"
+    notes: "调用设置快照、SQLite 偏好读取/更新、Windows 原生快捷键录制/按键提交/取消/结果事件、开机启动读取/切换、Key 保存/清除、余额、按显式本机日历边界聚合使用量、打开数据目录和 SQLite 备份 commands；备份取消时不调用 Rust。快捷键按键只提交 KeyboardEvent.code 与按下/释放状态，不在前端拼普通 accelerator。Key 只作为用户本次输入提交，不做前端持久化。"
     risk: "不得缓存 Key、记录 Key 或把原生存储实现移入前端。"
 
   - path: "src/settingsService.ts"
@@ -651,7 +651,7 @@ source_areas:
     status: "active"
     read_when:
       - "调整设置页面协议、数据计数或 Key 来源状态。"
-    notes: "校验 Key configured/source 一致性、模型/数据目录、三个非负 SQLite 计数、Windows 开机启动布尔状态，以及字体/字号/发送键/关闭策略/全局快捷键偏好；偏好只通过 repository 写入并返回数据库 revision。余额、四类使用量和备份结果继续执行既有严格校验。"
+    notes: "校验 Key configured/source 一致性、模型/数据目录、三个非负 SQLite 计数、Windows 开机启动布尔状态，以及字体/字号/发送键/关闭策略/全局快捷键偏好；偏好只通过 repository 写入并返回数据库 revision。快捷键录制的开始、DOM 按键提交、取消和结果监听全部透传有类型 repository。余额、四类使用量和备份结果继续执行既有严格校验。"
     risk: "不得让页面绕过 service 使用 Rust 原始响应，也不得从前端推算本地数据概览。"
 
   - path: "src/settingsViewModel.ts"
@@ -724,7 +724,7 @@ source_areas:
     status: "active"
     read_when:
       - "修改设置前端协议、安全边界或桌面能力呈现。"
-    notes: "与 desktopLifecycle.test.mjs 由 test:settings 统一运行，覆盖既有设置边界，以及偏好保存 flush、开机启动 typed commands、快捷键录制、安全退出、单实例/托盘静态装配、正式路径隔离和未配置 API Key 引导卡片的静态接线；自动测试不触碰真实 Windows 开机启动项。"
+    notes: "与 desktopLifecycle.test.mjs 由 test:settings 统一运行，覆盖既有设置边界，以及偏好保存 flush、开机启动 typed commands、快捷键录制按键提交、安全退出、单实例/托盘静态装配、正式路径隔离、四类设置导航、成功状态不插入布局行和未配置 API Key 引导卡片的静态接线；自动测试不触碰真实 Windows 开机启动项。"
     risk: "不触碰真实 Windows 凭据，也不替代真实 Tauri/DeepSeek 与重启人工验收。"
 
   - path: "src/components/MemoryPage.tsx"
@@ -1049,7 +1049,7 @@ source_areas:
     read_when:
       - "开发无选区快捷键呼出的主动查询输入框。"
       - "调整 typing、loading 或 error-lite 状态。"
-    notes: "当前由 App 传入 value、open、loading、error 和提交回调；组件内部负责打开自动聚焦、Esc 分层关闭（候选 → 清空输入 → 关窗）、Enter 提交（高亮候选优先）、↑↓ 候选选择、loading 轻量呼吸点、error-lite 轻提示和输入态拖拽区域。输入 ≥2 个拉丁字符时防抖 200ms 调用 suggest_vocabulary_terms_command 显示补全候选（历史命中置顶），候选显示时经 set_overlay_input_window_height 扩展输入窗口、关闭后恢复。无选区提交已由 App 接入真实 create_explanation_card；本组件不接 UI Automation。"
+    notes: "当前由 App 传入 value、open、loading、error 和提交回调；组件内部负责打开自动聚焦、Esc 分层关闭（候选 → 清空输入 → 关窗）、Enter 提交（高亮候选优先）、↑↓ 候选选择、loading 轻量呼吸点、error-lite 轻提示和输入态拖拽区域。输入 ≥2 个拉丁字符时防抖 200ms 调用 suggest_vocabulary_terms_command，最多显示 5 个候选（历史命中置顶）。候选面板与输入框共边，按抽屉动画向下展开，不显示内部滚动条；窗口高度按 58px 输入区 + 16px 面板纵向空间 + 实际候选行数×34px 精确扩展，关闭后恢复。无选区提交已由 App 接入真实 create_explanation_card；本组件不接 UI Automation。"
     risk: "不要扩展成命令面板、历史入口或正式结果页；它只负责无选区输入。补全失败必须静默，不得阻塞查询提交。"
 
   - path: "src/components/CenteredResultPanel.tsx"
@@ -1126,13 +1126,13 @@ source_areas:
     risk: "不得让托盘退出绕过安全退出，或让开机启动、第二实例创建额外托盘和数据库连接；overlay 窗口边界不得在此改写。"
 
   - path: "src-tauri/src/advanced_shortcuts.rs"
-    purpose: "Windows 低级键盘监听、双击左 Alt 状态机和原生快捷键录制。"
+    purpose: "Windows 低级键盘监听、WebView2 系统加速键接入、双击左 Alt 状态机和原生快捷键录制。"
     status: "active"
     read_when:
       - "调整双击修饰键、录制抑制、按键命名或原生快捷键事件。"
       - "排查系统菜单、输入法切换或高级快捷键无法响应。"
-    notes: "WH_KEYBOARD_LL 安装在独立消息线程，回调只更新小型状态并把动作交给工作线程；运行时双击左 Alt 使用 350ms 窗口且不吞键，设置录制期间临时抑制本次按键直到全部释放，避免 WebView 焦点、Windows 系统菜单或输入法先消费录制动作。任何插入键都会取消双击判定；注入按键不参与。"
-    risk: "低级钩子不能跨越安全桌面，普通权限进程对管理员窗口的 UIA 捕获仍受 UIPI/权限边界影响；运行时不吞 Alt，因此应用菜单、输入法与辅助功能冲突必须在真实 Windows 环境人工验证。"
+    notes: "WH_KEYBOARD_LL 安装在独立消息线程，回调只更新小型状态并把动作交给工作线程；运行时双击左 Alt 使用 350ms 窗口且不吞键。设置录制由三层协作：DOM capture 通过 typed command 提交普通按键；WebView2 AcceleratorKeyPressed 在 DOM 前补获 Alt+Space 等系统组合并把通用 Ctrl/Alt/Shift 按 lParam 归一到左右键；主窗口 SetWindowSubclass 在录制中及完成后 500ms 内只拦截 WM_SYSCOMMAND/SC_KEYMENU，避免系统菜单闪现。三类输入共用 process_input，完成后立即清空录制与 pressed 状态；任何插入键都会取消双击判定，注入按键不参与。"
+    risk: "低级钩子不能跨越安全桌面，普通权限进程对管理员窗口的 UIA 捕获仍受 UIPI/权限边界影响；Windows/WebView2 accelerator 与窗口消息顺序必须在真实桌面验证。系统菜单抑制只可存在于录制与短暂收尾窗口，不能改变平时 Alt+Space、输入法或辅助功能行为。"
 
   - path: "src-tauri/src/explanation.rs"
     purpose: "阶段二 ExplanationCard 中间协议、CaptureInput 类型和 Rust validator。"

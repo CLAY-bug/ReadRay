@@ -1,6 +1,7 @@
 import {
   useEffect,
   useId,
+  useLayoutEffect,
   useRef,
   useState,
   type FormEvent,
@@ -17,14 +18,9 @@ import type { ThemeMode } from "../themeProtocol";
 import { desktopSaveCoordinator } from "../desktopLifecycle";
 import {
   DEFAULT_APP_PREFERENCES,
-  LEARNING_FONT_SIZE_MAX,
-  LEARNING_FONT_SIZE_MIN,
-  parseFontSizeCandidate,
   shortcutBindingIdentity,
   shortcutBindingParts,
   validateShortcutBinding,
-  UI_FONT_SIZE_MAX,
-  UI_FONT_SIZE_MIN,
   type AppPreferences,
   type ShortcutBinding,
 } from "../appPreferences";
@@ -50,7 +46,7 @@ import sourceHanSansLicense from "../assets/fonts/licenses/Source-Han-Sans-OFL.t
 import sourceHanSerifLicense from "../assets/fonts/licenses/Source-Han-Serif-OFL.txt?raw";
 import flexokiLicense from "../assets/flexoki-LICENSE.txt?raw";
 
-export type SettingsSection = "general" | "appearance" | "ai" | "data" | "about";
+export type SettingsSection = "general" | "ai" | "data" | "about";
 type OperationState = "idle" | "saving" | "clearing";
 type RequestStatus = "idle" | "loading" | "success" | "error";
 
@@ -67,7 +63,6 @@ type SettingsPageProps = {
 
 const settingsSections: ReadonlyArray<readonly [SettingsSection, string]> = [
   ["general", "通用"],
-  ["appearance", "外观"],
   ["ai", "AI 服务"],
   ["data", "数据"],
   ["about", "关于"],
@@ -411,6 +406,14 @@ function ShortcutRow({
   onRecord: () => void;
   onRestore: () => void;
 }) {
+  const recordButtonRef = useRef<HTMLButtonElement>(null);
+
+  useLayoutEffect(() => {
+    if (recording) {
+      recordButtonRef.current?.focus({ preventScroll: true });
+    }
+  }, [recording]);
+
   return (
     <div className="rr-settings-shortcut-row">
       <div className="rr-settings-shortcut-name">{name}</div>
@@ -422,18 +425,21 @@ function ShortcutRow({
           {shortcutBindingParts(value).map((part) => <kbd key={part}>{part}</kbd>)}
         </div>
         <button
+          ref={recordButtonRef}
           className="rr-settings-button"
           type="button"
           disabled={disabled}
           aria-pressed={recording}
-          onClick={onRecord}
+          onClick={() => {
+            if (!recording) onRecord();
+          }}
         >
           {recording ? "请按快捷键…" : "录制新快捷键"}
         </button>
         <button
           className="rr-settings-restore"
           type="button"
-          disabled={disabled || isDefault}
+          disabled={disabled || recording || isDefault}
           title={isDefault ? "当前已是默认值" : "恢复默认快捷键"}
           onClick={onRestore}
         >
@@ -531,6 +537,7 @@ function SettingsPage({
   const directoryKeyRef = useRef(0);
   const backupKeyRef = useRef(0);
   const preferenceKeyRef = useRef(0);
+  const shortcutRecordingStartRef = useRef(false);
   const autostartKeyRef = useRef(0);
   const themeKeyRef = useRef(0);
   const snapshotRef = useRef<SettingsSnapshot | undefined>(undefined);
@@ -627,6 +634,37 @@ function SettingsPage({
       void service.cancelShortcutRecording();
     };
   }, [service]);
+
+  useLayoutEffect(() => {
+    if (!service || !recordingShortcut) return;
+    const currentService = service;
+    let disposed = false;
+    let submission = Promise.resolve();
+
+    function submit(event: globalThis.KeyboardEvent, keyDown: boolean) {
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      const code = event.code;
+      submission = submission
+        .then(() => currentService.submitShortcutRecordingKeyEvent(code, keyDown))
+        .catch((error) => {
+          if (disposed) return;
+          setRecordingShortcut(undefined);
+          setShortcutError(`录制失败：${errorMessage(error)}`);
+          void currentService.cancelShortcutRecording();
+        });
+    }
+
+    const handleKeyDown = (event: globalThis.KeyboardEvent) => submit(event, true);
+    const handleKeyUp = (event: globalThis.KeyboardEvent) => submit(event, false);
+    window.addEventListener("keydown", handleKeyDown, true);
+    window.addEventListener("keyup", handleKeyUp, true);
+    return () => {
+      disposed = true;
+      window.removeEventListener("keydown", handleKeyDown, true);
+      window.removeEventListener("keyup", handleKeyUp, true);
+    };
+  }, [recordingShortcut, service]);
 
   useEffect(() => {
     if (!service) return;
@@ -1092,8 +1130,8 @@ function SettingsPage({
           }
         }
       }
-      setPreferenceStatus("success");
-      setPreferenceMessage("已保存并应用。");
+      setPreferenceStatus("idle");
+      setPreferenceMessage(undefined);
     } catch (error) {
       if (
         !isSettingsOperationCurrent(
@@ -1135,16 +1173,28 @@ function SettingsPage({
   async function startShortcutRecording(
     field: "quickQueryBinding" | "selectionExplanationBinding",
   ) {
-    if (!service || !shortcutRecordingReady || preferenceStatus === "loading") return;
+    if (
+      !service ||
+      !shortcutRecordingReady ||
+      shortcutRecordingStartRef.current ||
+      preferenceStatus === "loading"
+    ) return;
+    shortcutRecordingStartRef.current = true;
     setShortcutError(undefined);
-    setRecordingShortcut(field);
     try {
       await service.beginShortcutRecording(
         field === "quickQueryBinding" ? "quickQuery" : "selectionExplanation",
       );
+      if (!mountedRef.current) {
+        await service.cancelShortcutRecording();
+        return;
+      }
+      setRecordingShortcut(field);
     } catch (error) {
       setRecordingShortcut(undefined);
       setShortcutError(errorMessage(error));
+    } finally {
+      shortcutRecordingStartRef.current = false;
     }
   }
 
@@ -1168,8 +1218,8 @@ function SettingsPage({
         )
       ) return;
       setSnapshot((current) => current ? { ...current, autostartEnabled: enabled } : current);
-      setAutostartStatus("success");
-      setAutostartMessage(enabled ? "已启用 Windows 开机启动。" : "已关闭 Windows 开机启动。");
+      setAutostartStatus("idle");
+      setAutostartMessage(undefined);
     } catch (error) {
       if (
         !isSettingsOperationCurrent(
@@ -1386,186 +1436,12 @@ function SettingsPage({
                 />
 
                 <div className="rr-settings-group">
-                  <GroupHeading title="语言与输入" meta="单行解释查询固定使用 Enter" />
-                  <div className="rr-settings-panel">
-                    <div className="rr-settings-row">
-                      <SettingsCopy label="界面语言" />
-                      <div className="rr-settings-stack-control">
-                        <SettingsSelect
-                          className="rr-settings-language-select"
-                          label="界面语言"
-                          value="zh-CN"
-                          options={[{ value: "zh-CN", label: "简体中文" }]}
-                          disabled
-                          onChange={() => undefined}
-                        />
-                      </div>
-                    </div>
-                    <div className="rr-settings-row">
-                      <SettingsCopy
-                        label="发送快捷键"
-                      />
-                      <div className="rr-settings-stack-control">
-                        <SettingsSelect
-                          className="rr-settings-send-select"
-                          label="发送快捷键"
-                          value={snapshot.preferences.sendShortcut}
-                          options={[
-                            { value: "enter", label: "Enter 发送" },
-                            { value: "ctrlEnter", label: "Ctrl+Enter 发送" },
-                          ]}
-                          disabled={preferenceStatus === "loading"}
-                          onChange={(value) =>
-                            patchPreferences({
-                              sendShortcut: value as AppPreferences["sendShortcut"],
-                            })
-                          }
-                        />
-                        <div className="rr-settings-status-line">
-                          {snapshot.preferences.sendShortcut === "enter"
-                            ? "Enter 发送，Shift+Enter 换行"
-                            : "Ctrl+Enter 发送，Enter 换行"}
-                        </div>
-                      </div>
-                    </div>
-                  </div>
-                  {preferenceMessage ? (
-                    <div
-                      className={`rr-settings-inline-message ${
-                        preferenceStatus === "error" ? "is-error" : "is-success"
-                      }`}
-                      role={preferenceStatus === "error" ? "alert" : "status"}
-                    >
-                      <span>{preferenceMessage}</span>
-                      {preferenceStatus === "error" && failedPreferences ? (
-                        <button
-                          type="button"
-                          onClick={() => void savePreferences(failedPreferences)}
-                        >
-                          重试
-                        </button>
-                      ) : null}
-                    </div>
-                  ) : null}
-                </div>
-
-                <div className="rr-settings-group">
-                  <GroupHeading title="全局快捷键" meta="按下 Esc 可取消录制" />
-                  <div className="rr-settings-panel">
-                    <ShortcutRow
-                      name="快速查询"
-                      value={snapshot.preferences.quickQueryBinding}
-                      recording={recordingShortcut === "quickQueryBinding"}
-                      disabled={
-                        !shortcutRecordingReady ||
-                        preferenceStatus === "loading" ||
-                        recordingShortcut !== undefined
-                      }
-                      isDefault={
-                        shortcutBindingIdentity(snapshot.preferences.quickQueryBinding) ===
-                        shortcutBindingIdentity(DEFAULT_APP_PREFERENCES.quickQueryBinding)
-                      }
-                      onRecord={() => void startShortcutRecording("quickQueryBinding")}
-                      onRestore={() => patchPreferences({
-                        quickQueryBinding: DEFAULT_APP_PREFERENCES.quickQueryBinding,
-                      })}
-                    />
-                    <ShortcutRow
-                      name="选区解释"
-                      value={snapshot.preferences.selectionExplanationBinding}
-                      recording={recordingShortcut === "selectionExplanationBinding"}
-                      disabled={
-                        !shortcutRecordingReady ||
-                        preferenceStatus === "loading" ||
-                        recordingShortcut !== undefined
-                      }
-                      isDefault={
-                        shortcutBindingIdentity(
-                          snapshot.preferences.selectionExplanationBinding,
-                        ) === shortcutBindingIdentity(
-                          DEFAULT_APP_PREFERENCES.selectionExplanationBinding,
-                        )
-                      }
-                      onRecord={() => void startShortcutRecording("selectionExplanationBinding")}
-                      onRestore={() => patchPreferences({
-                        selectionExplanationBinding:
-                          DEFAULT_APP_PREFERENCES.selectionExplanationBinding,
-                      })}
-                    />
-                  </div>
-                  {shortcutError ? (
-                    <div className="rr-settings-inline-message is-error" role="alert">
-                      <span>{shortcutError}</span>
-                    </div>
-                  ) : null}
-                </div>
-
-                <div className="rr-settings-group">
-                  <GroupHeading title="启动与关闭" />
-                  <div className="rr-settings-panel">
-                    <div className="rr-settings-row">
-                      <SettingsCopy label="开机启动" />
-                      <div className="rr-settings-stack-control">
-                        <div className="rr-settings-control">
-                          <button
-                            className={`rr-settings-switch${snapshot.autostartEnabled ? " is-on" : ""}`}
-                            type="button"
-                            role="switch"
-                            aria-checked={snapshot.autostartEnabled}
-                            aria-label="开机启动"
-                            disabled={autostartStatus === "loading"}
-                            onClick={() => void toggleAutostart()}
-                          />
-                          <span>{snapshot.autostartEnabled ? "已开启" : "已关闭"}</span>
-                        </div>
-                        {autostartMessage ? (
-                          <div
-                            className={`rr-settings-action-status ${autostartStatus === "error" ? "is-error" : "is-success"}`}
-                            role={autostartStatus === "error" ? "alert" : "status"}
-                          >
-                            {autostartMessage}
-                          </div>
-                        ) : null}
-                      </div>
-                    </div>
-                    <div className="rr-settings-row">
-                      <SettingsCopy label="关闭主窗口时" />
-                      <div className="rr-settings-stack-control">
-                        <SettingsSelect
-                          className="rr-settings-close-select"
-                          label="关闭主窗口时"
-                          value={snapshot.preferences.closeBehavior}
-                          options={[
-                            { value: "hideToTray", label: "隐藏到托盘" },
-                            { value: "exit", label: "退出 ReadRay" },
-                          ]}
-                          disabled={preferenceStatus === "loading"}
-                          onChange={(value) => patchPreferences({
-                            closeBehavior: value as AppPreferences["closeBehavior"],
-                          })}
-                        />
-                      </div>
-                    </div>
-                  </div>
-                </div>
-
-              </section>
-            ) : null}
-
-            {activeSection === "appearance" ? (
-              <section className="rr-settings-section" aria-labelledby="rr-settings-appearance-heading">
-                <SettingsHeader
-                  id="rr-settings-appearance-heading"
-                  title="外观"
-                />
-
-                <div className="rr-settings-group">
                   <GroupHeading title="主题" />
                   <div className="rr-settings-panel">
                     <div className="rr-settings-row">
                       <SettingsCopy label="当前主题" />
                       <div className="rr-settings-stack-control">
-                        <div className="rr-settings-appearance-actions">
+                        <div className="rr-settings-theme-actions">
                           <SettingsSelect
                             className="rr-settings-theme-select"
                             label="主题"
@@ -1632,156 +1508,56 @@ function SettingsPage({
                 </div>
 
                 <div className="rr-settings-group">
-                  <GroupHeading title="字体" meta="使用具体字号" />
+                  <GroupHeading title="语言与输入" meta="单行解释查询固定使用 Enter" />
                   <div className="rr-settings-panel">
                     <div className="rr-settings-row">
-                      <SettingsCopy label="界面字体" />
-                      <SettingsSelect
-                        className="rr-settings-font-field rr-settings-ui-font"
-                        label="界面字体"
-                        value={snapshot.preferences.uiFont}
-                        options={[
-                          { value: "geistSourceHanSans", label: "Geist + 思源黑体" },
-                          { value: "sourceHanSans", label: "思源黑体" },
-                        ]}
-                        disabled={preferenceStatus === "loading"}
-                        onChange={(value) =>
-                          patchPreferences({
-                            uiFont: value as AppPreferences["uiFont"],
-                          })
-                        }
-                      />
-                    </div>
-                    <div className="rr-settings-row">
-                      <SettingsCopy label="界面字号" />
-                      <div className="rr-settings-font-size-control">
-                        <label className="rr-settings-number-field">
-                          <input
-                            aria-label="界面字号"
-                            type="number"
-                            min={UI_FONT_SIZE_MIN}
-                            max={UI_FONT_SIZE_MAX}
-                            step={1}
-                            value={snapshot.preferences.uiFontSize}
-                            disabled={preferenceStatus === "loading"}
-                            onChange={(event) => {
-                              const value = parseFontSizeCandidate(
-                                event.currentTarget.value,
-                                UI_FONT_SIZE_MIN,
-                                UI_FONT_SIZE_MAX,
-                              );
-                              if (value !== undefined) {
-                                patchPreferences({ uiFontSize: value });
-                              } else {
-                                setFailedPreferences(undefined);
-                                setPreferenceStatus("error");
-                                setPreferenceMessage(
-                                  `界面字号必须是 ${UI_FONT_SIZE_MIN}–${UI_FONT_SIZE_MAX} px 之间的整数。`,
-                                );
-                              }
-                            }}
-                          />
-                          <span>px</span>
-                        </label>
-                        <button
-                          className="rr-settings-restore"
-                          type="button"
-                          disabled={
-                            preferenceStatus === "loading" ||
-                            snapshot.preferences.uiFontSize ===
-                              DEFAULT_APP_PREFERENCES.uiFontSize
-                          }
-                          onClick={() =>
-                            patchPreferences({
-                              uiFontSize: DEFAULT_APP_PREFERENCES.uiFontSize,
-                            })
-                          }
-                        >
-                          恢复默认
-                        </button>
+                      <SettingsCopy label="界面语言" />
+                      <div className="rr-settings-stack-control">
+                        <SettingsSelect
+                          className="rr-settings-language-select"
+                          label="界面语言"
+                          value="zh-CN"
+                          options={[{ value: "zh-CN", label: "简体中文" }]}
+                          disabled
+                          onChange={() => undefined}
+                        />
                       </div>
                     </div>
                     <div className="rr-settings-row">
-                      <SettingsCopy label="学习内容字体" />
-                      <SettingsSelect
-                        className="rr-settings-font-field rr-settings-learning-font"
-                        label="学习内容字体"
-                        value={snapshot.preferences.learningFont}
-                        options={[
-                          {
-                            value: "newsreaderSourceHanSerif",
-                            label: "Newsreader + 思源宋体",
-                          },
-                          { value: "sourceHanSerif", label: "思源宋体" },
-                        ]}
-                        disabled={preferenceStatus === "loading"}
-                        onChange={(value) =>
-                          patchPreferences({
-                            learningFont: value as AppPreferences["learningFont"],
-                          })
-                        }
+                      <SettingsCopy
+                        label="发送快捷键"
                       />
-                    </div>
-                    <div className="rr-settings-row">
-                      <SettingsCopy label="学习内容字号" />
-                      <div className="rr-settings-font-size-control">
-                        <label className="rr-settings-number-field">
-                          <input
-                            aria-label="学习内容字号"
-                            type="number"
-                            min={LEARNING_FONT_SIZE_MIN}
-                            max={LEARNING_FONT_SIZE_MAX}
-                            step={1}
-                            value={snapshot.preferences.learningFontSize}
-                            disabled={preferenceStatus === "loading"}
-                            onChange={(event) => {
-                              const value = parseFontSizeCandidate(
-                                event.currentTarget.value,
-                                LEARNING_FONT_SIZE_MIN,
-                                LEARNING_FONT_SIZE_MAX,
-                              );
-                              if (value !== undefined) {
-                                patchPreferences({ learningFontSize: value });
-                              } else {
-                                setFailedPreferences(undefined);
-                                setPreferenceStatus("error");
-                                setPreferenceMessage(
-                                  `学习内容字号必须是 ${LEARNING_FONT_SIZE_MIN}–${LEARNING_FONT_SIZE_MAX} px 之间的整数。`,
-                                );
-                              }
-                            }}
-                          />
-                          <span>px</span>
-                        </label>
-                        <button
-                          className="rr-settings-restore"
-                          type="button"
-                          disabled={
-                            preferenceStatus === "loading" ||
-                            snapshot.preferences.learningFontSize ===
-                              DEFAULT_APP_PREFERENCES.learningFontSize
-                          }
-                          onClick={() =>
+                      <div className="rr-settings-stack-control">
+                        <SettingsSelect
+                          className="rr-settings-send-select"
+                          label="发送快捷键"
+                          value={snapshot.preferences.sendShortcut}
+                          options={[
+                            { value: "enter", label: "Enter 发送" },
+                            { value: "ctrlEnter", label: "Ctrl+Enter 发送" },
+                          ]}
+                          disabled={preferenceStatus === "loading"}
+                          onChange={(value) =>
                             patchPreferences({
-                              learningFontSize:
-                                DEFAULT_APP_PREFERENCES.learningFontSize,
+                              sendShortcut: value as AppPreferences["sendShortcut"],
                             })
                           }
-                        >
-                          恢复默认
-                        </button>
+                        />
+                        <div className="rr-settings-status-line">
+                          {snapshot.preferences.sendShortcut === "enter"
+                            ? "Enter 发送，Shift+Enter 换行"
+                            : "Ctrl+Enter 发送，Enter 换行"}
+                        </div>
                       </div>
                     </div>
                   </div>
-                  {preferenceMessage ? (
+                  {preferenceStatus === "error" && preferenceMessage ? (
                     <div
-                      className={`rr-settings-inline-message ${
-                        preferenceStatus === "error" ? "is-error" : "is-success"
-                      }`}
-                      role={preferenceStatus === "error" ? "alert" : "status"}
+                      className="rr-settings-inline-message is-error"
+                      role="alert"
                     >
                       <span>{preferenceMessage}</span>
-                      {preferenceStatus === "error" && failedPreferences ? (
+                      {failedPreferences ? (
                         <button
                           type="button"
                           onClick={() => void savePreferences(failedPreferences)}
@@ -1792,6 +1568,113 @@ function SettingsPage({
                     </div>
                   ) : null}
                 </div>
+
+                <div className="rr-settings-group">
+                  <GroupHeading title="全局快捷键" meta="按下 Esc 可取消录制" />
+                  <div className="rr-settings-panel">
+                    <ShortcutRow
+                      name="快速查询"
+                      value={snapshot.preferences.quickQueryBinding}
+                      recording={recordingShortcut === "quickQueryBinding"}
+                      disabled={
+                        !shortcutRecordingReady ||
+                        preferenceStatus === "loading" ||
+                        (
+                          recordingShortcut !== undefined &&
+                          recordingShortcut !== "quickQueryBinding"
+                        )
+                      }
+                      isDefault={
+                        shortcutBindingIdentity(snapshot.preferences.quickQueryBinding) ===
+                        shortcutBindingIdentity(DEFAULT_APP_PREFERENCES.quickQueryBinding)
+                      }
+                      onRecord={() => void startShortcutRecording("quickQueryBinding")}
+                      onRestore={() => patchPreferences({
+                        quickQueryBinding: DEFAULT_APP_PREFERENCES.quickQueryBinding,
+                      })}
+                    />
+                    <ShortcutRow
+                      name="选区解释"
+                      value={snapshot.preferences.selectionExplanationBinding}
+                      recording={recordingShortcut === "selectionExplanationBinding"}
+                      disabled={
+                        !shortcutRecordingReady ||
+                        preferenceStatus === "loading" ||
+                        (
+                          recordingShortcut !== undefined &&
+                          recordingShortcut !== "selectionExplanationBinding"
+                        )
+                      }
+                      isDefault={
+                        shortcutBindingIdentity(
+                          snapshot.preferences.selectionExplanationBinding,
+                        ) === shortcutBindingIdentity(
+                          DEFAULT_APP_PREFERENCES.selectionExplanationBinding,
+                        )
+                      }
+                      onRecord={() => void startShortcutRecording("selectionExplanationBinding")}
+                      onRestore={() => patchPreferences({
+                        selectionExplanationBinding:
+                          DEFAULT_APP_PREFERENCES.selectionExplanationBinding,
+                      })}
+                    />
+                  </div>
+                  {shortcutError ? (
+                    <div className="rr-settings-inline-message is-error" role="alert">
+                      <span>{shortcutError}</span>
+                    </div>
+                  ) : null}
+                </div>
+
+                <div className="rr-settings-group">
+                  <GroupHeading title="启动与关闭" />
+                  <div className="rr-settings-panel">
+                    <div className="rr-settings-row">
+                      <SettingsCopy label="开机启动" />
+                      <div className="rr-settings-stack-control">
+                        <div className="rr-settings-control">
+                          <button
+                            className={`rr-settings-switch${snapshot.autostartEnabled ? " is-on" : ""}`}
+                            type="button"
+                            role="switch"
+                            aria-checked={snapshot.autostartEnabled}
+                            aria-label="开机启动"
+                            disabled={autostartStatus === "loading"}
+                            onClick={() => void toggleAutostart()}
+                          />
+                          <span>{snapshot.autostartEnabled ? "已开启" : "已关闭"}</span>
+                        </div>
+                        {autostartStatus === "error" && autostartMessage ? (
+                          <div
+                            className="rr-settings-action-status is-error"
+                            role="alert"
+                          >
+                            {autostartMessage}
+                          </div>
+                        ) : null}
+                      </div>
+                    </div>
+                    <div className="rr-settings-row">
+                      <SettingsCopy label="关闭主窗口时" />
+                      <div className="rr-settings-stack-control">
+                        <SettingsSelect
+                          className="rr-settings-close-select"
+                          label="关闭主窗口时"
+                          value={snapshot.preferences.closeBehavior}
+                          options={[
+                            { value: "hideToTray", label: "隐藏到托盘" },
+                            { value: "exit", label: "退出 ReadRay" },
+                          ]}
+                          disabled={preferenceStatus === "loading"}
+                          onChange={(value) => patchPreferences({
+                            closeBehavior: value as AppPreferences["closeBehavior"],
+                          })}
+                        />
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
               </section>
             ) : null}
 
