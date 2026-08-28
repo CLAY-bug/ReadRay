@@ -406,6 +406,9 @@ function MainAppShell({
 
   useEffect(() => {
     let ignore = false;
+    if (activePageId !== "today") {
+      return;
+    }
     if (!todayService) {
       setTodayStatus("loading");
       return;
@@ -431,7 +434,18 @@ function MainAppShell({
     return () => {
       ignore = true;
     };
-  }, [learningRecordsRefreshToken, todayRetryToken, todayService]);
+  }, [activePageId, learningRecordsRefreshToken, todayRetryToken, todayService]);
+
+  useEffect(() => {
+    function refreshTodayWhenWindowReturns() {
+      if (activePageIdRef.current === "today") {
+        setTodayRetryToken((token) => token + 1);
+      }
+    }
+
+    window.addEventListener("focus", refreshTodayWhenWindowReturns);
+    return () => window.removeEventListener("focus", refreshTodayWhenWindowReturns);
+  }, []);
 
   useEffect(() => {
     let ignore = false;

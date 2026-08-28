@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { readFile } from "node:fs/promises";
 import test from "node:test";
 import { mapLearningRecordToMemoryItem } from "../src/memoryService.ts";
 import { mapReviewFeedPage } from "../src/reviewService.ts";
@@ -11,6 +12,7 @@ const DAY_END = new Date(2026, 7, 12).getTime();
 function chineseSourceRecord() {
   return {
     id: 31,
+    learningTargetId: 7,
     queryText: "界面",
     learningTargetText: "interface",
     queryDirection: "zhToEn",
@@ -106,6 +108,26 @@ test("Today 摘要与最近入口只展示规范英文目标", async () => {
   assert.match(model.actions[2].title, /interface/);
 });
 
+test("Today 每次重新进入页面或主窗口恢复焦点时都读取最新记录", async () => {
+  const shell = await readFile("src/components/MainAppShell.tsx", "utf8");
+  assert.match(
+    shell,
+    /if \(activePageId !== "today"\) \{\s*return;\s*\}[\s\S]*?todayService\.loadToday\(\)/,
+  );
+  assert.match(
+    shell,
+    /\[activePageId, learningRecordsRefreshToken, todayRetryToken, todayService\]/,
+  );
+  assert.match(
+    shell,
+    /window\.addEventListener\("focus", refreshTodayWhenWindowReturns\)/,
+  );
+  assert.match(
+    shell,
+    /activePageIdRef\.current === "today"[\s\S]*?setTodayRetryToken/,
+  );
+});
+
 test("Review 标题、提示答案与后台制卡目标使用规范英文", () => {
   const record = chineseSourceRecord();
   const model = mapReviewFeedPage(
@@ -121,6 +143,7 @@ test("Review 标题、提示答案与后台制卡目标使用规范英文", () =
           reasonCode: "newRecord",
           learningRecord: record,
           target: {
+            learningTargetId: 7,
             learningRecordId: record.id,
             revision: 0,
             nextReviewAtUnixMs: DAY_START,

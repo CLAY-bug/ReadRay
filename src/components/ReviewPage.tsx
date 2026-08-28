@@ -1,6 +1,7 @@
 import {
   useCallback,
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -90,6 +91,35 @@ const EMPTY_PREPARATION: ReviewPreparationSnapshot = {
   needsMoreCandidates: false,
 };
 
+const REVIEW_SHELF_MAX_COLUMNS = 3;
+const REVIEW_SHELF_CAPACITY = REVIEW_SHELF_MAX_COLUMNS * 2;
+const LIST_MARKER_LINE = /^[\t ]*[•●◦▪▫‣⁃][\t ]+/gmu;
+
+function reviewShelfCapacity(columnCount: number) {
+  const columns = Math.min(
+    REVIEW_SHELF_MAX_COLUMNS,
+    Math.max(1, Math.trunc(columnCount) || 1),
+  );
+  return columns * 2;
+}
+
+function compactReviewSourceTime(sourceTime: string) {
+  const match = sourceTime.match(
+    /^(\d{4})\s*年\s*(\d{1,2})\s*月\s*(\d{1,2})\s*日(?:\s+(\d{1,2}:\d{2}))?/u,
+  );
+  if (!match) return sourceTime;
+  const [, year, month, day, time] = match;
+  const date = `${month.padStart(2, "0")}.${day.padStart(2, "0")}`;
+  const dated = Number(year) === new Date().getFullYear() ? date : `${year}.${date}`;
+  return time ? `${dated} · ${time}` : dated;
+}
+
+function reviewDisplayText(text: string, fullPrompt: string) {
+  const markers = fullPrompt.match(LIST_MARKER_LINE) ?? [];
+  if (markers.length !== 1) return text;
+  return text.replace(/^[\t ]*[•●◦▪▫‣⁃][\t ]+/u, "");
+}
+
 function errorMessage(error: unknown) {
   return error instanceof Error ? error.message : String(error);
 }
@@ -116,10 +146,12 @@ function Icon({ name }: { name: "close" | "source" | "up" | "down" | "check" }) 
 }
 
 function FocusPrompt({ card }: { card: ReviewCardModel }) {
-  if (card.promptKind !== "cloze") return <>{card.promptText}</>;
+  if (card.promptKind !== "cloze") {
+    return <>{reviewDisplayText(card.promptText, card.promptText)}</>;
+  }
   return (
     <>
-      {card.promptBefore}
+      {reviewDisplayText(card.promptBefore, card.promptText)}
       <strong className="rr-review-answer-word">{card.promptAnswer}</strong>
       {card.promptAfter}
     </>
@@ -127,10 +159,12 @@ function FocusPrompt({ card }: { card: ReviewCardModel }) {
 }
 
 function FeedPrompt({ card }: { card: ReviewCardModel }) {
-  if (card.promptKind !== "cloze") return <>{card.promptText}</>;
+  if (card.promptKind !== "cloze") {
+    return <>{reviewDisplayText(card.promptText, card.promptText)}</>;
+  }
   return (
     <>
-      {card.promptBefore}
+      {reviewDisplayText(card.promptBefore, card.promptText)}
       <strong>{card.promptAnswer}</strong>
       {card.promptAfter}
     </>
@@ -160,8 +194,11 @@ function ReviewPage({
   const [error, setError] = useState<string>();
   const [retryToken, setRetryToken] = useState(0);
   const [feed, setFeedState] = useState<ReviewFeedModel>();
-  const [loadingMore, setLoadingMore] = useState(false);
   const [loadMoreError, setLoadMoreError] = useState<string>();
+  const [shelfCapacity, setShelfCapacity] = useState(REVIEW_SHELF_CAPACITY);
+  const [shelfFeedItemIds, setShelfFeedItemIds] = useState<
+    Array<number | undefined>
+  >([]);
   const [activeFeedItemId, setActiveFeedItemId] = useState<number>();
   const [sourceOpen, setSourceOpen] = useState(false);
   const [feedbackFeedItemId, setFeedbackFeedItemId] = useState<number>();
@@ -330,9 +367,9 @@ function ReviewPage({
     setUndoMutation(undefined);
     authorityRefreshGateRef.current.reset();
     toastShownForRequestRef.current.clear();
-    setLoadingMore(false);
     loadingCursorRef.current = undefined;
     setLoadMoreError(undefined);
+    setShelfFeedItemIds([]);
     if (!service) {
       setStatus("error");
       setError("复习服务尚未准备好。");
@@ -449,7 +486,6 @@ function ReviewPage({
     const cursor = current.nextCursor;
     if (cursor === undefined || loadingCursorRef.current !== undefined) return;
     loadingCursorRef.current = cursor;
-    setLoadingMore(true);
     setLoadMoreError(undefined);
     service.loadFeedPage({ cursor }).then(
       (next) => {
@@ -460,7 +496,6 @@ function ReviewPage({
         ) return;
         const latest = feedRef.current;
         loadingCursorRef.current = undefined;
-        setLoadingMore(false);
         if (!latest) return;
         setFeed(appendReviewFeedPage(latest, next));
       },
@@ -471,7 +506,6 @@ function ReviewPage({
           loadingCursorRef.current !== cursor
         ) return;
         loadingCursorRef.current = undefined;
-        setLoadingMore(false);
         setLoadMoreError(errorMessage(reason));
       },
     );
@@ -496,9 +530,92 @@ function ReviewPage({
     [activeFeedItemId, feed],
   );
   const readyCards = useMemo(() => visibleReviewCards(feed), [feed]);
-  const readyCardObservationKey = readyCards
-    .map((card) => `${card.feedItemId}:${card.ordinal}`)
+  const shelfCandidates = useMemo(
+    () =>
+      readyCards.filter(
+        (card) => !card.attempt || card.feedItemId === activeFeedItemId,
+      ),
+    [activeFeedItemId, readyCards],
+  );
+  const shelfCardsById = useMemo(
+    () => new Map(shelfCandidates.map((card) => [card.feedItemId, card])),
+    [shelfCandidates],
+  );
+  const shelfCards = useMemo(
+    () =>
+      shelfFeedItemIds.flatMap((feedItemId, slotIndex) => {
+        if (feedItemId === undefined) return [];
+        const card = shelfCardsById.get(feedItemId);
+        return card ? [{ card, slotIndex }] : [];
+      }),
+    [shelfCardsById, shelfFeedItemIds],
+  );
+  const readyCardObservationKey = shelfCards
+    .map(({ card, slotIndex }) => `${card.feedItemId}:${card.ordinal}:${slotIndex}`)
     .join(",");
+
+  useLayoutEffect(() => {
+    const feedElement = feedElementRef.current;
+    if (!feedElement) return;
+    const updateCapacity = () => {
+      const columnCount = Number.parseInt(
+        window
+          .getComputedStyle(feedElement)
+          .getPropertyValue("--rr-review-column-count"),
+        10,
+      );
+      setShelfCapacity(reviewShelfCapacity(columnCount));
+    };
+    updateCapacity();
+    if (typeof ResizeObserver === "undefined") return;
+    const observer = new ResizeObserver(() => {
+      updateCapacity();
+    });
+    observer.observe(feedElement);
+    return () => observer.disconnect();
+  }, [feed?.dayStartUnixMs, status]);
+
+  useEffect(() => {
+    setShelfFeedItemIds((current) => {
+      const next: Array<number | undefined> = Array.from(
+        { length: shelfCapacity },
+        (_, index) => current[index],
+      );
+      const used = new Set<number>();
+      for (let index = 0; index < next.length; index += 1) {
+        const feedItemId = next[index];
+        if (
+          feedItemId !== undefined &&
+          !used.has(feedItemId) &&
+          shelfCardsById.has(feedItemId)
+        ) {
+          used.add(feedItemId);
+        } else {
+          next[index] = undefined;
+        }
+      }
+      let candidateIndex = 0;
+      for (let slotIndex = 0; slotIndex < next.length; slotIndex += 1) {
+        if (next[slotIndex] !== undefined) continue;
+        while (
+          candidateIndex < shelfCandidates.length &&
+          used.has(shelfCandidates[candidateIndex].feedItemId)
+        ) {
+          candidateIndex += 1;
+        }
+        const candidate = shelfCandidates[candidateIndex];
+        if (candidate) {
+          next[slotIndex] = candidate.feedItemId;
+          used.add(candidate.feedItemId);
+          candidateIndex += 1;
+        }
+      }
+      return next.length === current.length &&
+        next.every((feedItemId, index) => feedItemId === current[index])
+        ? current
+        : next;
+    });
+  }, [shelfCandidates, shelfCardsById, shelfCapacity]);
 
   useEffect(() => {
     const root = pageRef.current;
@@ -824,7 +941,10 @@ function ReviewPage({
   return (
     <main ref={pageRef} className="rr-review-page" aria-label="复习">
       <header className="rr-review-page-header">
-        <h1>复习</h1>
+        <div>
+          <h1>复习</h1>
+          <p className="rr-review-page-intro">选择一张卡片，进入专注复习</p>
+        </div>
         <p className="rr-review-day-status">
           {feed ? `已复习 ${feed.completedCount}` : "正在准备"}
         </p>
@@ -853,8 +973,10 @@ function ReviewPage({
         </section>
       ) : (
         <>
-          <section ref={feedElementRef} className="rr-review-feed" aria-label="复习卡片流">
-            {readyCards.map((card) => (
+          <section ref={feedElementRef} className="rr-review-feed" aria-label="复习卡片书架">
+            {shelfCards.map(({ card, slotIndex }) => {
+              const shelfColumnCount = shelfCapacity / 2;
+              return (
               <article
                 className={`rr-review-feed-card is-density-${card.density} is-${card.visualVariant} is-tone-${card.paperTone}${card.attempt ? " is-completed" : ""}`}
                 key={card.feedItemId}
@@ -862,6 +984,8 @@ function ReviewPage({
                 data-review-feed-item-id={card.feedItemId}
                 style={{
                   "--rr-review-card-delay": `${(card.ordinal % 6) * 24}ms`,
+                  gridColumn: (slotIndex % shelfColumnCount) + 1,
+                  gridRow: Math.floor(slotIndex / shelfColumnCount) + 1,
                 } as CSSProperties}
               >
                 <button type="button" className="rr-review-feed-card-open" onClick={() => openCard(card)}>
@@ -872,14 +996,14 @@ function ReviewPage({
                         <span className="rr-review-card-origin">AI 语境</span>
                       ) : null}
                     </span>
-                    <span>{card.sourceTime}</span>
+                    <span title={card.sourceTime}>{compactReviewSourceTime(card.sourceTime)}</span>
                   </span>
                   <span className="rr-review-card-copy"><FeedPrompt card={card} /></span>
                 </button>
                 <footer>
                   <span>{card.sourceApp}</span>
                   <span className={card.attempt ? "is-done" : ""}>
-                    {card.attempt ? <><Icon name="check" /> 已复习</> : "复习 →"}
+                    {card.attempt ? <><Icon name="check" /> 已复习</> : "开始复习 →"}
                   </span>
                 </footer>
                 {card.attempt ? (
@@ -909,48 +1033,43 @@ function ReviewPage({
                   </div>
                 ) : null}
               </article>
-            ))}
+              );
+            })}
           </section>
 
-          {readyCards.length === 0 && backgroundPreparationCount > 0 ? (
+          {shelfCards.length === 0 && backgroundPreparationCount > 0 ? (
             <section className="rr-review-warmup" aria-live="polite">
               <span className="rr-review-spinner" />
               <div>
                 <h2>正在准备第一批英文卡片</h2>
-                <p>生成完成后会直接进入 Feed，不需要逐张打开等待。</p>
+                <p>准备完成后会加入当前书架，已有卡片不会换位。</p>
               </div>
             </section>
           ) : null}
 
-          <div className="rr-review-feed-sentinel" aria-live="polite">
-            {loadMoreError ? (
+          {shelfCards.length === 0 && backgroundPreparationCount === 0 &&
+          !feed.canContinue && failedPreparationCount === 0 ? (
+            <section className="rr-review-empty rr-review-round-complete">
+              <p className="rr-review-eyebrow">REVIEW COMPLETE</p>
+              <h2>这一轮已经复习完成</h2>
+              <p>新的到期内容会自动进入这里。</p>
+            </section>
+          ) : null}
+
+          {loadMoreError || backgroundPreparationCount > 0 || failedPreparationCount > 0 ? (
+            <div className="rr-review-preparation-status" aria-live="polite">
+              {loadMoreError ? (
               <><span>{loadMoreError}</span><button type="button" onClick={loadMore}>重新加载</button></>
-            ) : loadingMore ? (
-              <><span className="rr-review-spinner" /> 正在准备更多卡片…</>
             ) : backgroundPreparationCount > 0 ? (
-              <><span className="rr-review-spinner" /> 正在后台准备后续卡片…</>
+              <><span className="rr-review-spinner" /> 正在后台准备后续卡片</>
             ) : failedPreparationCount > 0 ? (
               <>
-                <span>{failedPreparationCount} 张卡片准备失败，其余卡片仍可继续复习。</span>
-                <button
-                  type="button"
-                  onClick={() => preparationCoordinator?.retryFailed(
-                    feed,
-                  )}
-                >
-                  重新准备
-                </button>
+                <span>{failedPreparationCount} 张卡片准备失败。</span>
+                <button type="button" onClick={() => preparationCoordinator?.retryFailed(feed)}>重新准备</button>
               </>
-            ) : feed.canContinue ? (
-              <button type="button" onClick={loadMore}>继续浏览</button>
-            ) : (
-              <span>暂时没有更多真实学习记录</span>
-            )}
-          </div>
-
-          <p className="rr-review-feed-note">
-            当前顺序只依据到期、新记录与继续练习等真实状态；卡片质量反馈独立保存。长期记忆与个性化排序留到阶段九。
-          </p>
+              ) : null}
+            </div>
+          ) : null}
         </>
       )}
 
@@ -964,12 +1083,12 @@ function ReviewPage({
           >
             <header className="rr-review-focus-header">
               <div>
-                <span>{activeCard.attempt ? "已完成" : "复习详情"}</span>
+                <span>{activeCard.attempt ? "已完成" : "专注复习"}</span>
                 <p>{activeCard.typeLabel} · {activeCard.sourceLabel}</p>
               </div>
               <div className="rr-review-focus-tools">
                 <button type="button" onClick={() => setSourceOpen(true)}><Icon name="source" />来源</button>
-                <button type="button" aria-label="关闭复习卡片" onClick={closeCard}><Icon name="close" /></button>
+                <button type="button" className="rr-review-return-shelf" onClick={closeCard}>返回书架</button>
               </div>
             </header>
 

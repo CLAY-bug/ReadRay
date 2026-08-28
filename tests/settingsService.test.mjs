@@ -929,6 +929,13 @@ test("正式设置页保持四类设置结构，确定性操作已接线且不�
   assert.match(page, /\["ai", "AI 服务"\]/);
   assert.match(page, /\["data", "数据"\]/);
   assert.match(page, /\["about", "关于"\]/);
+  assert.doesNotMatch(page, /function SettingsHeader|<h1\b/);
+  assert.equal(page.includes('id={`rr-settings-${id}-tab`}'), true);
+  assert.equal(page.includes('aria-controls={`rr-settings-${id}-panel`}'), true);
+  for (const section of ["general", "ai", "data", "about"]) {
+    assert.match(page, new RegExp(`id="rr-settings-${section}-panel"`));
+    assert.match(page, new RegExp(`aria-labelledby="rr-settings-${section}-tab"`));
+  }
   assert.match(page, /themeController\.select/);
   assert.doesNotMatch(page, /themeController\.importPackage/);
   assert.doesNotMatch(page, /themeController\.delete/);
@@ -984,7 +991,7 @@ test("正式设置页保持四类设置结构，确定性操作已接线且不�
   assert.match(styles, /\.rr-settings-shortcut-name\s*\{[\s\S]*?font-weight:\s*570/);
   assert.doesNotMatch(styles, /\.rr-settings-stack-control\s*\{[\s\S]*?min-width:\s*280px/);
   assert.match(styles, /\.rr-settings-path-actions\s*\{/);
-  assert.match(styles, /\.rr-settings-header h1\s*\{[\s\S]*?font-size:\s*calc\(30px \* var\(--rr-settings-font-scale\)\)/);
+  assert.doesNotMatch(styles, /\.rr-settings-header/);
   assert.match(styles, /\.rr-settings-button:hover:not\(:disabled\)\s*\{[\s\S]*?box-shadow:\s*none/);
   assert.doesNotMatch(styles, /\.rr-settings-button:hover:not\(:disabled\)\s*\{[^}]*color:\s*var\(--rr-main-danger\)/);
   assert.match(page, /function SettingsSelect/);

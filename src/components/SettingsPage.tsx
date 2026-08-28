@@ -163,20 +163,6 @@ function ChevronDownIcon() {
   );
 }
 
-function SettingsHeader({
-  title,
-  id,
-}: {
-  title: string;
-  id: string;
-}) {
-  return (
-    <header className="rr-settings-header">
-      <h1 id={id}>{title}</h1>
-    </header>
-  );
-}
-
 function GroupHeading({ title, meta }: { title: string; meta?: string }) {
   return (
     <div className="rr-settings-group-heading">
@@ -1522,8 +1508,10 @@ function SettingsPage({
             {settingsSections.map(([id, label]) => (
               <button
                 type="button"
+                id={`rr-settings-${id}-tab`}
                 className={activeSection === id ? "is-active" : undefined}
                 aria-current={activeSection === id ? "page" : undefined}
+                aria-controls={`rr-settings-${id}-panel`}
                 key={id}
                 onClick={() => selectSection(id)}
               >
@@ -1536,12 +1524,11 @@ function SettingsPage({
         <div className="rr-settings-scroll" ref={scrollRef}>
           <div className="rr-settings-content">
             {activeSection === "general" ? (
-              <section className="rr-settings-section" aria-labelledby="rr-settings-general-heading">
-                <SettingsHeader
-                  id="rr-settings-general-heading"
-                  title="通用"
-                />
-
+              <section
+                id="rr-settings-general-panel"
+                className="rr-settings-section"
+                aria-labelledby="rr-settings-general-tab"
+              >
                 <div className="rr-settings-group">
                   <GroupHeading title="主题" />
                   <div className="rr-settings-panel">
@@ -1786,12 +1773,11 @@ function SettingsPage({
             ) : null}
 
             {activeSection === "ai" ? (
-              <section className="rr-settings-section" aria-labelledby="rr-settings-ai-heading">
-                <SettingsHeader
-                  id="rr-settings-ai-heading"
-                  title="AI 服务"
-                />
-
+              <section
+                id="rr-settings-ai-panel"
+                className="rr-settings-section"
+                aria-labelledby="rr-settings-ai-tab"
+              >
                 <div className="rr-settings-provider-head">
                   <div className="rr-settings-provider-title">
                     <span className="rr-settings-provider-logo">D</span>
@@ -2052,12 +2038,11 @@ function SettingsPage({
             ) : null}
 
             {activeSection === "data" ? (
-              <section className="rr-settings-section" aria-labelledby="rr-settings-data-heading">
-                <SettingsHeader
-                  id="rr-settings-data-heading"
-                  title="本地数据"
-                />
-
+              <section
+                id="rr-settings-data-panel"
+                className="rr-settings-section"
+                aria-labelledby="rr-settings-data-tab"
+              >
                 <div className="rr-settings-group">
                   <GroupHeading title="数据目录" />
                   <div className="rr-settings-panel">
@@ -2146,11 +2131,11 @@ function SettingsPage({
             ) : null}
 
             {activeSection === "about" ? (
-              <section className="rr-settings-section" aria-labelledby="rr-settings-about-heading">
-                <SettingsHeader
-                  id="rr-settings-about-heading"
-                  title="关于"
-                />
+              <section
+                id="rr-settings-about-panel"
+                className="rr-settings-section"
+                aria-labelledby="rr-settings-about-tab"
+              >
                 <div className="rr-settings-about">
                   <span className="rr-settings-about-mark">R</span>
                   <div>

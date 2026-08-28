@@ -5,7 +5,7 @@ project:
 
 meta:
   version: "2.0"
-  last_updated: "2026-08-27"
+  last_updated: "2026-08-28"
   updated_by: "Claude Code"
   source_of_truth: "docs/RESOURCE_MAP.yml"
   language: "zh-CN"
@@ -385,14 +385,14 @@ source_areas:
     read_when:
       - "调整复习页状态、卡片交互、完成统计或来源跳转。"
       - "排查复习写回失败重试、撤销、反馈或迟到结果。"
-    notes: "复用 MainAppShell、MainSidebar、主题和字体，只消费 ReviewService、应用级 ReviewPreparationCoordinator 与应用级 ReviewQualityCoordinator。游标分页持续加载 Feed；学习事件中保存的完整英文语境直接展示，缺失语境或下一轮变体在进入可见 Feed 前后台生成并保存，pending 条目不发布。卡片实际进入滚动 viewport 后只登记该条目已浏览，不算完成，也不会越过或删除更早的 pending/失败条目；协调器仅在未浏览缓冲低于水位时按需补页。外部 learning-record 刷新遇到 outcome、undo 或质量反馈写回时延后；质量反馈的成功、权威确认模糊成功和确定失败都有明确终态，页面在每个终态读取条目级 SQLite 权威状态，并在全部 mutation 结束后释放延后刷新。打开、提示、翻转、来源、关闭与质量反馈均不完成条目；只有 remembered/forgotten 成功写回才更新完成统计。结果请求绑定页面 key、feedItemId、learningRecordId、expectedRevision 与稳定 requestKey；失败保留当前卡并原地重试。赞踩与撤销反馈全部交给应用级协调器：同一卡片连续切换合并到最后选择，不同卡片全部保留并依次使用各自最新 SQLite revision，任一失败在 Feed 卡片与详情框都可见并可重试；页面卸载不丢失已点击的保存/撤销意图。只有重新打开相同 polarity 才恢复已有原因和详情。所有生效 attempt（包括较早轮次和最后一项）均可撤销。"
+    notes: "复用 MainAppShell、MainSidebar、主题和字体，只消费 ReviewService、应用级 ReviewPreparationCoordinator 与应用级 ReviewQualityCoordinator。游标分页只在后台持续加载 Feed，前台不再要求用户翻页；页面维持 6/4/2 张稳定活跃书架，宽屏 3×2、中宽 2×2、窄屏 1×2。首页桌面卡片以 360×240 CSS 像素为统一视觉规格，宽高比 1.5:1，正文统一四行预览；窗口扩张只增加书架外留白，不再拉伸卡片或改变文字换行，极窄单列才允许卡片宽度随可用空间收缩。CSS 通过 `--rr-review-column-count` 作为列数唯一权威，页面读取同一值计算 6/4/2 容量，避免侧栏状态下容量与网格列数分离；书架、标题和完成统计使用同一宽度并整体居中。已有卡片在容量不变时不换位，只有 remembered/forgotten 成功写回且用户返回书架后，才用当前真实 Feed 顺序中的下一张未完成卡补入原槽位；打开、关闭、来源和质量反馈都不会轮换书架。pending 条目不发布，后台制卡只填空槽，不挤走已显示卡片。首页卡片使用统一表面和紧凑日期，不再使用装饰性左竖线；单条语境开头孤立的项目符号仅在展示层隐藏，原始学习记录不修改。卡片实际进入 viewport 后只登记该条目已浏览，不算完成，也不会越过或删除更早的 pending/失败条目；协调器仅在未浏览缓冲低于水位时按需补页。专注页使用自然内容高度、受控最大高度和更窄阅读行宽，保留来源、结果/撤销和质量反馈链路。外部 learning-record 刷新遇到 outcome、undo 或质量反馈写回时延后；质量反馈的成功、权威确认模糊成功和确定失败都有明确终态，页面在每个终态读取条目级 SQLite 权威状态，并在全部 mutation 结束后释放延后刷新。只有 remembered/forgotten 成功写回才更新完成统计。结果请求绑定页面 key、feedItemId、learningRecordId、expectedRevision 与稳定 requestKey；失败保留当前卡并原地重试。赞踩与撤销反馈全部交给应用级协调器：同一卡片连续切换合并到最后选择，不同卡片全部保留并依次使用各自最新 SQLite revision，任一失败在 Feed 卡片与详情框都可见并可重试；页面卸载不丢失已点击的保存/撤销意图。只有重新打开相同 polarity 才恢复已有原因和详情。所有生效 attempt（包括较早轮次和最后一项）均可撤销。"
     risk: "不得直接 invoke/SQLite、读取 fixture/localStorage、把卡片质量当学习结果，或写入无证据的再次遇到、薄弱项和个性化承诺；质量反馈状态不得再回到页面本地生命周期。"
 
   - path: "src/reviewRepository.ts"
     purpose: "阶段八正式复习 typed Tauri command repository。"
     status: "active"
     read_when:
-      - "调整 Feed 分页、AI 制卡、结果/撤销或质量反馈 command 参数。"
+      - "调整活跃书架容量与轮换、后台 Feed 分页、AI 制卡、结果/撤销或质量反馈 command 参数。"
     notes: "只调用 get_review_feed_page、get_review_feed_item_state、prepare_review_feed_card、submit/undo_review_outcome 与 save/undo_review_quality_feedback；参数保持 camelCase typed 边界。"
     risk: "不得读取 SQLite、拼装卡片事实、回退 fixture 或在 repository 中实现调度。"
 
@@ -889,7 +889,7 @@ source_areas:
     read_when:
       - "排查今日自动刷新、日期范围或 Today 状态。"
       - "调整首页真实摘要和三个学习入口。"
-    notes: "用本机当天起止时间生成仅由真实数据支持的文案和入口，并复用 LearningRecord 展示映射；最近记录标题只显示 learningTargetText，原始中文 query 不作为学习目标。"
+    notes: "用本机当天起止时间生成仅由真实数据支持的文案和入口，并复用 LearningRecord 展示映射；最近记录标题只显示 learningTargetText，原始中文 query 不作为学习目标。主壳在每次进入今天页以及窗口重新获焦且仍位于今天页时重新读取，同时保留 learning-record-created 即时通知，避免主窗口隐藏或监听尚未建立时漏掉通知后长期显示旧快照。"
     risk: "不得读取写作 fixture/localStorage 作为正式统计，也不得生成复习数量、高频或趋势推断。"
 
   - path: "src/mainAppFixture.ts"
