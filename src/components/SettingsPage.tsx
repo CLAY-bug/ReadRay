@@ -6,8 +6,11 @@ import {
   useState,
   type FormEvent,
   type KeyboardEvent as ReactKeyboardEvent,
+  type ReactNode,
 } from "react";
 import type { SettingsService } from "../settingsService";
+import { appUpdateService } from "../appUpdateService";
+import { useAppUpdateState } from "../useAppUpdateState";
 import type { AppPreferenceSaveOutcome } from "../appPreferenceSaveCoordinator";
 import type { AppThemeController } from "../useAppTheme";
 import type {
@@ -467,6 +470,110 @@ function SettingsLoading() {
         <span className="rr-settings-skeleton is-wide" />
         <span className="rr-settings-skeleton is-mid" />
       </div>
+    </div>
+  );
+}
+
+function SettingsUpdateRow() {
+  const updateState = useAppUpdateState();
+
+  // 失败提示只保留在当前浏览期间：离开“关于”或设置页即回落 idle。
+  useEffect(() => {
+    return () => appUpdateService.dismissTransientFailure();
+  }, []);
+
+  let statusPill: ReactNode = null;
+  let action: (() => void) | undefined;
+  let actionLabel: string | undefined;
+  let actionDisabled = false;
+  let actionPrimary = false;
+  let detail: string | undefined;
+
+  switch (updateState.status) {
+    case "idle":
+      action = () => void appUpdateService.checkForUpdates("manual");
+      actionLabel = "检查更新";
+      break;
+    case "checking":
+      actionLabel = "正在检查…";
+      actionDisabled = true;
+      break;
+    case "upToDate":
+      statusPill = (
+        <span className="rr-settings-pill is-success">已是最新</span>
+      );
+      action = () => void appUpdateService.checkForUpdates("manual");
+      actionLabel = "重新检查";
+      break;
+    case "available":
+      statusPill = (
+        <span className="rr-settings-pill is-warn">
+          新版本 {updateState.version}
+        </span>
+      );
+      detail = updateState.notes ?? undefined;
+      action = () => void appUpdateService.applyUpdate();
+      actionLabel = "立即更新";
+      actionPrimary = true;
+      break;
+    case "downloading": {
+      const total = updateState.progress?.total;
+      const received = updateState.progress?.received ?? 0;
+      const percent =
+        typeof total === "number" && total > 0
+          ? Math.min(100, Math.floor((received / total) * 100))
+          : null;
+      statusPill = (
+        <span className="rr-settings-pill is-warn">
+          正在下载{percent === null ? "…" : ` ${percent}%`}
+        </span>
+      );
+      actionLabel = "正在下载…";
+      actionDisabled = true;
+      break;
+    }
+    case "installing":
+      statusPill = (
+        <span className="rr-settings-pill is-warn">
+          {updateState.phase === "flushing"
+            ? "正在保存并准备安装…"
+            : "正在安装，应用即将重启"}
+        </span>
+      );
+      break;
+    case "failed":
+      statusPill = (
+        <span className="rr-settings-pill is-danger">
+          {updateState.retry === "apply" ? "更新失败" : "检查失败"}
+        </span>
+      );
+      detail = updateState.message;
+      action = () => void appUpdateService.retry();
+      actionLabel = updateState.retry === "apply" ? "重试更新" : "重试检查";
+      break;
+  }
+
+  return (
+    <div className="rr-settings-update-row">
+      <div className="rr-settings-update-info">
+        <div className="rr-settings-update-head">
+          <strong>更新</strong>
+          {statusPill}
+        </div>
+        {detail ? <p className="rr-settings-update-detail">{detail}</p> : null}
+      </div>
+      {actionLabel ? (
+        <button
+          className={`rr-settings-button${
+            actionPrimary ? " is-primary" : ""
+          }`}
+          type="button"
+          disabled={actionDisabled}
+          onClick={action}
+        >
+          {actionLabel}
+        </button>
+      ) : null}
     </div>
   );
 }
@@ -2060,10 +2167,7 @@ function SettingsPage({
                   <strong>许可证与第三方材料</strong>
                   <ArrowIcon />
                 </button>
-                <div className="rr-settings-link-row is-static">
-                  <strong>更新</strong>
-                  <span className="rr-settings-pill is-warn">未来位置</span>
-                </div>
+                <SettingsUpdateRow />
               </section>
             ) : null}
           </div>

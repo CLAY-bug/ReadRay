@@ -970,6 +970,10 @@ pub fn run() {
         )
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
+        .plugin(
+            #[cfg(desktop)]
+            tauri_plugin_updater::Builder::new().build(),
+        )
         .setup(move |app| {
             learning_records::initialize_for_app(app.handle()).map_err(std::io::Error::other)?;
 

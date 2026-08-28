@@ -1,7 +1,7 @@
 {
   "name": "readray",
   "private": true,
-  "version": "0.1.0",
+  "version": "0.1.1",
   "type": "module",
   "scripts": {
     "dev": "vite",
@@ -12,6 +12,7 @@
     "test:review": "node --test tests/reviewService.test.mjs tests/reviewPreparationCoordinator.test.mjs",
     "test:writing": "node --test tests/writing*.test.mjs",
     "test:settings": "node --test tests/settingsService.test.mjs tests/themeService.test.mjs tests/desktopLifecycle.test.mjs tests/desktopContextMenu.test.mjs tests/mainSidebarWidth.test.mjs tests/sidebarAutoCollapse.test.mjs",
+    "test:update": "node --test tests/appUpdateService.test.mjs",
     "test:startup": "node --test tests/startupBrand.test.mjs",
     "release:build": "tauri build",
     "tauri": "tauri"
@@ -22,6 +23,7 @@
     "@tauri-apps/plugin-dialog": "^2",
     "@tauri-apps/plugin-global-shortcut": "~2.3.2",
     "@tauri-apps/plugin-opener": "^2",
+    "@tauri-apps/plugin-updater": "^2.10.1",
     "react": "^19.1.0",
     "react-dom": "^19.1.0"
   },

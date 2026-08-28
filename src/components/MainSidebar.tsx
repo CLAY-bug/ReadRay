@@ -15,6 +15,7 @@ import {
   MAIN_SIDEBAR_DEFAULT_WIDTH,
   clampMainSidebarWidth,
 } from "../mainSidebarWidth";
+import { useAppUpdateState } from "../useAppUpdateState";
 import MainAppIcon from "./MainAppIcon";
 
 type MainSidebarProps = {
@@ -97,6 +98,8 @@ function MainSidebar({
   onPeekLeave,
 }: MainSidebarProps) {
   const settingsActive = activeNavigationId === "settings";
+  const updateState = useAppUpdateState();
+  const updateAvailable = updateState.status === "available";
   const dragState = useRef<{
     startX: number;
     startWidth: number;
@@ -221,7 +224,12 @@ function MainSidebar({
           aria-label={collapsed ? "设置" : undefined}
           onClick={() => onNavigate("settings")}
         >
-          <span className="rr-main-nav-icon"><MainAppIcon name="settings" /></span>
+          <span className="rr-main-nav-icon">
+            <MainAppIcon name="settings" />
+            {updateAvailable ? (
+              <span className="rr-main-nav-badge" aria-hidden="true" />
+            ) : null}
+          </span>
           <span className="rr-main-nav-label">设置</span>
         </button>
       </div>

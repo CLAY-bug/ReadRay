@@ -83,6 +83,7 @@ import {
   runForcedExit,
   runSafeExit,
 } from "./desktopLifecycle";
+import { appUpdateService } from "./appUpdateService";
 import { markMainStartupReady } from "./startupBrand";
 import "./App.css";
 import "./styles/main-app.css";
@@ -114,6 +115,8 @@ type SafeExitFailure = {
 const MAIN_APP_DESIGN_WIDTH = 1440;
 const MAIN_APP_DESIGN_HEIGHT = 900;
 const MAIN_APP_PREVIEW_GUTTER = 48;
+
+const APP_UPDATE_STARTUP_CHECK_DELAY_MS = 12_000;
 
 type TauriResizeDirection = Parameters<
   ReturnType<typeof getCurrentWindow>["startResizeDragging"]
@@ -1425,6 +1428,20 @@ function MainAppWindow() {
       flush: () => reviewQualityCoordinator.flush(),
     });
   }, [reviewQualityCoordinator]);
+
+  // 启动后延迟静默检查一次应用更新：失败不打扰用户，
+  // 发现新版本由侧栏设置入口红点和设置页“关于”提示。
+  useEffect(() => {
+    if (!isTauriRuntime) {
+      return;
+    }
+    const timer = window.setTimeout(() => {
+      void appUpdateService.checkForUpdates("startup").catch((error) => {
+        console.error("ReadRay 启动更新检查失败：", error);
+      });
+    }, APP_UPDATE_STARTUP_CHECK_DELAY_MS);
+    return () => window.clearTimeout(timer);
+  }, [isTauriRuntime]);
   const [conversationRefreshToken, setConversationRefreshToken] = useState(0);
   const [conversationService, setConversationService] =
     useState<ConversationService | null>(() =>

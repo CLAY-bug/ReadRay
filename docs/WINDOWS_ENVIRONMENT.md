@@ -1,6 +1,6 @@
 # Windows 开发环境说明
 
-最后更新：2026-06-27
+最后更新：2026-08-27
 
 ## 适用范围
 
@@ -52,6 +52,49 @@ pnpm tauri dev
 - 当前开发流程直接维护 `main`。用户只要求“提交并上传 GitHub”时，默认使用本地 Git 提交后执行 `git push origin main`。
 - 本机当前没有 `gh`。普通 commit/push 不依赖 GitHub CLI，不需要为此先检查或安装 `gh`；只有明确需要创建或管理 PR，且现有 GitHub connector 不能完成时，才检查 `gh`。
 - `design-open-design/` 不属于 ReadRay 提交范围；暂存时使用明确文件列表，不使用会把该目录带入提交的 `git add -A`。
+
+### 应用内更新与发布基线（2026-08-27 起）
+
+ReadRay 从 0.1.1 起接入官方 `tauri-plugin-updater`：应用定期/手动请求 GitHub Release 上的 `latest.json`，发现新版本后在“设置 → 关于”下载并安装，安装完成后由 NSIS 安装器自动重启应用；更新包先做 minisign 签名校验，校验失败拒绝安装。已安装 RC1（0.1.0）的用户需要手动下载一次带 updater 的版本，之后进入应用内更新通道。
+
+- 签名密钥（一次性生成，勿提交仓库）：
+  - 私钥：`C:\Users\19150\.tauri\readray-updater.key`（空密码）。必须离线备份；**私钥丢失后，已安装用户无法再收到应用内更新，只能重新手动下载一次**。私钥泄露则任何人可向用户推送恶意更新，与 GitHub Release 权限一起构成更新安全边界。
+  - 公钥已固化在 `src-tauri/tauri.conf.json` 的 `plugins.updater.pubkey`。在第一个带 updater 的版本发布之前可以免费重新生成密钥对（换公钥无迁移成本）；发布后再换钥匙需要用户手动升级一次。
+- 签名构建：release 构建前在同一 PowerShell 会话设置环境变量（`.env` 对 CLI 签名无效）：
+
+```powershell
+$env:TAURI_SIGNING_PRIVATE_KEY = "C:\Users\19150\.tauri\readray-updater.key"
+$env:TAURI_SIGNING_PRIVATE_KEY_PASSWORD = ""
+& 'D:\Application\nvm\nodejs\pnpm.cmd' release:build
+```
+
+  变量名必须是 `TAURI_SIGNING_PRIVATE_KEY`（值可以是私钥路径或私钥内容）；`TAURI_SIGNING_PRIVATE_KEY_PATH` 不存在，设置后 Tauri 仍报 "no private key"。密钥为空密码也必须把 `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` 设为空字符串。
+
+  产物在 `src-tauri/target/release/bundle/nsis/`：`ReadRay_<版本>_x64-setup.exe` 与同名 `.sig` 签名文件。
+
+- 每次发版步骤：
+  1. 抬版本号：`src-tauri/tauri.conf.json`、`src-tauri/Cargo.toml`、`package.json` 三处同步（updater 按 semver 比较，必须高于已发布版本）。
+  2. 按上文完成签名 release 构建，记录安装包大小与 SHA-256。
+  3. 在 GitHub 创建 Release（tag 形如 `v0.1.1`），上传**三个资产**：安装包 exe、`.sig` 文件、`latest.json`。
+  4. `latest.json` 内容模板（`signature` 字段粘贴 `.sig` 文件全文；`url` 指向该 Release 的 exe 资产直链；`pub_date` 为 RFC 3339）：
+
+```json
+{
+  "version": "0.1.1",
+  "notes": "更新说明",
+  "pub_date": "2026-08-27T12:00:00+08:00",
+  "platforms": {
+    "windows-x86_64": {
+      "signature": "<ReadRay_0.1.1_x64-setup.exe.sig 文件全文>",
+      "url": "https://github.com/CLAY-bug/ReadRay/releases/download/v0.1.1/ReadRay_0.1.1_x64-setup.exe"
+    }
+  }
+}
+```
+
+- 应用端检查地址为 `https://github.com/CLAY-bug/ReadRay/releases/latest/download/latest.json`（写在 tauri.conf.json 的 `plugins.updater.endpoints`）。更新体验：设置 → 关于 → 立即更新 → 下载（显示百分比）→ 自动 flush 未落盘内容（写作草稿、偏好、复习反馈）→ NSIS passive 模式安装（小进度窗）→ 安装完成自动重启。Windows 安装器限制要求安装前退出应用，插件内部通过 `std::process::exit` 处理，前端代码在 install 之后不会继续执行。
+- 当前安装包无 Authenticode 代码签名：浏览器首次下载仍会触发 SmartScreen 提示；应用内更新由 ReadRay 进程自身下载，不经过浏览器，不受 Mark-of-the-Web 影响。
+- 国内直连 GitHub Releases 可能缓慢或不稳定：如用户反馈更新失败，可在 `plugins.updater.endpoints` 数组追加镜像地址（按序尝试），镜像需同时提供 `latest.json` 与安装包。
 
 ### 开发进程与端口
 

@@ -605,6 +605,18 @@
   height: calc(16px * var(--rr-main-design-scale));
   flex: 0 0 calc(16px * var(--rr-main-design-scale));
   place-items: center;
+  position: relative;
+}
+
+/* 设置入口的新版本提示红点：仅应用内更新“有新版本可用”时出现。 */
+.rr-main-nav-badge {
+  position: absolute;
+  top: -3px;
+  right: -3px;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--rr-main-warning);
 }
 
 .rr-main-nav-icon svg {

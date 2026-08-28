@@ -4,9 +4,9 @@ project:
   repo_root: "."
 
 meta:
-  version: "1.99"
+  version: "2.0"
   last_updated: "2026-08-27"
-  updated_by: "Codex"
+  updated_by: "Claude Code"
   source_of_truth: "docs/RESOURCE_MAP.yml"
   language: "zh-CN"
 
@@ -695,6 +695,30 @@ source_areas:
     notes: "DesktopSaveCoordinator 持续跟踪设置 mutation 的 promise/失败和写作草稿 flush；即使 SettingsPage 已卸载，安全退出仍等待进行中操作并报告未解决失败。退出 request ID 激活 mutation gate 后，设置 mutation 与写作编辑入口拒绝新修改，flush 以 mutation generation 确认静默后才调用 typed Rust 退出 command；失败或取消会解除 gate。快捷键录制结果只定义有类型事件协议，按键识别与录制抑制属于 Rust Windows 原生层。"
     risk: "不得把模型请求加入退出等待，也不得在此直接操作托盘、窗口、注册表或 SQLite。"
 
+  - path: "src/appUpdateRepository.ts"
+    purpose: "tauri-plugin-updater 的有类型 repository：check 命令封装与更新句柄投影。"
+    status: "active"
+    read_when:
+      - "调整 updater 前端接线、下载事件映射或插件 API 升级。"
+    notes: "把插件 Update 对象投影为应用内中性的 AppUpdateHandle（version/notes/download/install）；下载事件归一为 started/progress/finished 三类，notes 空白时归 null。只有 main 窗口 capability 拥有 updater:default，overlay 无更新权限。"
+    risk: "不得绕过 repository 在页面直接调用插件；签名校验失败不得被当作普通网络错误吞掉。"
+
+  - path: "src/appUpdateService.ts"
+    purpose: "应用内更新状态机：检查、下载进度、安装前 flush、友好错误映射和单例装配。"
+    status: "active"
+    read_when:
+      - "调整设置页更新交互、启动静默检查、下载节流或安装链路。"
+    notes: "状态为 idle/checking/upToDate/available/downloading/installing/failed；启动静默检查失败回 idle，手动检查失败显示友好文案（签名失败、网络失败分别映射）。applyUpdate 顺序：下载（progress 事件按 200ms 节流发布）→ desktopSaveCoordinator.flushAll()（与安全退出同一落盘链路，失败则拒绝安装并可原地重试，重试复用已下载内容）→ install。Windows 上 install 由插件直接结束进程、NSIS passive（/P /R /UPDATE）安装并自动重启，install 之后的代码通常不执行。单例 appUpdateService 仅在 Tauri 运行时生效，浏览器预览 no-op。"
+    risk: "不得在 flush 失败时继续安装；不得移除 isDesktopRuntime 守卫让浏览器预览触发插件调用。"
+
+  - path: "src/useAppUpdateState.ts"
+    purpose: "以 useSyncExternalStore 订阅 appUpdateService 状态的 React hook。"
+    status: "active"
+    read_when:
+      - "调整设置页更新行或侧栏新版本红点的订阅方式。"
+    notes: "MainSidebar（设置入口红点，仅 available 态）与 SettingsPage 关于区更新行共用；状态对象引用在 setState 前保持稳定。"
+    risk: "不要把状态复制进组件本地 state 造成双源。"
+
   - path: "src/desktopContextMenu.ts"
     purpose: "Tauri WebView2 默认浏览器右键菜单的全局屏蔽入口。"
     status: "active"
@@ -710,6 +734,14 @@ source_areas:
       - "修改安全退出、单实例、托盘、开机启动或全局快捷键接线。"
     notes: "覆盖快捷键录制、安全退出成功/失败/取消/强制/过期结果、退出期 mutation 阻断、设置操作切页后的应用级等待、单实例插件优先、三项托盘菜单、隐藏式自动启动和页面不直接 invoke。Rust 配套测试另覆盖 active 元数据回滚、双冲突逐项恢复和窗口聚焦失败时取消一致性。"
     risk: "静态和纯逻辑测试不替代真实 Windows 托盘、注册表、快捷键冲突和单实例人工验收。"
+
+  - path: "tests/appUpdateService.test.mjs"
+    purpose: "应用内更新服务状态机聚焦测试（test:update 运行）。"
+    status: "active"
+    read_when:
+      - "修改 appUpdateService 的检查、下载节流、flush 或重试语义。"
+    notes: "以 fake client/handle 覆盖手动与启动检查结果、启动失败静默、签名/网络友好文案、applyUpdate 完整链路（下载→flush→install）、下载进度节流与字节累计、flush 失败后重试复用已下载内容、下载/install 失败重试、busy 守卫、非桌面运行时 no-op 和订阅退订。"
+    risk: "真实 updater 的 latest.json 解析、签名校验和 NSIS 安装重启链路需发布后人工验收。"
 
   - path: "tests/sidebarAutoCollapse.test.mjs"
     purpose: "侧栏窄窗自动收放状态机聚焦测试与外壳/CSS 静态接线守卫。"

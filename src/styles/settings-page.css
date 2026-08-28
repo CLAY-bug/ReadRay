@@ -579,6 +579,11 @@
   background: var(--rr-settings-warn-soft);
 }
 
+.rr-settings-pill.is-danger {
+  color: var(--rr-main-danger);
+  background: var(--rr-settings-danger-soft);
+}
+
 .rr-settings-key-panel {
   border-bottom: 1px solid var(--rr-main-border-soft);
   padding: 18px 2px;
@@ -1129,6 +1134,42 @@
 
 .rr-settings-link-row.is-static {
   cursor: default;
+}
+
+/* 应用内更新：关于页“更新”行（检查更新 / 立即更新 / 安装进度）。 */
+.rr-settings-update-row {
+  display: flex;
+  width: 100%;
+  min-height: 54px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 20px;
+  border-bottom: 1px solid var(--rr-main-border-soft);
+  padding: 8px 2px;
+}
+
+.rr-settings-update-info {
+  min-width: 0;
+}
+
+.rr-settings-update-head {
+  display: flex;
+  min-height: 34px;
+  align-items: center;
+  gap: 10px;
+}
+
+.rr-settings-update-head strong {
+  font-size: calc(12.5px * var(--rr-settings-font-scale));
+}
+
+.rr-settings-update-detail {
+  margin: 0;
+  max-width: 52ch;
+  color: var(--rr-main-muted);
+  font-size: calc(12px * var(--rr-settings-font-scale));
+  line-height: 1.55;
+  overflow-wrap: anywhere;
 }
 
 .rr-settings-loading {
