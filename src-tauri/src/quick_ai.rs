@@ -1,6 +1,6 @@
 use crate::agent_runtime::chat_surface::{
-    conversation_capability, conversation_l1_tools, generate_run_id, runtime_facts,
-    ChatPreparedTurn, ChatSurfaceAdapter,
+    conversation_capability, generate_run_id, main_conversation_tools, runtime_facts,
+    ChatPreparedTurn, ChatSurfaceAdapter, LEARNING_HISTORY_TOOL_NAME,
 };
 use crate::agent_runtime::context::ContextAssembler;
 use crate::agent_runtime::coordinator::{
@@ -68,8 +68,7 @@ pub enum QuickAiStreamEvent {
     SourcesUpdated {
         sources: Vec<crate::agent_runtime::protocol::SourceMetadata>,
     },
-    /// 工具状态文案（任务 3）："正在搜索相关资料…" / "正在读取网页内容…" /
-    /// "正在整理答案…"。
+    /// 工具状态文案：联网搜索、网页读取、本地学习记录读取或整理答案。
     ToolState {
         label: String,
     },
@@ -335,7 +334,7 @@ pub async fn send_quick_ai_message_agent(
     tauri::async_runtime::spawn_blocking(move || {
         // 同步内核在 blocking 线程运行；真实 gateway 内部 block_on HTTP SSE 流。
         let mut gateway = DeepSeekChatGateway::new(model, Some(&app));
-        let registry = conversation_l1_tools(app_version.clone());
+        let registry = main_conversation_tools(app_version.clone(), database_path.clone());
         let mut ui = AgentUiSink { sender: &sender };
         run_agent_session_core(
             || ConversationStore::open_for_app(&app),
@@ -386,6 +385,7 @@ fn project_ui_event(event: &AgentEvent) -> Option<QuickAiStreamEvent> {
             let label = match call.name.as_str() {
                 "web_search" => "正在搜索相关资料…",
                 "fetch_web_page" => "正在读取网页内容…",
+                LEARNING_HISTORY_TOOL_NAME => "正在读取本地学习记录…",
                 _ => return None,
             };
             Some(QuickAiStreamEvent::ToolState {
@@ -521,7 +521,7 @@ where
     let authority =
         surface.authority_ref(conversation_id, expected_user_sequence, user_message_id)?;
     let facts = runtime_facts(app_version);
-    let capability = conversation_capability();
+    let capability = conversation_capability(surface_kind);
     let active_tools = registry.active_tools(&capability);
     // 编辑并重新生成（任务 4 修复轮）：模型上下文 = 历史（排除该轮旧问题行与
     // 旧回答）+ 编辑后的 pending 问题行，相当于一次"按编辑后的问题重新作答"；
@@ -1286,7 +1286,20 @@ mod tests {
             QuickAiStreamEvent::ToolState { ref label } if label == "正在读取网页内容…"
         ));
 
-        // 非联网工具不投影工具开始事件。
+        let history_started = project_ui_event(&agent_event(AgentEventPayload::ToolCallStarted {
+            call: ToolCall {
+                id: "c-history".into(),
+                name: LEARNING_HISTORY_TOOL_NAME.into(),
+                arguments: json!({"mode": "recent"}),
+            },
+        }))
+        .expect("学习历史工具开始必须投影");
+        assert!(matches!(
+            history_started,
+            QuickAiStreamEvent::ToolState { ref label } if label == "正在读取本地学习记录…"
+        ));
+
+        // 未提供专用进度文案的普通 L0 工具不投影开始事件。
         assert!(
             project_ui_event(&agent_event(AgentEventPayload::ToolCallStarted {
                 call: ToolCall {
@@ -1545,6 +1558,34 @@ mod tests {
         .expect("date 工具定义必须有效")
     }
 
+    fn learning_history_tool_for_agent_loop() -> ToolDefinition {
+        ToolDefinition::new(
+            LEARNING_HISTORY_TOOL_NAME,
+            "读取受控的本地学习历史事实。",
+            json!({
+                "type": "object",
+                "properties": {
+                    "mode": { "type": "string", "enum": ["recent"] },
+                    "period": { "type": "string", "enum": ["last_7_days"] },
+                    "query_type": { "type": "string", "enum": ["word"] }
+                },
+                "required": ["mode", "period", "query_type"],
+                "additionalProperties": false
+            }),
+            RiskLevel::TrustedLocalReadOnly,
+            |call, started, _| {
+                Ok(ToolResult::success(
+                    call,
+                    r#"{"status":"ok","targets":[{"learningTargetText":"turbo","occurrenceCount":2}]}"#,
+                    ToolProvenance::LocalFact,
+                    started,
+                    started + 1,
+                ))
+            },
+        )
+        .expect("学习历史循环测试工具定义必须有效")
+    }
+
     fn run_agent_at_path(
         path: &Path,
         conversation_id: i64,
@@ -1714,6 +1755,42 @@ mod tests {
         assert!(steps
             .iter()
             .any(|(kind, status, _)| kind == "tool_call_completed" && status == "ok"));
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn main_conversation_agent_loop_executes_learning_history_tool_then_answers() {
+        let (root, path) = test_database_path();
+        let mut registry = ToolRegistry::new();
+        registry
+            .register(learning_history_tool_for_agent_loop())
+            .unwrap();
+        let conversation_id = create_conversation(&path);
+        let abort = Arc::new(AtomicBool::new(false));
+        let mut events = Vec::new();
+        let snapshot = run_agent_at_path(
+            &path,
+            conversation_id,
+            1,
+            "我最近查询了哪些单词？",
+            FakeScenario::LearningHistoryThenFinal,
+            &registry,
+            &abort,
+            &mut events,
+        )
+        .unwrap();
+        assert_eq!(snapshot.messages[1].content, "final after tools");
+        assert!(events.iter().any(|event| matches!(
+            &event.payload,
+            AgentEventPayload::ToolCallStarted { call }
+                if call.name == LEARNING_HISTORY_TOOL_NAME
+        )));
+        assert!(events.iter().any(|event| matches!(
+            &event.payload,
+            AgentEventPayload::ToolCallCompleted { result }
+                if result.tool_name == LEARNING_HISTORY_TOOL_NAME
+                    && result.provenance == ToolProvenance::LocalFact
+        )));
         let _ = fs::remove_dir_all(root);
     }
 

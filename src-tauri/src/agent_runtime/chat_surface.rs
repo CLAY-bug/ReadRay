@@ -23,9 +23,17 @@ use crate::agent_runtime::tool::{
 use crate::conversations::{
     ConversationMessage, ConversationRole, ConversationSnapshot, ConversationStore, PreparedTurn,
 };
-use crate::learning_records::unix_time_ms;
+use crate::explanation::QueryType;
+use crate::learning_records::{
+    local_today_bounds_read_only, query_learning_history_read_only, unix_time_ms,
+    LearningHistoryQuery,
+};
 use serde_json::{json, Value};
+use std::collections::BTreeSet;
+use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
+
+pub(crate) const LEARNING_HISTORY_TOOL_NAME: &str = "query_learning_history";
 
 /// 长上下文投影预算（任务 5，方案 A）。
 ///
@@ -625,16 +633,208 @@ pub(crate) fn conversation_l1_tools_with_provider(
     registry
 }
 
-/// 对话面能力策略：允许 L1 外部只读（web_search/fetch_web_page 由模型自主选择）。
+/// 主应用对话工具集：在既有 L0/L1 工具上增加受控的本地学习历史只读查询。
+/// 工具只持有数据库路径，每次调用按参数只读打开，不缓存或预注入学习记录。
+pub(crate) fn main_conversation_tools(app_version: String, database_path: PathBuf) -> ToolRegistry {
+    let mut registry = conversation_l1_tools(app_version);
+    registry
+        .register(
+            ToolDefinition::new(
+                LEARNING_HISTORY_TOOL_NAME,
+                "仅当用户主动询问自己的查询或学习历史时，读取受限数量的真实本地学习记录。\
+                 支持近期/今日目标、精确目标是否查过、重复查询目标；返回目标、类型、次数、时间、\
+                 来源和代表语境。不得用于普通聊天，不得据此推断掌握度、薄弱点、能力画像或个性化排序。",
+                json!({
+                    "type": "object",
+                    "properties": {
+                        "mode": {
+                            "type": "string",
+                            "enum": ["recent", "target", "repeated"]
+                        },
+                        "period": {
+                            "type": "string",
+                            "enum": ["today", "last_7_days", "last_30_days", "all"]
+                        },
+                        "target": { "type": "string", "minLength": 1, "maxLength": 300 },
+                        "query_type": {
+                            "type": "string",
+                            "enum": ["word", "phrase", "sentence", "paragraph"]
+                        },
+                        "min_occurrences": { "type": "integer", "minimum": 2, "maximum": 100 },
+                        "limit": { "type": "integer", "minimum": 1, "maximum": 20 },
+                        "occurrence_limit": { "type": "integer", "minimum": 1, "maximum": 5 }
+                    },
+                    "required": ["mode"],
+                    "additionalProperties": false
+                }),
+                RiskLevel::TrustedLocalReadOnly,
+                move |call, started, _| {
+                    let mode = call
+                        .arguments
+                        .get("mode")
+                        .and_then(Value::as_str)
+                        .unwrap_or("");
+                    if !matches!(mode, "recent" | "target" | "repeated") {
+                        return Err(agent_tool_error("学习历史查询模式不受支持。"));
+                    }
+                    let period = call
+                        .arguments
+                        .get("period")
+                        .and_then(Value::as_str)
+                        .unwrap_or(match mode {
+                            "recent" => "last_7_days",
+                            _ => "all",
+                        });
+                    let (start_unix_ms, end_unix_ms) = learning_history_period_bounds(
+                        &database_path,
+                        period,
+                        i64::try_from(started).unwrap_or(i64::MAX),
+                    )?;
+                    let target_text = call
+                        .arguments
+                        .get("target")
+                        .and_then(Value::as_str)
+                        .map(str::trim)
+                        .filter(|value| !value.is_empty())
+                        .map(str::to_string);
+                    if mode == "target" && target_text.is_none() {
+                        return Err(agent_tool_error(
+                            "精确目标历史查询必须提供非空 target。",
+                        ));
+                    }
+                    let query_type = call
+                        .arguments
+                        .get("query_type")
+                        .and_then(Value::as_str)
+                        .map(parse_learning_history_query_type)
+                        .transpose()?;
+                    let min_occurrence_count = if mode == "repeated" {
+                        call.arguments
+                            .get("min_occurrences")
+                            .and_then(Value::as_u64)
+                            .unwrap_or(2)
+                            .clamp(2, 100) as u32
+                    } else {
+                        1
+                    };
+                    let target_limit = if mode == "target" {
+                        1
+                    } else {
+                        call.arguments
+                            .get("limit")
+                            .and_then(Value::as_u64)
+                            .unwrap_or(10)
+                            .clamp(1, 20) as u32
+                    };
+                    let occurrence_limit = call
+                        .arguments
+                        .get("occurrence_limit")
+                        .and_then(Value::as_u64)
+                        .unwrap_or(if mode == "target" { 5 } else { 2 })
+                        .clamp(1, 5) as u32;
+                    let facts = query_learning_history_read_only(
+                        &database_path,
+                        &LearningHistoryQuery {
+                            start_unix_ms,
+                            end_unix_ms,
+                            target_text,
+                            query_type,
+                            min_occurrence_count,
+                            target_limit,
+                            occurrence_limit,
+                        },
+                    )
+                    .map_err(agent_tool_error)?;
+                    let status = if facts.targets.is_empty() { "empty" } else { "ok" };
+                    let target_count = facts.targets.len();
+                    let content = serde_json::to_string(&json!({
+                        "status": status,
+                        "mode": mode,
+                        "period": period,
+                        "facts": facts,
+                        "evidenceBoundary": "这些结果只证明本地查询事件发生过；不得据此声称用户已掌握、薄弱、偏好某种解释或需要某种推荐。"
+                    }))
+                    .map_err(|error| agent_tool_error(format!("学习历史事实序列化失败：{error}")))?;
+                    Ok(ToolResult {
+                        tool_call_id: call.id.clone(),
+                        tool_name: call.name.clone(),
+                        is_error: false,
+                        is_truncated: false,
+                        content,
+                        provenance: ToolProvenance::LocalFact,
+                        started_at_unix_ms: started,
+                        finished_at_unix_ms: started + 1,
+                        details: Some(json!({
+                            "status": status,
+                            "targetCount": target_count,
+                            "readOnly": true
+                        })),
+                        error: None,
+                    })
+                },
+            )
+            .expect("学习历史工具定义必须有效"),
+        )
+        .expect("学习历史工具注册必须成功");
+    registry
+}
+
+fn learning_history_period_bounds(
+    database_path: &std::path::Path,
+    period: &str,
+    now_unix_ms: i64,
+) -> Result<(Option<i64>, Option<i64>), crate::agent_runtime::protocol::AgentError> {
+    const DAY_UNIX_MS: i64 = 24 * 60 * 60 * 1_000;
+    match period {
+        "today" => local_today_bounds_read_only(database_path)
+            .map(|(start, end)| (Some(start), Some(end)))
+            .map_err(agent_tool_error),
+        "last_7_days" => Ok((
+            Some(now_unix_ms.saturating_sub(7 * DAY_UNIX_MS)),
+            Some(now_unix_ms.saturating_add(1)),
+        )),
+        "last_30_days" => Ok((
+            Some(now_unix_ms.saturating_sub(30 * DAY_UNIX_MS)),
+            Some(now_unix_ms.saturating_add(1)),
+        )),
+        "all" => Ok((None, None)),
+        _ => Err(agent_tool_error("学习历史时间范围不受支持。")),
+    }
+}
+
+fn parse_learning_history_query_type(
+    value: &str,
+) -> Result<QueryType, crate::agent_runtime::protocol::AgentError> {
+    match value {
+        "word" => Ok(QueryType::Word),
+        "phrase" => Ok(QueryType::Phrase),
+        "sentence" => Ok(QueryType::Sentence),
+        "paragraph" => Ok(QueryType::Paragraph),
+        _ => Err(agent_tool_error("学习记录类型不受支持。")),
+    }
+}
+
+/// 对话面能力策略：主应用允许学习历史 L0 与既有 L1 网络工具；overlay 保持原有
+/// 工具行为，不激活学习历史能力。
 ///
 /// 边界（任务 3 评审 #4）：方案 §5.3 要求"用户决定应用是否允许某一类能力"，
 /// 但全局网络权限门（设置页联网开关）尚未实现——当前默认允许 L1。未来接入
 /// 偏好（app_preferences 持久化）后，本函数应按用户偏好回落
 /// `RiskLevel::TrustedLocalReadOnly`（仅 L0 本地只读），不再无条件开放 L1。
-pub(crate) fn conversation_capability() -> CapabilityPolicy {
+pub(crate) fn conversation_capability(surface: AgentSurface) -> CapabilityPolicy {
+    let enabled_tools = match surface {
+        AgentSurface::MainConversation => None,
+        AgentSurface::QuickAiOverlay => Some(BTreeSet::from([
+            "get_app_version".to_string(),
+            "get_local_datetime".to_string(),
+            "web_search".to_string(),
+            "fetch_web_page".to_string(),
+        ])),
+        AgentSurface::WritingCoach => Some(BTreeSet::new()),
+    };
     CapabilityPolicy {
         allowed_risk: RiskLevel::ExternalReadOnly,
-        enabled_tools: None,
+        enabled_tools,
     }
 }
 
@@ -1124,7 +1324,7 @@ mod tests {
 
     #[test]
     fn conversation_capability_permits_external_read_only_tools() {
-        let capability = conversation_capability();
+        let capability = conversation_capability(AgentSurface::MainConversation);
         assert_eq!(capability.allowed_risk, RiskLevel::ExternalReadOnly);
         let registry = conversation_l1_tools("0.1.0-test".to_string());
         let active = registry.active_tools(&capability);
@@ -1135,12 +1335,109 @@ mod tests {
     }
 
     #[test]
+    fn learning_history_tool_is_active_only_for_main_conversation() {
+        let registry = main_conversation_tools(
+            "0.1.0-test".to_string(),
+            PathBuf::from("unused-learning-history.sqlite3"),
+        );
+        let main = registry.active_tools(&conversation_capability(AgentSurface::MainConversation));
+        assert!(main
+            .iter()
+            .any(|tool| tool.name == LEARNING_HISTORY_TOOL_NAME));
+        let overlay = registry.active_tools(&conversation_capability(AgentSurface::QuickAiOverlay));
+        assert!(!overlay
+            .iter()
+            .any(|tool| tool.name == LEARNING_HISTORY_TOOL_NAME));
+        assert!(overlay.iter().any(|tool| tool.name == "web_search"));
+    }
+
+    #[test]
+    fn learning_history_tool_returns_honest_empty_read_only_result() {
+        let (root, path) = test_database_path();
+        fs::create_dir_all(&root).unwrap();
+        drop(open_database(&path).unwrap());
+        let registry = main_conversation_tools("0.1.0-test".to_string(), path);
+        let definition = registry
+            .get(LEARNING_HISTORY_TOOL_NAME)
+            .expect("主对话必须注册学习历史工具");
+        let result = definition
+            .execute(
+                &crate::agent_runtime::protocol::ToolCall {
+                    id: "call-history-empty".to_string(),
+                    name: LEARNING_HISTORY_TOOL_NAME.to_string(),
+                    arguments: json!({"mode": "recent", "period": "all"}),
+                },
+                10_000,
+                &crate::agent_runtime::protocol::RunBudget::first_version(),
+            )
+            .unwrap();
+        assert_eq!(result.provenance, ToolProvenance::LocalFact);
+        assert!(result.content.contains("\"status\":\"empty\""));
+        assert!(result.content.contains("只证明本地查询事件发生过"));
+        assert_eq!(
+            result
+                .details
+                .as_ref()
+                .and_then(|details| details.get("readOnly"))
+                .and_then(Value::as_bool),
+            Some(true)
+        );
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn learning_history_target_mode_requires_exact_target() {
+        let registry = main_conversation_tools(
+            "0.1.0-test".to_string(),
+            PathBuf::from("unused-learning-history.sqlite3"),
+        );
+        let error = registry
+            .get(LEARNING_HISTORY_TOOL_NAME)
+            .unwrap()
+            .execute(
+                &crate::agent_runtime::protocol::ToolCall {
+                    id: "call-history-target".to_string(),
+                    name: LEARNING_HISTORY_TOOL_NAME.to_string(),
+                    arguments: json!({"mode": "target"}),
+                },
+                10_000,
+                &crate::agent_runtime::protocol::RunBudget::first_version(),
+            )
+            .unwrap_err();
+        assert_eq!(error.kind, AgentErrorKind::ToolExecutionFailed);
+        assert!(error.message.contains("必须提供"));
+    }
+
+    #[test]
+    fn learning_history_periods_map_to_bounded_ranges() {
+        const DAY: i64 = 24 * 60 * 60 * 1_000;
+        let path = Path::new("unused-learning-history.sqlite3");
+        assert_eq!(
+            learning_history_period_bounds(path, "last_7_days", 10 * DAY).unwrap(),
+            (Some(3 * DAY), Some(10 * DAY + 1))
+        );
+        assert_eq!(
+            learning_history_period_bounds(path, "last_30_days", 40 * DAY).unwrap(),
+            (Some(10 * DAY), Some(40 * DAY + 1))
+        );
+        assert_eq!(
+            learning_history_period_bounds(path, "all", 0).unwrap(),
+            (None, None)
+        );
+        assert!(learning_history_period_bounds(path, "unsupported", 0).is_err());
+    }
+
+    #[test]
     fn all_production_tool_schemas_declare_object_type() {
         // 回归：DeepSeek 拒绝无 `type: "object"` 的 function schema
         // （HTTP 400 "Invalid schema for function ...: got 'type: null'"）。
         // 空对象 json!({}) 序列化为 {}，没有 type 键，必须显式 object。
-        let registry = conversation_l1_tools("0.1.0-test".to_string());
-        let active = registry.active_tools(&conversation_capability());
+        let registry = main_conversation_tools(
+            "0.1.0-test".to_string(),
+            PathBuf::from("unused-learning-history.sqlite3"),
+        );
+        let active =
+            registry.active_tools(&conversation_capability(AgentSurface::MainConversation));
         assert!(!active.is_empty(), "生产工具集不能为空");
         for tool in &active {
             assert_eq!(

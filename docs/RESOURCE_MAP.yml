@@ -1200,8 +1200,8 @@ source_areas:
     status: "experimental"
     read_when:
       - "执行或评审 Agent Runtime 协议、内核循环、会话接入或网络工具。"
-    notes: "装配 chat_surface/context/coordinator/deepseek_gateway/gateway/network/protocol/run_repository/tool/tool_schema 及测试专用 fake_gateway/replay/responses_spike；不注册 Tauri command（command 在 quick_ai.rs/lib.rs）。"
-    risk: "不得开放 L3 能力（Bash/任意文件/动态扩展）或把测试 fake 当作生产 fallback。"
+    notes: "装配 chat_surface/context/coordinator/deepseek_gateway/gateway/network/protocol/run_repository/tool/tool_schema 及测试专用 fake_gateway/replay/responses_spike；不注册 Tauri command（command 在 quick_ai.rs/lib.rs）。主应用对话现通过既有 ToolRegistry 激活 query_learning_history L0 本地只读工具，按用户主动问题查询最少必要事实；overlay 不激活。"
+    risk: "不得开放 L3 能力（Bash/任意文件/动态扩展）或把测试 fake 当作生产 fallback；不得把事实型学习历史读取扩展成无条件 prompt 注入、长期画像或掌握度推断。"
 
   - path: "src-tauri/src/agent_runtime/protocol.rs"
     purpose: "Surface-neutral Agent Runtime 协议草案与纯验证。"
@@ -1302,8 +1302,8 @@ source_areas:
     read_when:
       - "调整 Quick AI system prompt、上下文窗口或发送流程。"
       - "排查 create/get/send/list_recent/list_all/rename/delete/export Quick AI commands。"
-    notes: "独立于 ExplanationCard JSON 协议；create command 要求 overlay/main 创建来源，recent/all commands 可按来源过滤，主窗口不传过滤时读取全部来源。管理和导出 commands 始终携带数据库 conversationId，export 在用户选定路径后重新读取权威快照再写文件。send command 要求已创建的 conversationId 和 expectedUserSequence，先 prepare pending user，再从该 SQLite 快照装配多轮上下文并以 quick_ai 分类调用共享模型边界，成功后 complete assistant；已完成轮次不会再次请求模型或重复统计。任务 2/3：send_quick_ai_message_agent 走 Agent Runtime（spawn_blocking 同步内核 + DeepSeekChatGateway + conversation_l1_tools + PersistingSink/SessionSink），前端正式对话已切换到该命令；QuickAiStreamEvent 扩展 sources_updated/tool_state 事件（来源卡片与工具状态）；open_agent_source 对来源 URL 做 HTTP(S)/凭据/保留网段校验后交受控 opener。任务 4：命令新增 replace_message_id 走“编辑并重新生成”（2026-08-18 方案 B：编辑后问题行替代旧问题行、新答替代旧答，run 复用该轮 user 身份；模型上下文排除旧问+旧答）；失败分支技术细节进 READRAY_AGENT_RUN_FAILED 日志、UI 只返回友好文案；运行期来源经 SourceCollectingSink 累积随 complete 落库；finish_reason=length 的回答照常持久化并携带截断标志。旧 send_quick_ai_message / send_quick_ai_message_streaming 保留为受控回退。"
-    risk: "不得把私有 reasoning、API key 或未裁剪工具参数投影到前端协议；来源打开必须经过网络校验，不得拼接 Shell 命令。"
+    notes: "独立于 ExplanationCard JSON 协议；create command 要求 overlay/main 创建来源，recent/all commands 可按来源过滤，主窗口不传过滤时读取全部来源。管理和导出 commands 始终携带数据库 conversationId，export 在用户选定路径后重新读取权威快照再写文件。send command 要求已创建的 conversationId 和 expectedUserSequence，先 prepare pending user，再从该 SQLite 快照装配多轮上下文并以 quick_ai 分类调用共享模型边界，成功后 complete assistant；已完成轮次不会再次请求模型或重复统计。任务 2/3：send_quick_ai_message_agent 走 Agent Runtime（spawn_blocking 同步内核 + DeepSeekChatGateway + main_conversation_tools + PersistingSink/SessionSink），前端正式对话已切换到该命令；QuickAiStreamEvent 扩展 sources_updated/tool_state 事件（来源卡片与工具状态）；open_agent_source 对来源 URL 做 HTTP(S)/凭据/保留网段校验后交受控 opener。事实型学习记忆纵切只为 main surface 激活 query_learning_history，overlay 仍保持原工具集，并为读取过程投影友好状态。任务 4：命令新增 replace_message_id 走“编辑并重新生成”（2026-08-18 方案 B：编辑后问题行替代旧问题行、新答替代旧答，run 复用该轮 user 身份；模型上下文排除旧问+旧答）；失败分支技术细节进 READRAY_AGENT_RUN_FAILED 日志、UI 只返回友好文案；运行期来源经 SourceCollectingSink 累积随 complete 落库；finish_reason=length 的回答照常持久化并携带截断标志。旧 send_quick_ai_message / send_quick_ai_message_streaming 保留为受控回退。"
+    risk: "不得把私有 reasoning、API key 或未裁剪工具参数投影到前端协议；来源打开必须经过网络校验，不得拼接 Shell 命令；不得在 overlay 或普通聊天中误激活学习历史查询。"
 
   - path: "src-tauri/src/writing.rs"
     purpose: "阶段五写作 SQLite repository、结构化 DeepSeek 分析/问答和 Tauri commands。"
@@ -1321,8 +1321,8 @@ source_areas:
       - "调整学习记录 schema、迁移或存储字段。"
       - "实现学习记录窗口、搜索、筛选、单条读取或删除。"
       - "排查自动保存或应用数据目录中的 SQLite 问题。"
-    notes: "使用 rusqlite bundled；v1～v18 保持既有 schema 不变。v19 一次新增 learning_targets、learning_target_occurrences 与 learning_target_review_states，并在同一事务回填稳定目标、以强 NOT NULL target 身份重建 Feed/generated-card/attempt 表、按 createdAt/id 重放全部未撤销 attempt、隐藏而不删除同轮历史重复 target，最后执行数量、身份、代表记录、状态重放、来源和外键一致性审计。正常目标唯一身份显式为 canonicalizationVersion + queryType + normalizedTargetText，规范化只合并大小写和空白格式；缺少 v17 可靠英文投影的旧记录各自绑定 targetKind=legacy_compat、canonicalizationVersion=0、normalizedTargetText=NULL 的不可聚合兼容身份，旧 Feed 与子链路保留但 active 槽关闭，Memory 和未来 Review 候选统一排除。v22 向 app_preferences 追加两项 nullable binding JSON 权威列：新数据库写入 Alt+Super+Space / 双击左 Alt，已有数据库把 v7 历史字符串逐项转换为 chord JSON，历史列保留且不改写。新学习事件仍追加 learning_records，并与 v17 投影、稳定 target/occurrence 同事务保存。Memory target commands 的搜索/分页/总数均按正常目标；搜索保留目标、历史原文、解释与上下文多字段命中，但按精确目标、目标前缀、目标包含、原始查询、语境/解释的相关度排序，同级再按最近 occurrence 排序。"
-    risk: "learning_records 继续只做不可修改的原始事件，不做去重或覆盖；不得修改已发布 v1～v18，后续 target 重绑/拆分必须保持原始 occurrence 和历史 Feed/card/attempt 追溯。"
+    notes: "使用 rusqlite bundled；v1～v18 保持既有 schema 不变。v19 一次新增 learning_targets、learning_target_occurrences 与 learning_target_review_states，并在同一事务回填稳定目标、以强 NOT NULL target 身份重建 Feed/generated-card/attempt 表、按 createdAt/id 重放全部未撤销 attempt、隐藏而不删除同轮历史重复 target，最后执行数量、身份、代表记录、状态重放、来源和外键一致性审计。正常目标唯一身份显式为 canonicalizationVersion + queryType + normalizedTargetText，规范化只合并大小写和空白格式；缺少 v17 可靠英文投影的旧记录各自绑定 targetKind=legacy_compat、canonicalizationVersion=0、normalizedTargetText=NULL 的不可聚合兼容身份，旧 Feed 与子链路保留但 active 槽关闭，Memory 和未来 Review 候选统一排除。v22 向 app_preferences 追加两项 nullable binding JSON 权威列：新数据库写入 Alt+Super+Space / 双击左 Alt，已有数据库把 v7 历史字符串逐项转换为 chord JSON，历史列保留且不改写。新学习事件仍追加 learning_records，并与 v17 投影、稳定 target/occurrence 同事务保存。Memory target commands 的搜索/分页/总数均按正常目标；搜索保留目标、历史原文、解释与上下文多字段命中，但按精确目标、目标前缀、目标包含、原始查询、语境/解释的相关度排序，同级再按最近 occurrence 排序。Agent 事实查询复用同一 target/occurrence 权威，以 SQLite read-only flag 打开数据库，按时间、精确目标、类型和重复次数下推查询并限制目标/代表 occurrence 数量；本轮无 migration。"
+    risk: "learning_records 继续只做不可修改的原始事件，不做去重或覆盖；不得修改已发布 v1～v18，后续 target 重绑/拆分必须保持原始 occurrence 和历史 Feed/card/attempt 追溯；事实查询不得返回全库或派生画像/掌握度。"
 
   - path: "src-tauri/src/review.rs"
     purpose: "阶段八 SQLite 复习仓库、连续分页 Feed、AI 英文语境持久化、调度、结果/撤销、质量反馈和 typed Tauri commands。"

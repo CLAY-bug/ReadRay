@@ -16,6 +16,7 @@ pub(crate) enum FakeScenario {
     /// 最终回答轮 finish_reason=length（任务 4）：文本照常输出，截断只标记。
     FinalTruncated,
     SingleToolThenFinal,
+    LearningHistoryThenFinal,
     MultipleToolsThenFinal,
     TextThenToolsThenFinal,
     ToolErrorThenRecover,
@@ -78,6 +79,11 @@ fn tool_calls_for(scenario: FakeScenario) -> Vec<ToolCall> {
         FakeScenario::SingleToolThenFinal | FakeScenario::ToolErrorThenRecover => {
             vec![call("call-1", "get_date", json!({}))]
         }
+        FakeScenario::LearningHistoryThenFinal => vec![call(
+            "call-learning-history-1",
+            "query_learning_history",
+            json!({"mode": "recent", "period": "last_7_days", "query_type": "word"}),
+        )],
         FakeScenario::MultipleToolsThenFinal | FakeScenario::TextThenToolsThenFinal => vec![
             call("call-1", "get_date", json!({})),
             call("call-2", "get_version", json!({})),
@@ -117,6 +123,7 @@ impl ModelGateway for FakeGateway {
                 })?;
             }
             FakeScenario::SingleToolThenFinal
+            | FakeScenario::LearningHistoryThenFinal
             | FakeScenario::MultipleToolsThenFinal
             | FakeScenario::TextThenToolsThenFinal
             | FakeScenario::ToolErrorThenRecover
@@ -139,6 +146,7 @@ impl ModelGateway for FakeGateway {
                 })?;
             }
             FakeScenario::SingleToolThenFinal
+            | FakeScenario::LearningHistoryThenFinal
             | FakeScenario::MultipleToolsThenFinal
             | FakeScenario::TextThenToolsThenFinal => {
                 on_event(ModelEvent::TextDelta {

@@ -3,7 +3,7 @@ use crate::explanation::{
     CaptureInput, ExplanationCard, QueryDirection, QueryType, SourceType,
 };
 use rusqlite::{
-    params, params_from_iter, types::Value, Connection, OptionalExtension, Transaction,
+    params, params_from_iter, types::Value, Connection, OpenFlags, OptionalExtension, Transaction,
 };
 use serde::Serialize;
 use std::collections::HashMap;
@@ -891,6 +891,55 @@ pub struct LearningTargetDetail {
     pub occurrences: Vec<LearningRecord>,
 }
 
+/// Agent 事实型学习历史查询。调用方必须给出受限范围和返回上限；该查询只读取
+/// 已有稳定学习目标与真实 occurrence，不生成画像、熟练度或推荐结论。
+#[derive(Clone, Debug)]
+pub(crate) struct LearningHistoryQuery {
+    pub start_unix_ms: Option<i64>,
+    pub end_unix_ms: Option<i64>,
+    pub target_text: Option<String>,
+    pub query_type: Option<QueryType>,
+    pub min_occurrence_count: u32,
+    pub target_limit: u32,
+    pub occurrence_limit: u32,
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct LearningHistoryOccurrenceFact {
+    pub learning_record_id: i64,
+    pub query_text: String,
+    pub created_at_unix_ms: i64,
+    pub source_type: SourceType,
+    pub source_app: Option<String>,
+    pub context: Option<String>,
+    pub result_summary: Option<String>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct LearningHistoryTargetFact {
+    pub learning_target_id: i64,
+    pub learning_target_text: String,
+    pub query_type: QueryType,
+    /// 当前查询时间范围内的真实 occurrence 数。
+    pub occurrence_count: u64,
+    /// 该稳定目标自记录以来的全部真实 occurrence 数。
+    pub total_query_count: u64,
+    pub first_seen_at_unix_ms: i64,
+    pub last_seen_at_unix_ms: i64,
+    pub occurrences: Vec<LearningHistoryOccurrenceFact>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct LearningHistoryFacts {
+    pub start_unix_ms: Option<i64>,
+    pub end_unix_ms: Option<i64>,
+    pub exact_target: Option<String>,
+    pub targets: Vec<LearningHistoryTargetFact>,
+}
+
 struct StoredLearningRecord {
     id: i64,
     learning_target_id: i64,
@@ -1274,6 +1323,155 @@ impl LearningRecordStore {
         }))
     }
 
+    fn query_history(&self, query: &LearningHistoryQuery) -> Result<LearningHistoryFacts, String> {
+        validate_learning_history_query(query)?;
+
+        let mut values = Vec::<Value>::new();
+        let scope_filter =
+            if let (Some(start), Some(end)) = (query.start_unix_ms, query.end_unix_ms) {
+                values.push(Value::Integer(start));
+                values.push(Value::Integer(end));
+                " AND lr.created_at_unix_ms >= ? AND lr.created_at_unix_ms < ?"
+            } else {
+                ""
+            };
+
+        let mut target_filter = String::new();
+        let exact_target = query
+            .target_text
+            .as_deref()
+            .map(canonicalize_learning_target_text)
+            .filter(|value| !value.is_empty());
+        if let Some(target) = exact_target.as_deref() {
+            target_filter.push_str(" AND lt.normalized_target_text = ?");
+            values.push(Value::Text(target.to_string()));
+        }
+        if let Some(query_type) = query.query_type {
+            target_filter.push_str(" AND lt.query_type = ?");
+            values.push(Value::Text(query_type_to_storage(query_type).to_string()));
+        }
+        values.push(Value::Integer(i64::from(query.min_occurrence_count)));
+        values.push(Value::Integer(i64::from(query.target_limit)));
+
+        let sql = format!(
+            "WITH scoped_occurrences AS (
+               SELECT lto.learning_target_id, lr.id AS learning_record_id,
+                      lr.created_at_unix_ms
+               FROM learning_target_occurrences lto
+               JOIN learning_records lr ON lr.id = lto.learning_record_id
+               WHERE 1 = 1 {scope_filter}
+             ),
+             scoped_targets AS (
+               SELECT learning_target_id, COUNT(*) AS occurrence_count,
+                      MIN(created_at_unix_ms) AS first_seen_at_unix_ms,
+                      MAX(created_at_unix_ms) AS last_seen_at_unix_ms
+               FROM scoped_occurrences
+               GROUP BY learning_target_id
+             ),
+             lifetime_counts AS (
+               SELECT learning_target_id, COUNT(*) AS total_query_count
+               FROM learning_target_occurrences
+               GROUP BY learning_target_id
+             )
+             SELECT lt.id, lt.display_target_text, lt.query_type,
+                    scoped.occurrence_count, lifetime.total_query_count,
+                    scoped.first_seen_at_unix_ms, scoped.last_seen_at_unix_ms
+             FROM learning_targets lt
+             JOIN scoped_targets scoped ON scoped.learning_target_id = lt.id
+             JOIN lifetime_counts lifetime ON lifetime.learning_target_id = lt.id
+             WHERE lt.target_kind = 'learnable' {target_filter}
+               AND scoped.occurrence_count >= ?
+             ORDER BY scoped.last_seen_at_unix_ms DESC, lt.id DESC
+             LIMIT ?"
+        );
+        let mut statement = self
+            .connection
+            .prepare(&sql)
+            .map_err(|error| format!("Agent 学习历史目标查询无法准备：{error}"))?;
+        let rows = statement
+            .query_map(params_from_iter(values.iter()), |row| {
+                Ok((
+                    row.get::<_, i64>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                    row.get::<_, i64>(3)?,
+                    row.get::<_, i64>(4)?,
+                    row.get::<_, i64>(5)?,
+                    row.get::<_, i64>(6)?,
+                ))
+            })
+            .map_err(|error| format!("Agent 学习历史目标查询失败：{error}"))?;
+
+        let mut targets = Vec::new();
+        for row in rows {
+            let (target_id, target_text, query_type, occurrence_count, total_count, first, last) =
+                row.map_err(|error| format!("Agent 学习历史目标行读取失败：{error}"))?;
+            let occurrences = self.query_history_occurrences(
+                target_id,
+                query.start_unix_ms,
+                query.end_unix_ms,
+                query.occurrence_limit,
+            )?;
+            targets.push(LearningHistoryTargetFact {
+                learning_target_id: target_id,
+                learning_target_text: target_text,
+                query_type: query_type_from_storage(&query_type)?,
+                occurrence_count: u64::try_from(occurrence_count)
+                    .map_err(|_| "Agent 学习历史 occurrence 数量无效。".to_string())?,
+                total_query_count: u64::try_from(total_count)
+                    .map_err(|_| "Agent 学习历史总查询次数无效。".to_string())?,
+                first_seen_at_unix_ms: first,
+                last_seen_at_unix_ms: last,
+                occurrences,
+            });
+        }
+
+        Ok(LearningHistoryFacts {
+            start_unix_ms: query.start_unix_ms,
+            end_unix_ms: query.end_unix_ms,
+            exact_target,
+            targets,
+        })
+    }
+
+    fn query_history_occurrences(
+        &self,
+        learning_target_id: i64,
+        start_unix_ms: Option<i64>,
+        end_unix_ms: Option<i64>,
+        limit: u32,
+    ) -> Result<Vec<LearningHistoryOccurrenceFact>, String> {
+        let mut values = vec![Value::Integer(learning_target_id)];
+        let scope_filter = if let (Some(start), Some(end)) = (start_unix_ms, end_unix_ms) {
+            values.push(Value::Integer(start));
+            values.push(Value::Integer(end));
+            " AND lr.created_at_unix_ms >= ? AND lr.created_at_unix_ms < ?"
+        } else {
+            ""
+        };
+        values.push(Value::Integer(i64::from(limit)));
+        let sql = format!(
+            "{} WHERE lto.learning_target_id = ? {scope_filter}
+             ORDER BY lr.created_at_unix_ms DESC, lr.id DESC LIMIT ?",
+            select_learning_record_sql("")
+        );
+        let mut statement = self
+            .connection
+            .prepare(&sql)
+            .map_err(|error| format!("Agent 学习历史 occurrence 查询无法准备：{error}"))?;
+        let rows = statement
+            .query_map(params_from_iter(values.iter()), read_stored_learning_record)
+            .map_err(|error| format!("Agent 学习历史 occurrence 查询失败：{error}"))?;
+        let mut occurrences = Vec::new();
+        for row in rows {
+            let record = decode_learning_record(
+                row.map_err(|error| format!("Agent 学习历史 occurrence 行读取失败：{error}"))?,
+            )?;
+            occurrences.push(learning_history_occurrence_fact(record));
+        }
+        Ok(occurrences)
+    }
+
     /// 输入补全用的历史目标前缀查询：只取 learnable 目标，按最近出现排序。
     fn prefix_target_texts(&self, prefix: &str, limit: usize) -> Result<Vec<String>, String> {
         let sql = "SELECT lt.display_target_text, MAX(lr.created_at_unix_ms)
@@ -1328,6 +1526,32 @@ pub(crate) fn open_database(path: &Path) -> Result<Connection, String> {
     migrate(&mut connection)?;
 
     Ok(connection)
+}
+
+/// Agent 工具专用只读入口。它不执行 migration、PRAGMA 写入或任何数据修复；若
+/// 数据库尚未初始化或 schema 不可读，调用方必须诚实降级。
+pub(crate) fn query_learning_history_read_only(
+    path: &Path,
+    query: &LearningHistoryQuery,
+) -> Result<LearningHistoryFacts, String> {
+    let connection = Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY)
+        .map_err(|error| format!("ReadRay 学习记录数据库无法只读打开：{error}"))?;
+    LearningRecordStore { connection }.query_history(query)
+}
+
+/// 使用 SQLite 的本机时区规则解析“今天”，避免让模型猜测用户所在时区。
+/// 返回左闭右开的本地自然日 Unix 毫秒范围。
+pub(crate) fn local_today_bounds_read_only(path: &Path) -> Result<(i64, i64), String> {
+    let connection = Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY)
+        .map_err(|error| format!("ReadRay 学习记录数据库无法只读打开：{error}"))?;
+    connection
+        .query_row(
+            "SELECT CAST(strftime('%s', 'now', 'localtime', 'start of day', 'utc') AS INTEGER) * 1000,
+                    CAST(strftime('%s', 'now', 'localtime', 'start of day', '+1 day', 'utc') AS INTEGER) * 1000",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .map_err(|error| format!("本机今日时间范围读取失败：{error}"))
 }
 
 #[derive(Debug)]
@@ -2111,6 +2335,102 @@ fn decode_learning_target_summary(
         last_seen_at_unix_ms: row.8,
         representative_record,
     })
+}
+
+fn validate_learning_history_query(query: &LearningHistoryQuery) -> Result<(), String> {
+    match (query.start_unix_ms, query.end_unix_ms) {
+        (Some(start), Some(end)) if start < end => {}
+        (None, None) => {}
+        _ => return Err("Agent 学习历史时间范围必须同时提供有效的开始和结束时间。".to_string()),
+    }
+    if query
+        .target_text
+        .as_deref()
+        .is_some_and(|target| canonicalize_learning_target_text(target).is_empty())
+    {
+        return Err("Agent 学习历史精确目标不能为空。".to_string());
+    }
+    if query.min_occurrence_count == 0 || query.min_occurrence_count > 100 {
+        return Err("Agent 学习历史最小出现次数必须在 1 到 100 之间。".to_string());
+    }
+    if query.target_limit == 0 || query.target_limit > 20 {
+        return Err("Agent 学习历史目标数量必须在 1 到 20 之间。".to_string());
+    }
+    if query.occurrence_limit == 0 || query.occurrence_limit > 5 {
+        return Err("Agent 学习历史代表 occurrence 数量必须在 1 到 5 之间。".to_string());
+    }
+    Ok(())
+}
+
+fn learning_history_occurrence_fact(record: LearningRecord) -> LearningHistoryOccurrenceFact {
+    let result_summary = explanation_result_summary(&record.explanation_card)
+        .map(|value| compact_evidence_text(&value, 400));
+    let context_source = record
+        .context_text
+        .as_deref()
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or_else(|| record.explanation_card.source_text());
+    let context =
+        (!context_source.trim().is_empty()).then(|| compact_evidence_text(context_source, 360));
+    LearningHistoryOccurrenceFact {
+        learning_record_id: record.id,
+        query_text: compact_evidence_text(&record.query_text, 240),
+        created_at_unix_ms: record.created_at_unix_ms,
+        source_type: record.source_type,
+        source_app: record
+            .source_app
+            .map(|value| compact_evidence_text(&value, 120)),
+        context,
+        result_summary,
+    }
+}
+
+fn explanation_result_summary(card: &ExplanationCard) -> Option<String> {
+    match card {
+        ExplanationCard::Word {
+            basic_meanings,
+            context_meaning,
+            ..
+        } => context_meaning
+            .as_deref()
+            .filter(|value| !value.trim().is_empty())
+            .map(str::to_string)
+            .or_else(|| basic_meanings.first().cloned()),
+        ExplanationCard::Phrase {
+            basic_meaning,
+            context_meaning,
+            ..
+        } => context_meaning
+            .as_deref()
+            .filter(|value| !value.trim().is_empty())
+            .unwrap_or(basic_meaning)
+            .trim()
+            .to_string()
+            .into(),
+        ExplanationCard::Sentence { translation, .. } => {
+            (!translation.trim().is_empty()).then(|| translation.trim().to_string())
+        }
+        ExplanationCard::Paragraph {
+            translation,
+            summary,
+            ..
+        } => summary
+            .as_deref()
+            .filter(|value| !value.trim().is_empty())
+            .unwrap_or(translation)
+            .trim()
+            .to_string()
+            .into(),
+    }
+}
+
+fn compact_evidence_text(value: &str, max_chars: usize) -> String {
+    let compact = value.split_whitespace().collect::<Vec<_>>().join(" ");
+    let mut result: String = compact.chars().take(max_chars).collect();
+    if compact.chars().count() > max_chars {
+        result.push('…');
+    }
+    result
 }
 
 fn validate_pagination(page: Option<u32>, page_size: Option<u32>) -> Result<(u32, u32), String> {
@@ -6226,6 +6546,133 @@ INSERT INTO review_card_generation_failures (
         assert!(sources_json.is_none(), "旧消息没有来源 JSON");
         assert_eq!(truncated, 0, "旧消息默认非截断");
         drop(upgraded);
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn agent_learning_history_query_maps_ranges_exact_targets_and_repeated_facts() {
+        let (root, path) = test_database_path();
+        fs::create_dir_all(&root).unwrap();
+        let store = LearningRecordStore::open(&path).unwrap();
+
+        let turbo_old = store
+            .save(&input("turbo", SourceType::Manual), &word_card("turbo"))
+            .unwrap();
+        let turbo_recent = store
+            .save(
+                &CaptureInput {
+                    query_text: "Turbo".to_string(),
+                    context_text: Some(
+                        "The compiler enables turbo mode for this build.".to_string(),
+                    ),
+                    source_type: SourceType::WindowsUia,
+                    source_app: Some("Code.exe".to_string()),
+                },
+                &word_card("Turbo"),
+            )
+            .unwrap();
+        let lucid = store
+            .save(&input("lucid", SourceType::Clipboard), &word_card("lucid"))
+            .unwrap();
+        for (id, created_at) in [
+            (turbo_old.id, 1_000_i64),
+            (turbo_recent.id, 3_000_i64),
+            (lucid.id, 4_000_i64),
+        ] {
+            store
+                .connection
+                .execute(
+                    "UPDATE learning_records SET created_at_unix_ms = ?1 WHERE id = ?2",
+                    params![created_at, id],
+                )
+                .unwrap();
+        }
+        drop(store);
+
+        let recent_words = query_learning_history_read_only(
+            &path,
+            &LearningHistoryQuery {
+                start_unix_ms: Some(2_000),
+                end_unix_ms: Some(5_000),
+                target_text: None,
+                query_type: Some(QueryType::Word),
+                min_occurrence_count: 1,
+                target_limit: 10,
+                occurrence_limit: 2,
+            },
+        )
+        .unwrap();
+        assert_eq!(recent_words.targets.len(), 2);
+        assert_eq!(recent_words.targets[0].learning_target_text, "lucid");
+        assert!(recent_words.targets[1]
+            .learning_target_text
+            .eq_ignore_ascii_case("turbo"));
+        assert_eq!(recent_words.targets[1].occurrence_count, 1);
+        assert_eq!(recent_words.targets[1].total_query_count, 2);
+        assert_eq!(recent_words.targets[1].occurrences.len(), 1);
+        assert_eq!(
+            recent_words.targets[1].occurrences[0].source_app.as_deref(),
+            Some("Code.exe")
+        );
+        assert!(recent_words.targets[1].occurrences[0]
+            .context
+            .as_deref()
+            .is_some_and(|value| value.contains("turbo mode")));
+
+        let exact = query_learning_history_read_only(
+            &path,
+            &LearningHistoryQuery {
+                start_unix_ms: None,
+                end_unix_ms: None,
+                target_text: Some("  TURBO  ".to_string()),
+                query_type: None,
+                min_occurrence_count: 1,
+                target_limit: 1,
+                occurrence_limit: 5,
+            },
+        )
+        .unwrap();
+        assert_eq!(exact.exact_target.as_deref(), Some("turbo"));
+        assert_eq!(exact.targets.len(), 1);
+        assert_eq!(exact.targets[0].occurrence_count, 2);
+        assert_eq!(exact.targets[0].occurrences.len(), 2);
+        assert_eq!(exact.targets[0].first_seen_at_unix_ms, 1_000);
+        assert_eq!(exact.targets[0].last_seen_at_unix_ms, 3_000);
+
+        let repeated = query_learning_history_read_only(
+            &path,
+            &LearningHistoryQuery {
+                start_unix_ms: None,
+                end_unix_ms: None,
+                target_text: None,
+                query_type: None,
+                min_occurrence_count: 2,
+                target_limit: 10,
+                occurrence_limit: 1,
+            },
+        )
+        .unwrap();
+        assert_eq!(repeated.targets.len(), 1);
+        assert!(repeated.targets[0]
+            .learning_target_text
+            .eq_ignore_ascii_case("turbo"));
+        assert_eq!(repeated.targets[0].occurrence_count, 2);
+        assert_eq!(repeated.targets[0].occurrences.len(), 1);
+
+        let empty = query_learning_history_read_only(
+            &path,
+            &LearningHistoryQuery {
+                start_unix_ms: None,
+                end_unix_ms: None,
+                target_text: Some("missing-target".to_string()),
+                query_type: None,
+                min_occurrence_count: 1,
+                target_limit: 1,
+                occurrence_limit: 1,
+            },
+        )
+        .unwrap();
+        assert!(empty.targets.is_empty());
         let _ = fs::remove_dir_all(root);
     }
 }
