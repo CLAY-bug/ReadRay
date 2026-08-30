@@ -372,6 +372,16 @@ where
     let value = send_chat_completion_value_with_policy(request_body, &api_key, policy)
         .await
         .map_err(|error| TrackedChatCompletionError::Failed(error.product_message(operation)))?;
+    #[cfg(debug_assertions)]
+    if let Ok(usage) = parse_model_token_usage(&value) {
+        eprintln!(
+            "READRAY_DEEPSEEK_USAGE operation=explanation prompt_tokens={} completion_tokens={} total_tokens={} at_ms={}",
+            usage.prompt_tokens,
+            usage.completion_tokens,
+            usage.total_tokens,
+            crate::diagnostic_uptime_ms()
+        );
+    }
     decode_tracked_chat_completion_value_with_checkpoint(
         operation,
         value,
@@ -451,7 +461,35 @@ where
             .checked_sub(started_at.elapsed())
             .filter(|remaining| !remaining.is_zero())
             .ok_or(ChatCompletionRequestError::Timeout)?;
-        match operation(remaining_timeout).await {
+        let attempt = retries + 1;
+        let attempt_started = Instant::now();
+        let result = operation(remaining_timeout).await;
+        #[cfg(debug_assertions)]
+        {
+            let outcome = match &result {
+                Ok(_) => "ok".to_string(),
+                Err(ChatCompletionRequestError::Timeout) => "timeout".to_string(),
+                Err(ChatCompletionRequestError::Network) => "network".to_string(),
+                Err(ChatCompletionRequestError::Http { status_code }) => {
+                    format!("http_{status_code}")
+                }
+                Err(ChatCompletionRequestError::InvalidJson) => "invalid_json".to_string(),
+                Err(ChatCompletionRequestError::ClientConfiguration) => {
+                    "client_configuration".to_string()
+                }
+            };
+            let will_retry = matches!(
+                &result,
+                Err(error)
+                    if error.is_transient() && retries < policy.max_transient_retries
+            );
+            eprintln!(
+                "READRAY_DEEPSEEK_ATTEMPT attempt={attempt} elapsed_ms={} outcome={outcome} will_retry={will_retry} at_ms={}",
+                attempt_started.elapsed().as_millis(),
+                crate::diagnostic_uptime_ms()
+            );
+        }
+        match result {
             Ok(value) => return Ok(value),
             Err(error) if error.is_transient() && retries < policy.max_transient_retries => {
                 retries += 1;

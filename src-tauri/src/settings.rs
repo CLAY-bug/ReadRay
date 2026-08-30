@@ -96,6 +96,30 @@ pub enum CloseBehavior {
     Exit,
 }
 
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum SelectionExplanationDisplayMode {
+    ReducedMotion,
+    Standard,
+}
+
+impl SelectionExplanationDisplayMode {
+    fn storage_value(self) -> &'static str {
+        match self {
+            Self::ReducedMotion => "reduced_motion",
+            Self::Standard => "standard",
+        }
+    }
+
+    fn from_storage(value: &str) -> Result<Self, String> {
+        match value {
+            "reduced_motion" => Ok(Self::ReducedMotion),
+            "standard" => Ok(Self::Standard),
+            _ => Err("数据库包含未知的划词卡片显示模式。".to_string()),
+        }
+    }
+}
+
 impl CloseBehavior {
     fn storage_value(self) -> &'static str {
         match self {
@@ -200,6 +224,7 @@ pub struct AppPreferences {
     learning_font_size: i64,
     send_shortcut: SendShortcut,
     pub(crate) close_behavior: CloseBehavior,
+    selection_explanation_display_mode: SelectionExplanationDisplayMode,
     pub(crate) quick_query_binding: ShortcutBinding,
     pub(crate) selection_explanation_binding: ShortcutBinding,
 }
@@ -214,6 +239,7 @@ impl Default for AppPreferences {
             learning_font_size: 17,
             send_shortcut: SendShortcut::Enter,
             close_behavior: CloseBehavior::HideToTray,
+            selection_explanation_display_mode: SelectionExplanationDisplayMode::Standard,
             quick_query_binding: ShortcutBinding::chord(
                 desktop_lifecycle::DEFAULT_QUICK_QUERY_SHORTCUT,
             ),
@@ -243,7 +269,8 @@ fn read_app_preferences(connection: &Connection) -> Result<AppPreferences, Strin
     let stored = connection
         .query_row(
             "SELECT revision, ui_font, ui_font_size, learning_font, learning_font_size, send_shortcut, \
-                    close_behavior, quick_query_binding_json, selection_explanation_binding_json \
+                    close_behavior, selection_explanation_display_mode, quick_query_binding_json, \
+                    selection_explanation_binding_json \
              FROM app_preferences WHERE id = 1",
             [],
             |row| {
@@ -257,6 +284,7 @@ fn read_app_preferences(connection: &Connection) -> Result<AppPreferences, Strin
                     row.get::<_, String>(6)?,
                     row.get::<_, String>(7)?,
                     row.get::<_, String>(8)?,
+                    row.get::<_, String>(9)?,
                 ))
             },
         )
@@ -269,8 +297,11 @@ fn read_app_preferences(connection: &Connection) -> Result<AppPreferences, Strin
         learning_font_size: stored.4,
         send_shortcut: SendShortcut::from_storage(&stored.5)?,
         close_behavior: CloseBehavior::from_storage(&stored.6)?,
-        quick_query_binding: ShortcutBinding::from_storage(&stored.7, "快速查询")?,
-        selection_explanation_binding: ShortcutBinding::from_storage(&stored.8, "选区解释")?,
+        selection_explanation_display_mode: SelectionExplanationDisplayMode::from_storage(
+            &stored.7,
+        )?,
+        quick_query_binding: ShortcutBinding::from_storage(&stored.8, "快速查询")?,
+        selection_explanation_binding: ShortcutBinding::from_storage(&stored.9, "选区解释")?,
     };
     validate_app_preferences(&preferences)?;
     Ok(preferences)
@@ -289,9 +320,9 @@ fn save_app_preferences(
             "UPDATE app_preferences \
              SET revision = revision + 1, ui_font = ?1, ui_font_size = ?2, \
                  learning_font = ?3, learning_font_size = ?4, send_shortcut = ?5, \
-                 close_behavior = ?6, quick_query_binding_json = ?7, \
-                 selection_explanation_binding_json = ?8 \
-             WHERE id = 1 AND revision = ?9",
+                 close_behavior = ?6, selection_explanation_display_mode = ?7, \
+                 quick_query_binding_json = ?8, selection_explanation_binding_json = ?9 \
+             WHERE id = 1 AND revision = ?10",
             params![
                 preferences.ui_font.storage_value(),
                 preferences.ui_font_size,
@@ -299,6 +330,9 @@ fn save_app_preferences(
                 preferences.learning_font_size,
                 preferences.send_shortcut.storage_value(),
                 preferences.close_behavior.storage_value(),
+                preferences
+                    .selection_explanation_display_mode
+                    .storage_value(),
                 preferences.quick_query_binding.storage_json("快速查询")?,
                 preferences
                     .selection_explanation_binding
@@ -941,11 +975,16 @@ mod tests {
                 learning_font: LearningFont::SourceHanSerif,
                 learning_font_size: 19,
                 send_shortcut: SendShortcut::CtrlEnter,
+                selection_explanation_display_mode: SelectionExplanationDisplayMode::ReducedMotion,
                 ..defaults
             },
         )
         .unwrap();
         assert_eq!(saved.revision, 1);
+        assert_eq!(
+            saved.selection_explanation_display_mode,
+            SelectionExplanationDisplayMode::ReducedMotion
+        );
         drop(connection);
 
         let reopened = learning_records::open_database(&database_path).unwrap();

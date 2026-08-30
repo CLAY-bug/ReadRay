@@ -21,6 +21,13 @@ export const anchoredWindowDragCommands: OverlayDragCommands = {
   finish: "finish_anchored_window_drag",
 };
 
+// 固定时仍是同一个 overlay 页面，只把拖动命令切换到固定卡生命周期。
+export const pinnedCardDragCommands: OverlayDragCommands = {
+  begin: "begin_pinned_card_drag",
+  drag: "drag_pinned_card",
+  finish: "finish_pinned_card_drag",
+};
+
 type DragStartEvent = {
   button: number;
   screenX: number;

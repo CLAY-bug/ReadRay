@@ -19,8 +19,9 @@ use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::collections::HashMap;
 use std::future::Future;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 const EXPLANATION_CARD_TOTAL_TIMEOUT: Duration = Duration::from_secs(10);
 const EXPLANATION_CARD_MAX_TRANSIENT_RETRIES: u8 = 1;
@@ -32,6 +33,28 @@ const EXPLANATION_CARD_TEMPERATURE: f32 = 0.2;
 const EXPLANATION_REQUEST_CANCELLED: &str = "READRAY_EXPLANATION_REQUEST_CANCELLED";
 const EXPLANATION_MODEL_REVISION: &str = "deepseek-chat-completions-thinking-disabled-v1";
 const EXPLANATION_PROMPT_VERSION: &str = "explanation-card-directional-v7";
+static EXPLANATION_TIMING_TRACE_SEQUENCE: AtomicU64 = AtomicU64::new(1);
+
+fn next_explanation_timing_trace_id() -> u64 {
+    EXPLANATION_TIMING_TRACE_SEQUENCE.fetch_add(1, Ordering::Relaxed)
+}
+
+macro_rules! log_explanation_timing {
+    ($trace_id:expr, $phase:expr, $phase_started:expr, $total_started:expr, $outcome:expr $(,)?) => {{
+        #[cfg(debug_assertions)]
+        eprintln!(
+            "READRAY_EXPLANATION_TIMING trace={} phase={} elapsed_ms={} total_ms={} outcome={} at_ms={}",
+            $trace_id,
+            $phase,
+            $phase_started.elapsed().as_millis(),
+            $total_started.elapsed().as_millis(),
+            $outcome,
+            crate::diagnostic_uptime_ms()
+        );
+        #[cfg(not(debug_assertions))]
+        let _ = ($trace_id, $phase, $phase_started, $total_started, $outcome);
+    }};
+}
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, Hash, PartialEq)]
 #[serde(rename_all = "snake_case")]
@@ -535,6 +558,8 @@ pub async fn create_explanation_card(
     request_scope: ExplanationRequestScope,
     minimal_context_text: Option<String>,
 ) -> Result<ExplanationCard, String> {
+    let trace_id = next_explanation_timing_trace_id();
+    let total_started = Instant::now();
     let authority = explanation_request_authority();
     let (request, abort_registration) = authority
         .register(request_scope, request_key)
@@ -545,18 +570,35 @@ pub async fn create_explanation_card(
         input.clone(),
         minimal_context_text,
         cache_authority_for_request(Arc::clone(&request)),
+        trace_id,
+        total_started,
     );
     let card = Abortable::new(provider_request, abort_registration)
         .await
         .map_err(|_| cancelled_request_error())?
         .map_err(|error| friendly_explanation_error(&error))?;
-    request
-        .commit_if_current(|| {
-            learning_records::save_for_app(&app, &input, &card)
-                .map(|_| ())
-                .map_err(|error| format!("ExplanationCard 保存失败：{error}"))
-        })
-        .map_err(|error| friendly_explanation_error(&error))?;
+
+    let save_started = Instant::now();
+    let saved = request.commit_if_current(|| {
+        learning_records::save_for_app(&app, &input, &card)
+            .map(|_| ())
+            .map_err(|error| format!("ExplanationCard 保存失败：{error}"))
+    });
+    log_explanation_timing!(
+        trace_id,
+        "learning_record_save",
+        save_started,
+        total_started,
+        if saved.is_ok() { "ok" } else { "error" },
+    );
+    saved.map_err(|error| friendly_explanation_error(&error))?;
+    log_explanation_timing!(
+        trace_id,
+        "command_total",
+        total_started,
+        total_started,
+        "ok",
+    );
 
     Ok(card)
 }
@@ -566,6 +608,8 @@ async fn resolve_explanation_card(
     input: CaptureInput,
     minimal_context_text: Option<String>,
     waiter_authority: WaiterCacheAuthority,
+    trace_id: u64,
+    total_started: Instant,
 ) -> Result<ExplanationCard, String> {
     let model_context_text = select_model_context(&input, minimal_context_text.as_deref());
     let spec = ExplanationCacheSpec::new(
@@ -589,19 +633,31 @@ async fn resolve_explanation_card(
         cache_key,
         waiter_authority,
         move |manager, flight_cache_key, flight_id| async move {
-            if let Some(card) =
+            let cache_lookup_started = Instant::now();
+            let cached =
                 explanation_cache::lookup_for_app(&provider_app, &provider_spec, &provider_input)
-                    .await
-            {
+                    .await;
+            log_explanation_timing!(
+                trace_id,
+                "cache_lookup",
+                cache_lookup_started,
+                total_started,
+                if cached.is_some() { "hit" } else { "miss" },
+            );
+            if let Some(card) = cached {
                 return Ok(card);
             }
-            let card = create_explanation_card_for_input(
+            let provider_result = create_explanation_card_for_input(
                 &provider_app,
                 &provider_input,
                 provider_spec.minimal_context_text.as_deref(),
                 || manager.has_waiters(&flight_cache_key, flight_id),
+                trace_id,
+                total_started,
             )
-            .await?;
+            .await;
+            let card = provider_result?;
+            let cache_write_started = Instant::now();
             let cache_written =
                 manager.commit_if_current_waiter(&flight_cache_key, flight_id, || {
                     explanation_cache::upsert_for_app_fail_open(
@@ -611,6 +667,13 @@ async fn resolve_explanation_card(
                         &card,
                     );
                 });
+            log_explanation_timing!(
+                trace_id,
+                "cache_write",
+                cache_write_started,
+                total_started,
+                if cache_written { "ok" } else { "cancelled" },
+            );
             if !cache_written {
                 return Err(cancelled_request_error());
             }
@@ -618,8 +681,25 @@ async fn resolve_explanation_card(
             Ok(card)
         },
     )?;
+    let shared_wait_started = Instant::now();
     let shared_card = waiter.wait().await?;
-    explanation_cache::rebind_and_validate_card(&input, &spec, shared_card)
+    log_explanation_timing!(
+        trace_id,
+        "single_flight_wait",
+        shared_wait_started,
+        total_started,
+        "ok",
+    );
+    let validation_started = Instant::now();
+    let validated = explanation_cache::rebind_and_validate_card(&input, &spec, shared_card);
+    log_explanation_timing!(
+        trace_id,
+        "cache_rebind_validate",
+        validation_started,
+        total_started,
+        if validated.is_ok() { "ok" } else { "error" },
+    );
+    validated
 }
 
 fn select_model_context(
@@ -673,25 +753,57 @@ pub(crate) async fn create_explanation_card_for_input(
     input: &CaptureInput,
     minimal_context_text: Option<&str>,
     is_current: impl Fn() -> bool,
+    trace_id: u64,
+    total_started: Instant,
 ) -> Result<ExplanationCard, String> {
+    let request_build_started = Instant::now();
     let request_body = build_request_body(input, minimal_context_text)?;
-    let response: DeepSeekChatResponse = post_tracked_chat_completion_with_policy_and_checkpoint(
-        app,
-        ModelUsageCategory::ExplanationQuery,
-        "DeepSeek ExplanationCard",
-        &request_body,
-        ChatCompletionRequestPolicy::new(
-            EXPLANATION_CARD_TOTAL_TIMEOUT,
-            EXPLANATION_CARD_MAX_TRANSIENT_RETRIES,
-        ),
-        is_current,
-    )
-    .await
-    .map_err(|error| match error {
+    log_explanation_timing!(
+        trace_id,
+        "request_build",
+        request_build_started,
+        total_started,
+        "ok",
+    );
+    let provider_started = Instant::now();
+    let provider_result: Result<DeepSeekChatResponse, TrackedChatCompletionError> =
+        post_tracked_chat_completion_with_policy_and_checkpoint(
+            app,
+            ModelUsageCategory::ExplanationQuery,
+            "DeepSeek ExplanationCard",
+            &request_body,
+            ChatCompletionRequestPolicy::new(
+                EXPLANATION_CARD_TOTAL_TIMEOUT,
+                EXPLANATION_CARD_MAX_TRANSIENT_RETRIES,
+            ),
+            is_current,
+        )
+        .await;
+    log_explanation_timing!(
+        trace_id,
+        "provider_request",
+        provider_started,
+        total_started,
+        match &provider_result {
+            Ok(_) => "ok",
+            Err(TrackedChatCompletionError::Cancelled) => "cancelled",
+            Err(TrackedChatCompletionError::Failed(_)) => "error",
+        },
+    );
+    let response = provider_result.map_err(|error| match error {
         TrackedChatCompletionError::Cancelled => cancelled_request_error(),
         TrackedChatCompletionError::Failed(error) => error,
     })?;
-    finish_explanation_response(input, response)
+    let response_validation_started = Instant::now();
+    let card = finish_explanation_response(input, response);
+    log_explanation_timing!(
+        trace_id,
+        "response_parse_validate",
+        response_validation_started,
+        total_started,
+        if card.is_ok() { "ok" } else { "error" },
+    );
+    card
 }
 
 fn build_request_body(

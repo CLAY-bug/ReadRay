@@ -70,6 +70,13 @@ button:active {
   overflow: hidden;
 }
 
+html.is-anchored-preparing .anchored-result-popover,
+html.is-anchored-preparing .anchored-query-status,
+html.is-anchored-preparing .anchored-window-drag-region {
+  visibility: hidden !important;
+  pointer-events: none !important;
+}
+
 .mock-reader-line {
   position: absolute;
   top: 34px;
@@ -1359,6 +1366,10 @@ button:active {
   cursor: grab;
 }
 
+.anchored-window-drag-region.has-pin-control {
+  right: 48px;
+}
+
 .anchored-window-drag-region:active {
   cursor: grabbing;
 }
@@ -1406,6 +1417,63 @@ button:active {
   min-height: 0;
   max-height: calc(100vh - 16px);
   overflow: auto;
+}
+
+.anchored-result-popover.has-pin-control .explanation-content__header {
+  padding-right: 28px;
+}
+
+.anchored-pin-button {
+  position: absolute;
+  top: 11px;
+  right: 11px;
+  z-index: 40;
+  display: grid;
+  width: 30px;
+  height: 30px;
+  place-items: center;
+  border: 0;
+  border-radius: 50%;
+  padding: 0;
+  color: rgba(213, 201, 187, 0.48);
+  background: transparent;
+  box-shadow: none;
+  transition:
+    color 140ms ease,
+    background 140ms ease,
+    transform 140ms ease;
+}
+
+.anchored-pin-button svg {
+  width: 16px;
+  height: 16px;
+  overflow: visible;
+  fill: none;
+  stroke: currentColor;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 1.45;
+  transform: rotate(-14deg) translateY(-0.5px);
+  transition:
+    fill 140ms ease,
+    transform 140ms ease;
+}
+
+.anchored-pin-button:hover:not(:disabled) {
+  color: rgba(246, 240, 232, 0.86);
+  background: rgba(246, 240, 232, 0.055);
+  transform: translateY(-1px);
+}
+
+.anchored-pin-button.is-pinned {
+  color: var(--rr-color-amber);
+  background: rgba(255, 106, 50, 0.08);
+  transform: translateY(1px);
+}
+
+.anchored-pin-button.is-pinned svg {
+  fill: rgba(255, 106, 50, 0.18);
+  transform: rotate(0deg) translateY(1px);
 }
 
 .anchored-result-popover.is-window-overlay::before {

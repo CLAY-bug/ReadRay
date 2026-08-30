@@ -5,6 +5,7 @@ import {
   useRef,
   useState,
   type CSSProperties,
+  type MouseEvent as ReactMouseEvent,
 } from "react";
 import { Channel, invoke } from "@tauri-apps/api/core";
 import { emit, listen } from "@tauri-apps/api/event";
@@ -16,6 +17,7 @@ import AnchoredResultPopover, {
 import {
   anchoredWindowDragCommands,
   beginOverlayWindowDrag,
+  pinnedCardDragCommands,
 } from "./overlayWindowDrag";
 import CenteredCommandInput from "./components/CenteredCommandInput";
 import CenteredResultPanel, {
@@ -157,12 +159,23 @@ type OverlayWindowStage =
   | "error"
   | "quick-ai";
 
+const ANCHORED_PREPARING_CLASS = "is-anchored-preparing";
+const ANCHORED_LOADING_GRACE_MS = 100;
+
+function setAnchoredPreparing(preparing: boolean) {
+  document.documentElement.classList.toggle(
+    ANCHORED_PREPARING_CLASS,
+    preparing,
+  );
+}
+
 type WindowsUiaCapture = {
   selectedText?: string | null;
   contextText?: string | null;
   minimalContext?: string | null;
   anchorRect?: AnchorRect | null;
   foreground?: {
+    hwnd?: number;
     executablePath?: string | null;
     windowTitle?: string | null;
   };
@@ -276,6 +289,9 @@ function OverlayApp() {
   const [anchoredQuery, setAnchoredQuery] = useState("");
   const [anchoredResult, setAnchoredResult] =
     useState<ExplanationResult>(mockExplanationResult);
+  const [anchoredCard, setAnchoredCard] = useState<ExplanationCard | null>(null);
+  const [anchoredPinPending, setAnchoredPinPending] = useState(false);
+  const [anchoredPinned, setAnchoredPinned] = useState(false);
   const [anchoredError, setAnchoredError] = useState<string>();
   const [showDevControls, setShowDevControls] = useState(false);
   const [commandOpen, setCommandOpen] = useState(true);
@@ -326,13 +342,22 @@ function OverlayApp() {
   const quickAiRenameRequestId = useRef(0);
   const quickAiConversationRef = useRef<QuickAiConversation | null>(null);
   const anchoredSourceRect = useRef<AnchorRect | null>(null);
+  const anchoredSourceWindowHwnd = useRef<number | null>(null);
   const anchoredResizeFrame = useRef<number | null>(null);
   const anchoredResizePending = useRef<{
     width: number;
     height: number;
   } | null>(null);
   const anchoredResizeGeneration = useRef(0);
+  const anchoredLoadingTimer = useRef<number | null>(null);
+  const anchoredWindowPresented = useRef(false);
   const anchoredWindowDragged = useRef(false);
+  const anchoredPinnedClosing = useRef(false);
+  const previousPinnedPrimaryMouseDown = useRef<{
+    at: number;
+    screenX: number;
+    screenY: number;
+  } | null>(null);
 
   const setQuickAiConversation = useCallback(
     (conversation: QuickAiConversation | null) => {
@@ -431,21 +456,32 @@ function OverlayApp() {
     setQuickAiError(undefined);
   }, [setQuickAiConversation]);
 
-  const showCommandOverlay = useCallback(() => {
-    explanationRequests.invalidateAll();
-    setPreviewMode("command");
-    setCommandOpen(true);
-  }, [explanationRequests]);
-
   const resetAnchoredResize = useCallback(() => {
     anchoredResizeGeneration.current += 1;
     if (anchoredResizeFrame.current !== null) {
       window.cancelAnimationFrame(anchoredResizeFrame.current);
       anchoredResizeFrame.current = null;
     }
+    if (anchoredLoadingTimer.current !== null) {
+      window.clearTimeout(anchoredLoadingTimer.current);
+      anchoredLoadingTimer.current = null;
+    }
     anchoredResizePending.current = null;
+    anchoredWindowPresented.current = false;
     anchoredWindowDragged.current = false;
+    anchoredPinnedClosing.current = false;
+    previousPinnedPrimaryMouseDown.current = null;
+    setAnchoredPinPending(false);
+    setAnchoredPinned(false);
+    setAnchoredPreparing(false);
   }, []);
+
+  const showCommandOverlay = useCallback(() => {
+    explanationRequests.invalidateAll();
+    resetAnchoredResize();
+    setPreviewMode("command");
+    setCommandOpen(true);
+  }, [explanationRequests, resetAnchoredResize]);
 
   const closeAnchoredOverlay = useCallback(async () => {
     explanationRequests.invalidate("anchored");
@@ -466,29 +502,57 @@ function OverlayApp() {
     }
 
     resetAnchoredResize();
+    const resizeGeneration = anchoredResizeGeneration.current;
+    setAnchoredPreparing(true);
     explanationRequests.invalidate("manual");
     const requestKey = explanationRequests.begin("anchored");
     anchoredSourceRect.current = capturedAnchorRect;
+    anchoredSourceWindowHwnd.current = capture.foreground?.hwnd ?? null;
     setAnchoredQuery(selectedText);
+    setAnchoredCard(null);
     setAnchoredError(undefined);
     setAnchoredStage("loading");
     setPopoverOpen(true);
     setPreviewMode("anchored");
 
-    await new Promise<void>((resolve) => window.requestAnimationFrame(() => resolve()));
-
     try {
-      await invoke("present_anchored_overlay_window", {
-        stage: "loading",
+      await invoke("prepare_anchored_overlay_window", {
         anchorRect: capturedAnchorRect,
       });
     } catch (error) {
       if (explanationRequests.isCurrent("anchored", requestKey)) {
         explanationRequests.finish("anchored", requestKey);
         setAnchoredStage("error");
-        setAnchoredError(`无法显示划词浮层：${formatError(error)}`);
+        setAnchoredError(`无法准备划词浮层：${formatError(error)}`);
       }
+      setAnchoredPreparing(false);
       return;
+    }
+
+    if (preferences.selectionExplanationDisplayMode === "standard") {
+      anchoredLoadingTimer.current = window.setTimeout(() => {
+        anchoredLoadingTimer.current = null;
+        if (
+          resizeGeneration !== anchoredResizeGeneration.current ||
+          !explanationRequests.isCurrent("anchored", requestKey)
+        ) {
+          return;
+        }
+        void invoke("present_anchored_loading_window", {
+          anchorRect: capturedAnchorRect,
+        })
+          .then(() => {
+            if (
+              resizeGeneration === anchoredResizeGeneration.current &&
+              explanationRequests.isCurrent("anchored", requestKey)
+            ) {
+              setAnchoredPreparing(false);
+            }
+          })
+          .catch((error) => {
+            setWindowCheck({ state: "warn", detail: formatError(error) });
+          });
+      }, ANCHORED_LOADING_GRACE_MS);
     }
 
     const input: CaptureInput = {
@@ -508,8 +572,13 @@ function OverlayApp() {
       if (!explanationRequests.isCurrent("anchored", requestKey)) {
         return;
       }
+      if (anchoredLoadingTimer.current !== null) {
+        window.clearTimeout(anchoredLoadingTimer.current);
+        anchoredLoadingTimer.current = null;
+      }
       notifyLearningRecordCreated();
 
+      setAnchoredCard(card);
       setAnchoredResult(mapExplanationCard(card));
       setAnchoredStage("result");
       explanationRequests.finish("anchored", requestKey);
@@ -518,7 +587,12 @@ function OverlayApp() {
         return;
       }
       explanationRequests.finish("anchored", requestKey);
+      if (anchoredLoadingTimer.current !== null) {
+        window.clearTimeout(anchoredLoadingTimer.current);
+        anchoredLoadingTimer.current = null;
+      }
       if (isExplanationRequestCancelled(error)) {
+        setAnchoredPreparing(false);
         setPopoverOpen(false);
         return;
       }
@@ -528,15 +602,34 @@ function OverlayApp() {
       await new Promise<void>((resolve) =>
         window.requestAnimationFrame(() => resolve()),
       );
+      if (resizeGeneration !== anchoredResizeGeneration.current) {
+        return;
+      }
+      anchoredWindowPresented.current = true;
       await invoke("present_anchored_overlay_window", {
-        stage: "error",
+        width: 430,
+        height: 132,
         anchorRect: capturedAnchorRect,
-      }).catch(() => undefined);
+      }).catch(() => {
+        if (resizeGeneration === anchoredResizeGeneration.current) {
+          anchoredWindowPresented.current = false;
+        }
+      });
+      if (resizeGeneration === anchoredResizeGeneration.current) {
+        setAnchoredPreparing(false);
+      }
     }
-  }, [explanationRequests, resetAnchoredResize]);
+  }, [
+    explanationRequests,
+    preferences.selectionExplanationDisplayMode,
+    resetAnchoredResize,
+  ]);
 
   const handleAnchoredContentSizeChange = useCallback(
     (size: { width: number; height: number }) => {
+      if (anchoredPinned) {
+        return;
+      }
       anchoredResizePending.current = size;
       if (anchoredResizeFrame.current !== null) {
         return;
@@ -561,16 +654,98 @@ function OverlayApp() {
           return;
         }
 
-        void invoke("resize_anchored_overlay_window", {
-          width: nextSize.width,
-          height: nextSize.height,
-          anchorRect: currentAnchorRect,
-        }).catch((error) => {
-          setWindowCheck({ state: "warn", detail: formatError(error) });
-        });
+        const shouldPresent = !anchoredWindowPresented.current;
+        anchoredWindowPresented.current = true;
+        void invoke(
+          shouldPresent
+            ? "present_anchored_overlay_window"
+            : "resize_anchored_overlay_window",
+          {
+            width: nextSize.width,
+            height: nextSize.height,
+            anchorRect: currentAnchorRect,
+          },
+        )
+          .then(() => {
+            if (
+              generation === anchoredResizeGeneration.current &&
+              shouldPresent
+            ) {
+              setAnchoredPreparing(false);
+            }
+          })
+          .catch((error) => {
+            if (generation === anchoredResizeGeneration.current && shouldPresent) {
+              anchoredWindowPresented.current = false;
+            }
+            setWindowCheck({ state: "warn", detail: formatError(error) });
+          });
       });
     },
-    [],
+    [anchoredPinned],
+  );
+
+  const closePromotedPinnedCard = useCallback(() => {
+    if (anchoredPinnedClosing.current) {
+      return;
+    }
+    anchoredPinnedClosing.current = true;
+    void invoke("close_pinned_card").catch((error) => {
+      anchoredPinnedClosing.current = false;
+      setWindowCheck({ state: "warn", detail: formatError(error) });
+    });
+  }, []);
+
+  const pinAnchoredCard = useCallback(async () => {
+    if (!anchoredCard || anchoredPinPending || anchoredPinned) {
+      return;
+    }
+    setAnchoredPinPending(true);
+    try {
+      await invoke("promote_overlay_to_pinned_card", {
+        card: anchoredCard,
+        sourceWindowHwnd: anchoredSourceWindowHwnd.current,
+      });
+      anchoredResizeGeneration.current += 1;
+      if (anchoredResizeFrame.current !== null) {
+        window.cancelAnimationFrame(anchoredResizeFrame.current);
+        anchoredResizeFrame.current = null;
+      }
+      anchoredResizePending.current = null;
+      anchoredWindowDragged.current = true;
+      setAnchoredPinned(true);
+      setAnchoredPinPending(false);
+    } catch (error) {
+      setAnchoredPinPending(false);
+      setWindowCheck({ state: "warn", detail: formatError(error) });
+    }
+  }, [anchoredCard, anchoredPinPending, anchoredPinned]);
+
+  const handlePromotedPinnedMouseDownCapture = useCallback(
+    (event: ReactMouseEvent<HTMLElement>) => {
+      if (!anchoredPinned || event.button !== 0) {
+        return;
+      }
+      const current = {
+        at: window.performance.now(),
+        screenX: event.screenX,
+        screenY: event.screenY,
+      };
+      const previous = previousPinnedPrimaryMouseDown.current;
+      previousPinnedPrimaryMouseDown.current = current;
+      if (
+        previous &&
+        current.at - previous.at <= 400 &&
+        Math.abs(current.screenX - previous.screenX) <= 6 &&
+        Math.abs(current.screenY - previous.screenY) <= 6
+      ) {
+        previousPinnedPrimaryMouseDown.current = null;
+        event.preventDefault();
+        event.stopPropagation();
+        closePromotedPinnedCard();
+      }
+    },
+    [anchoredPinned, closePromotedPinnedCard],
   );
 
   useEffect(() => {
@@ -578,6 +753,9 @@ function OverlayApp() {
   }, [resetAnchoredResize]);
 
   const consumeOverlayIntent = useCallback(async () => {
+    if (anchoredPinned) {
+      return;
+    }
     try {
       const intent = await invoke<OverlayIntent | null>("take_overlay_intent");
       if (!intent) {
@@ -595,7 +773,7 @@ function OverlayApp() {
     } catch (error) {
       setWindowCheck({ state: "warn", detail: formatError(error) });
     }
-  }, [runAnchoredQuery, showCommandOverlay]);
+  }, [anchoredPinned, runAnchoredQuery, showCommandOverlay]);
 
   useEffect(() => {
     let unlistenOverlayIntent: (() => void) | undefined;
@@ -620,6 +798,7 @@ function OverlayApp() {
       setCommandOpen(false);
       setPopoverOpen(false);
       explanationRequests.invalidateAll();
+      resetAnchoredResize();
     })
       .then((dispose) => {
         unlistenHidden = dispose;
@@ -633,7 +812,7 @@ function OverlayApp() {
       unlistenOverlayIntent?.();
       unlistenHidden?.();
     };
-  }, [consumeOverlayIntent, explanationRequests]);
+  }, [consumeOverlayIntent, explanationRequests, resetAnchoredResize]);
 
   useEffect(
     () => () => {
@@ -664,6 +843,13 @@ function OverlayApp() {
     }
 
     if (!nextOpen) {
+      if (anchoredPinned) {
+        closePromotedPinnedCard();
+        return;
+      }
+      if (anchoredPinPending) {
+        return;
+      }
       void closeAnchoredOverlay();
     }
   }
@@ -1116,6 +1302,8 @@ function OverlayApp() {
     <main
       className="app-shell"
       onContextMenu={(event) => event.preventDefault()}
+      onMouseDownCapture={handlePromotedPinnedMouseDownCapture}
+      onDoubleClick={anchoredPinned ? closePromotedPinnedCard : undefined}
     >
       <section className="compact-preview" aria-label="ReadRay 桌面浮层">
         <QuickAiPanel
@@ -1170,9 +1358,20 @@ function OverlayApp() {
           ) : (
             <>
               <div
-                className="anchored-window-drag-region"
+                className={`anchored-window-drag-region${
+                  anchoredStage === "result" ? " has-pin-control" : ""
+                }`}
                 onMouseDown={(event) => {
-                  if (beginOverlayWindowDrag(event, anchoredWindowDragCommands)) {
+                  if (
+                    beginOverlayWindowDrag(
+                      event,
+                      anchoredPinned
+                        ? pinnedCardDragCommands
+                        : anchoredWindowDragCommands,
+                      ".anchored-pin-button",
+                    ) &&
+                    !anchoredPinned
+                  ) {
                     anchoredWindowDragged.current = true;
                   }
                 }}
@@ -1186,32 +1385,51 @@ function OverlayApp() {
                   onOpenChange={handleAnchoredOpenChange}
                   embedded
                   highlightText={anchoredQuery}
-                  onContentSizeChange={handleAnchoredContentSizeChange}
+                  onContentSizeChange={
+                    anchoredPinned ? undefined : handleAnchoredContentSizeChange
+                  }
+                  pinControl={{
+                    pinned: anchoredPinned || anchoredPinPending,
+                    onChange: anchoredPinned
+                      ? closePromotedPinnedCard
+                      : () => void pinAnchoredCard(),
+                  }}
                 />
-              ) : (
+              ) : anchoredStage === "loading" &&
+                preferences.selectionExplanationDisplayMode === "standard" ? (
                 <section
-                  className={`anchored-query-status is-${anchoredStage}`}
+                  className="anchored-query-status is-loading"
                   aria-live="polite"
-                  aria-busy={anchoredStage === "loading"}
+                  aria-busy="true"
                 >
                   <div className="anchored-query-status__header">
                     <span className="anchored-query-status__query">
                       {anchoredQuery}
                     </span>
-                    {anchoredStage === "loading" ? (
-                      <span
-                        className="anchored-query-status__loading-dot"
-                        aria-hidden="true"
-                      />
-                    ) : null}
+                    <span
+                      className="anchored-query-status__loading-dot"
+                      aria-hidden="true"
+                    />
                   </div>
                   <p className="anchored-query-status__message">
-                    {anchoredStage === "loading"
-                      ? "正在生成语境解释…"
-                      : anchoredError ?? "解释失败，请稍后重试。"}
+                    正在生成语境解释…
                   </p>
                 </section>
-              )}
+              ) : anchoredStage === "error" ? (
+                <section
+                  className="anchored-query-status is-error"
+                  aria-live="polite"
+                >
+                  <div className="anchored-query-status__header">
+                    <span className="anchored-query-status__query">
+                      {anchoredQuery}
+                    </span>
+                  </div>
+                  <p className="anchored-query-status__message">
+                    {anchoredError ?? "解释失败，请稍后重试。"}
+                  </p>
+                </section>
+              ) : null}
             </>
           )
         ) : (

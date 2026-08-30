@@ -5,8 +5,8 @@ project:
 
 meta:
   version: "2.0"
-  last_updated: "2026-08-28"
-  updated_by: "Claude Code"
+  last_updated: "2026-08-30"
+  updated_by: "Codex"
   source_of_truth: "docs/RESOURCE_MAP.yml"
   language: "zh-CN"
 
@@ -292,7 +292,7 @@ source_areas:
     status: "active"
     read_when:
       - "开发解释卡、历史页、写作页、复盘页、设置页。"
-    notes: "Tauri + Vite + React + TypeScript 脚手架入口；App.tsx 按 URL 区分 main 与 overlay：main 只装配主应用窗口控制，默认入口继续承载 Ctrl+Alt+R 无选区解释、Quick AI 和 UIA 锚定卡链路。ExplanationCard 的 manual/anchored 请求通过 explanationRequestAuthority 以实例级随机 nonce + sequence 分作用域生成 requestKey，编辑、隐藏、切换模式和卸载会使旧 key 失效并调用 Rust 取消，只有当前 key 可通知学习记录刷新。主应用在 App 层同时装配 ReviewPreparationCoordinator 与 ReviewQualityCoordinator，两者都跨 ReviewPage 卸载存活；装配层向外壳注入 ReviewService、后台预热控制器与两个协调器。ReviewQualityCoordinator 通过 DesktopSaveCoordinator mutation gate 拒绝退出期间的新反馈，并注册应用级 flush 供安全退出等待。"
+    notes: "Tauri + Vite + React + TypeScript 脚手架入口；App.tsx 仅按 URL 区分 main 与 overlay：main 装配主应用窗口，overlay 承载 Ctrl+Alt+R 无选区解释、Quick AI 和 UIA 锚定卡。固定时仍保留当前 OverlayApp、ExplanationCard 状态和原生窗口，只将交互状态切换为 fixed；没有第二套 pinned-card 页面，也不重新加载字体或重新测量内容。ExplanationCard 的 manual/anchored 请求通过 explanationRequestAuthority 以实例级随机 nonce + sequence 分作用域生成 requestKey，编辑、隐藏、切换模式和卸载会使旧 key 失效并调用 Rust 取消，只有当前 key 可通知学习记录刷新。UIA 划词先用 Win32 全局 alpha=0、鼠标穿透且不抢焦点的准备窗口唤醒隐藏 WebView2；默认在请求超过 100ms 时先显示 430×92 紧凑加载卡，缓存快速命中跳过。用户开启“减少动态效果”后，继续等待结果完成渲染和测量才以最终尺寸正式显示；加载卡不抢焦点，最终结果仍走既有 present/resize。pin 成功后前端冻结该窗口的 anchored resize，拖动、Esc、双击和 pin 关闭改走固定卡命令；后续 overlay intent 只由后台新活动窗口消费。主应用在 App 层同时装配 ReviewPreparationCoordinator 与 ReviewQualityCoordinator，两者都跨 ReviewPage 卸载存活；装配层向外壳注入 ReviewService、后台预热控制器与两个协调器。ReviewQualityCoordinator 通过 DesktopSaveCoordinator mutation gate 拒绝退出期间的新反馈，并注册应用级 flush 供安全退出等待。"
     risk: "不要在前端入口塞入原生系统逻辑，也不要让复习质量反馈协调器回到页面本地生命周期。"
 
   - path: "src/explanationRequestAuthority.js"
@@ -303,14 +303,14 @@ source_areas:
     notes: "零依赖纯状态模块；生产默认使用 crypto.randomUUID（缺失时使用原生 getRandomValues）生成经白名单和长度校验的实例 nonce，requestKey 格式为 scope:nonce:sequence，使旧实例迟到 cancel 与新实例 key 隔离。新请求取消同作用域旧 key，invalidateAll 用于隐藏、模式切换和卸载，失败完成后新 key 可重试。App 仍负责调用 typed Tauri command，Rust 才是落库权威。"
     risk: "前端守卫不能替代 Rust 可取消 future 与保存前权威检查；manual/anchored 不得互相误取消。"
 
-  - path: "src/anchoredWindowDrag.ts"
-    purpose: "划词锚定浮层的原生窗口拖动入口（仅本次显示生效）。"
+  - path: "src/overlayWindowDrag.ts"
+    purpose: "overlay、划词锚定浮层与固定解释卡的共享原生窗口拖动入口。"
     status: "active"
     read_when:
-      - "调整划词结果/加载/错误卡片的拖动行为。"
+      - "调整 overlay、划词加载/结果/错误卡片或固定卡片的拖动行为。"
       - "排查拖动后浮层位置或 overlay 位置缓存被污染。"
-    notes: "App 在 anchored 非 mock 分支渲染顶部透明拖动热区，mousedown 后按序调用 begin/drag/finish_anchored_window_drag；Rust 侧复用 overlay 拖动状态但不写 overlay 位置缓存，下次划词仍按选区重新锚定。拖动开始后 App 跳过后续 anchored resize 回调，防止把窗口拉回锚定位置。"
-    risk: "不得把该拖动接入 overlay 输入态的位置记忆；热区不得遮挡卡片正文选择。"
+    notes: "同一前端适配器按窗口角色传入 begin/drag/finish 命令组。anchored 拖动不写 overlay 位置缓存，下次划词仍按选区重新锚定；固定卡片使用独立命令与拖动状态，可在屏幕上自由放置。拖动开始后 App 跳过后续 anchored resize 回调，防止把临时窗口拉回锚定位置。"
+    risk: "不得把 anchored 或 pinned 拖动写入 overlay 输入态的位置记忆；顶部热区需为 pin 按钮留出命中区域。"
 
   - path: "tests/explanationRequestAuthority.test.mjs"
     purpose: "ExplanationCard 前端 requestKey、取消、作用域隔离、迟到和失败重试聚焦测试。"
@@ -557,12 +557,12 @@ source_areas:
     risk: "该 service 不持久化 thread、不读取真实历史，也不请求 DeepSeek；不得由正式 Tauri 装配读取或实例化。"
 
   - path: "src/components/SettingsPage.tsx"
-    purpose: "主应用设置页的真实加载、通用主题、DeepSeek 配置、发送快捷键、余额、本地 Token 使用量、本地数据操作和运行时信息状态；历史字体字号偏好保持兼容。"
+    purpose: "主应用设置页的真实加载、通用主题、划词卡显示模式、DeepSeek 配置、发送快捷键、余额、本地 Token 使用量、本地数据操作和运行时信息状态；历史字体字号偏好保持兼容。"
     status: "active"
     read_when:
       - "调整设置页、DeepSeek Key 首次配置/更新/清除或失败重试。"
       - "排查设置页 loading、重启恢复或窄窗口布局。"
-    notes: "复用 MainAppShell、MainSidebar 和标题栏；页面只消费 SettingsService 与应用级 AppThemeController。支持由外壳传入 initialSection 直达 AI 服务分类，并在加载、保存或清除 Key 后通过 onApiKeyConfiguredChange 回报 apiKeyConfigured。ReadRay 使用量默认选择“今天”，其余范围仍由用户手动切换。主题区位于“通用”分类顶部，只提供随包内置主题的选择与 light/dark 模式切换，暂不开放导入或删除入口；下拉上下键、Home/End 与鼠标悬停只临时预览主题，确认后才保存，取消会恢复数据库权威配色；主题失败不得覆盖当前权威配色。字体/字号偏好字段继续由 SettingsService 与主窗口应用链路兼容读取，但当前页面不提供编辑入口。全局快捷键录制在 capture 阶段把 keydown/keyup 经 typed command 提交给 Rust，并消费 readray://shortcut-recorded；WebView2 系统加速键由 Rust 原生入口补获，两条输入共用同一录制状态机。录制按钮保持焦点，切页或卸载会取消录制。普通偏好与开机启动成功后不渲染额外成功状态行，避免设置区动态增高和滚动锚定抖动；失败提示和重试保留。既有 Key、余额、Token、数据、发送键、开机启动和关闭策略保持原正式链路。"
+    notes: "复用 MainAppShell、MainSidebar 和标题栏；页面只消费 SettingsService 与应用级 AppThemeController。支持由外壳传入 initialSection 直达 AI 服务分类，并在加载、保存或清除 Key 后通过 onApiKeyConfiguredChange 回报 apiKeyConfigured。ReadRay 使用量默认选择“今天”，其余范围仍由用户手动切换。主题区位于“通用”分类顶部，只提供随包内置主题的选择与 light/dark 模式切换。通用设置中的划词解释分组只显示“减少动态效果”开关，不暴露内部模式名称或说明小字；关闭为默认加载卡行为，开启后等待完整结果再显示，解释内容不变。字体/字号偏好字段继续由 SettingsService 与主窗口应用链路兼容读取，但当前页面不提供编辑入口。全局快捷键录制在 capture 阶段把 keydown/keyup 经 typed command 提交给 Rust，并消费 readray://shortcut-recorded；WebView2 系统加速键由 Rust 原生入口补获，两条输入共用同一录制状态机。录制按钮保持焦点，切页或卸载会取消录制。普通偏好与开机启动成功后不渲染额外成功状态行，避免设置区动态增高和滚动锚定抖动；失败提示和重试保留。既有 Key、余额、Token、数据、发送键、开机启动和关闭策略保持原正式链路。"
     risk: "不得直接 invoke、读主题文件、读取 localStorage/sessionStorage、显示或返回已保存 Key 明文；主题失败不得覆盖当前权威配色。"
 
   - path: "src/themeProtocol.ts"
@@ -663,7 +663,7 @@ source_areas:
     risk: "不得把敏感值加入长期页面模型或返回协议。"
 
   - path: "src/appPreferences.ts"
-    purpose: "应用字体/字号/发送键、关闭策略和全局快捷键协议，以及运行时校验、语义 CSS 变量和共享发送判断。"
+    purpose: "应用字体/字号/发送键、关闭策略、划词卡显示模式和全局快捷键协议，以及运行时校验、语义 CSS 变量和共享发送判断。"
     status: "active"
     read_when:
       - "调整字体选项、字号范围、发送快捷键或 IME 行为。"
@@ -1021,7 +1021,7 @@ source_areas:
     read_when:
       - "开发或调整 compact 查词结果浮层。"
       - "接入 selectedText/contextText mock 或真实解释卡数据。"
-    notes: "支持 mock viewport 定位和真实 Tauri 小窗口 embedded 两种模式；真实模式按查询类型选择建议宽度，并通过 ResizeObserver 报告实际内容高度，由 Rust 在当前显示器工作区内重新放置窗口。"
+    notes: "支持 mock viewport 定位和真实 Tauri 小窗口 embedded 两种模式；真实模式按查询类型选择建议宽度，并在透明、鼠标穿透的原生准备窗口中通过 ResizeObserver 报告实际内容高度，Rust 使用最终宽高在当前显示器工作区内定位并一次性正式显示；显示后的内容尺寸变化继续走普通 resize。可选 pinControl 只渲染一个无文字 pin 按钮，临时卡为倾斜描边态，固定卡为直立填充态。完全 hide 会让 Windows WebView2 的布局观察不可靠，不得恢复为隐藏窗口测量。"
     risk: "不要提前扩展成通用组件库；窗口最大高度由 Rust 限制为工作区约 70%，超出时仅组件内部滚动。"
 
   - path: "src/components/ExplanationResultContent.tsx"
@@ -1125,7 +1125,7 @@ source_areas:
     status: "active"
     read_when:
       - "开发全局快捷键、剪贴板、窗口行为、SQLite 命令、原生配置。"
-    notes: "当前包含 Tauri v2 配置、Rust入口和桌面插件。single-instance 按官方要求最先注册；setup 初始化 SQLite 权威偏好、动态全局快捷键、Windows 高级快捷键监听和仅三项菜单的托盘。普通 chord 继续由 Tauri global-shortcut 注册；双击左 Alt 与设置录制由独立 Windows 原生层处理。持久化快捷键被占用时记录实际注册状态与错误但继续 setup，不改写 SQLite；手动启动仍显示 main。带专用参数的开机启动保持 main/overlay 隐藏；overlay 既有失焦/Esc 隐藏和意图领取边界不变。"
+    notes: "当前包含 Tauri v2 配置、Rust入口和桌面插件。single-instance 按官方要求最先注册；setup 初始化 SQLite 权威偏好、动态全局快捷键、Windows 高级快捷键监听和仅三项菜单的托盘。普通 chord 继续由 Tauri global-shortcut 注册；双击左 Alt 与设置录制由独立 Windows 原生层处理。持久化快捷键被占用时记录实际注册状态与错误但继续 setup，不改写 SQLite；手动启动仍显示 main。带专用参数的开机启动保持 main/overlay 隐藏。用户 pin 已完成的解释结果时，当前 overlay 原地进入固定注册表，Rust 后台创建隐藏的 overlay-query-* 接管快捷键、UIA 准备和意图领取；进程内最多固定 8 张。"
     risk: "不要把 UI 状态和业务展示逻辑塞进 Rust 层。"
 
   - path: "src-tauri/tauri.conf.json"
@@ -1134,8 +1134,17 @@ source_areas:
     read_when:
       - "调整窗口 label、入口 URL、初始尺寸、任务栏或无边框行为。"
       - "排查启动时主应用和快捷 overlay 的显示策略。"
-    notes: "main 的静态回退尺寸仍为 1440×900、最小 480×600；在本机 150% 缩放下约为 720×900 物理像素，与 Codex 参考最小宽度一致。1440×900 只是设计基线：Rust setup 会在窗口隐藏时先应用工作区约 86% 的自适应默认值，再用有效历史 SIZE/POSITION/MAXIMIZED 覆盖，最后才由手动启动路径显示。main 开启 transparent 以使用 Windows 透明合成路径，并以 #f2f1ed 作为启动期原生/WebView 默认背景，避免尺寸追赶时暴露黑白底板；shadow 使用 Windows 原生窗口阴影。overlay 保留透明、置顶、跳过任务栏、启动隐藏和 shadow:false 的浮窗配置。"
-    risk: "两类窗口必须保持独立 URL、尺寸和生命周期；不要把 main 的位置或显示状态写入 overlay 的进程内位置缓存。"
+    notes: "main 的静态回退尺寸仍为 1440×900、最小 480×600；在本机 150% 缩放下约为 720×900 物理像素，与 Codex 参考最小宽度一致。1440×900 只是设计基线：Rust setup 会在窗口隐藏时先应用工作区约 86% 的自适应默认值，再用有效历史 SIZE/POSITION/MAXIMIZED 覆盖，最后才由手动启动路径显示。main 开启 transparent 以使用 Windows 透明合成路径，并以 #f2f1ed 作为启动期原生/WebView 默认背景，避免尺寸追赶时暴露黑白底板；shadow 使用 Windows 原生窗口阴影。初始 overlay 保留透明、置顶、跳过任务栏、启动隐藏和 shadow:false 的浮窗配置；固定后它原地保留，后台生成的 overlay-query-* 使用相同 overlay URL 和窗口属性。"
+    risk: "main 与 overlay 生命周期必须隔离；固定卡不能被当作活动查询 overlay 隐藏或重排，也不要把 main 或固定卡的位置写入 overlay 输入态的位置缓存。"
+
+  - path: "src-tauri/src/pinned_cards.rs"
+    purpose: "ExplanationCard 原窗口固定、活动查询窗口轮换、拖动与关闭边界。"
+    status: "active"
+    read_when:
+      - "调整 pin 数量、固定卡片窗口属性、拖动、关闭或资源限制。"
+      - "排查固定卡片失焦消失、重复请求模型或无法继续划词。"
+    notes: "只接受当前活动 overlay 发起 pin，并再次校验已完成 ExplanationCard。当前可见窗口先写入固定注册表，再由 async Tauri command 在后台创建隐藏的 overlay-query-N；创建成功后原子切换活动 label，快捷键、UIA 准备、intent emit 和 overlay commands 都只面向新窗口。当前卡片不 hide、不 close、不 set_size、不新建前端页面，原 WebView、React DOM、字体和内容保持原样；固定后忽略失焦隐藏并冻结 anchored resize。建窗失败会回滚固定注册，活动 label 变化则关闭新建窗口并取消本次固定。若用户从固定卡触发选区快捷键，Rust 会先恢复它记录的源窗口再捕获。关闭时先隐藏并返回 IPC，再由独立线程延迟销毁；前端在 mousedown capture 阶段识别双击，拖动热区也可触发关闭。数据仅保存在当前进程，最多 8 张，关闭或应用退出即释放；pin 不调用 Provider、不写缓存和学习记录。"
+    risk: "不得重新引入独立 pinned-card 页面、ExplanationCard payload 交接、字体重载或可见窗口替换；WebviewWindowBuilder 必须留在 async command，且固定注册与活动 label 切换不能持锁跨越 build。新增窗口数量必须继续有上限，避免 WebView2 资源无界增长。"
 
   - path: "src-tauri/src/windows_uia.rs"
     purpose: "Windows UI Automation 上下文捕获 spike。"
@@ -1321,7 +1330,7 @@ source_areas:
       - "调整学习记录 schema、迁移或存储字段。"
       - "实现学习记录窗口、搜索、筛选、单条读取或删除。"
       - "排查自动保存或应用数据目录中的 SQLite 问题。"
-    notes: "使用 rusqlite bundled；v1～v18 保持既有 schema 不变。v19 一次新增 learning_targets、learning_target_occurrences 与 learning_target_review_states，并在同一事务回填稳定目标、以强 NOT NULL target 身份重建 Feed/generated-card/attempt 表、按 createdAt/id 重放全部未撤销 attempt、隐藏而不删除同轮历史重复 target，最后执行数量、身份、代表记录、状态重放、来源和外键一致性审计。正常目标唯一身份显式为 canonicalizationVersion + queryType + normalizedTargetText，规范化只合并大小写和空白格式；缺少 v17 可靠英文投影的旧记录各自绑定 targetKind=legacy_compat、canonicalizationVersion=0、normalizedTargetText=NULL 的不可聚合兼容身份，旧 Feed 与子链路保留但 active 槽关闭，Memory 和未来 Review 候选统一排除。v22 向 app_preferences 追加两项 nullable binding JSON 权威列：新数据库写入 Alt+Super+Space / 双击左 Alt，已有数据库把 v7 历史字符串逐项转换为 chord JSON，历史列保留且不改写。新学习事件仍追加 learning_records，并与 v17 投影、稳定 target/occurrence 同事务保存。Memory target commands 的搜索/分页/总数均按正常目标；搜索保留目标、历史原文、解释与上下文多字段命中，但按精确目标、目标前缀、目标包含、原始查询、语境/解释的相关度排序，同级再按最近 occurrence 排序。Agent 事实查询复用同一 target/occurrence 权威，以 SQLite read-only flag 打开数据库，按时间、精确目标、类型和重复次数下推查询并限制目标/代表 occurrence 数量；本轮无 migration。"
+    notes: "使用 rusqlite bundled；v1～v18 保持既有 schema 不变。v19 一次新增 learning_targets、learning_target_occurrences 与 learning_target_review_states，并在同一事务回填稳定目标、以强 NOT NULL target 身份重建 Feed/generated-card/attempt 表、按 createdAt/id 重放全部未撤销 attempt、隐藏而不删除同轮历史重复 target，最后执行数量、身份、代表记录、状态重放、来源和外键一致性审计。正常目标唯一身份显式为 canonicalizationVersion + queryType + normalizedTargetText，规范化只合并大小写和空白格式；缺少 v17 可靠英文投影的旧记录各自绑定 targetKind=legacy_compat、canonicalizationVersion=0、normalizedTargetText=NULL 的不可聚合兼容身份，旧 Feed 与子链路保留但 active 槽关闭，Memory 和未来 Review 候选统一排除。v22 向 app_preferences 追加两项 nullable binding JSON 权威列：新数据库写入 Alt+Super+Space / 双击左 Alt，已有数据库把 v7 历史字符串逐项转换为 chord JSON，历史列保留且不改写。v23 为 app_preferences 增加带 CHECK 的 selection_explanation_display_mode，默认 standard；reduced_motion 仅在用户开启“减少动态效果”后保存。新学习事件仍追加 learning_records，并与 v17 投影、稳定 target/occurrence 同事务保存。Memory target commands 的搜索/分页/总数均按正常目标；搜索保留目标、历史原文、解释与上下文多字段命中，但按精确目标、目标前缀、目标包含、原始查询、语境/解释的相关度排序，同级再按最近 occurrence 排序。Agent 事实查询复用同一 target/occurrence 权威，以 SQLite read-only flag 打开数据库，按时间、精确目标、类型和重复次数下推查询并限制目标/代表 occurrence 数量。"
     risk: "learning_records 继续只做不可修改的原始事件，不做去重或覆盖；不得修改已发布 v1～v18，后续 target 重绑/拆分必须保持原始 occurrence 和历史 Feed/card/attempt 追溯；事实查询不得返回全库或派生画像/掌握度。"
 
   - path: "src-tauri/src/review.rs"

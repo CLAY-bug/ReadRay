@@ -1602,6 +1602,40 @@ function SettingsPage({
                 </div>
 
                 <div className="rr-settings-group">
+                  <GroupHeading title="划词解释" />
+                  <div className="rr-settings-panel">
+                    <div className="rr-settings-row">
+                      <SettingsCopy label="减少动态效果" />
+                      <div className="rr-settings-control">
+                        <button
+                          className={`rr-settings-switch${
+                            snapshot.preferences.selectionExplanationDisplayMode ===
+                            "reducedMotion"
+                              ? " is-on"
+                              : ""
+                          }`}
+                          type="button"
+                          role="switch"
+                          aria-checked={
+                            snapshot.preferences.selectionExplanationDisplayMode ===
+                            "reducedMotion"
+                          }
+                          aria-label="减少动态效果"
+                          disabled={preferenceStatus === "loading"}
+                          onClick={() => patchPreferences({
+                            selectionExplanationDisplayMode:
+                              snapshot.preferences.selectionExplanationDisplayMode ===
+                              "reducedMotion"
+                                ? "standard"
+                                : "reducedMotion",
+                          })}
+                        />
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="rr-settings-group">
                   <GroupHeading title="语言与输入" meta="单行解释查询固定使用 Enter" />
                   <div className="rr-settings-panel">
                     <div className="rr-settings-row">

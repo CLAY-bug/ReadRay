@@ -2,6 +2,7 @@ export type UiFont = "geistSourceHanSans" | "sourceHanSans";
 export type LearningFont = "newsreaderSourceHanSerif" | "sourceHanSerif";
 export type SendShortcut = "enter" | "ctrlEnter";
 export type CloseBehavior = "hideToTray" | "exit";
+export type SelectionExplanationDisplayMode = "reducedMotion" | "standard";
 
 export type ShortcutBinding =
   | {
@@ -24,6 +25,7 @@ export type AppPreferences = {
   learningFontSize: number;
   sendShortcut: SendShortcut;
   closeBehavior: CloseBehavior;
+  selectionExplanationDisplayMode: SelectionExplanationDisplayMode;
   quickQueryBinding: ShortcutBinding;
   selectionExplanationBinding: ShortcutBinding;
 };
@@ -55,6 +57,7 @@ export const DEFAULT_APP_PREFERENCES: AppPreferences = {
   learningFontSize: 17,
   sendShortcut: "enter",
   closeBehavior: "hideToTray",
+  selectionExplanationDisplayMode: "standard",
   quickQueryBinding: {
     version: 2,
     kind: "chord",
@@ -75,6 +78,10 @@ const learningFonts: LearningFont[] = [
 ];
 const sendShortcuts: SendShortcut[] = ["enter", "ctrlEnter"];
 const closeBehaviors: CloseBehavior[] = ["hideToTray", "exit"];
+const selectionExplanationDisplayModes: SelectionExplanationDisplayMode[] = [
+  "reducedMotion",
+  "standard",
+];
 
 function assertIntegerInRange(
   value: number,
@@ -107,6 +114,13 @@ export function validateAppPreferences(
   }
   if (!closeBehaviors.includes(preferences.closeBehavior)) {
     throw new Error("设置返回了未知的主窗口关闭策略。");
+  }
+  if (
+    !selectionExplanationDisplayModes.includes(
+      preferences.selectionExplanationDisplayMode,
+    )
+  ) {
+    throw new Error("设置返回了未知的划词卡片显示模式。");
   }
   validateShortcutBinding(preferences.quickQueryBinding, "快速查询");
   validateShortcutBinding(preferences.selectionExplanationBinding, "选区解释");

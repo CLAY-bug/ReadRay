@@ -1,8 +1,12 @@
 # ReadRay 交接记录
 
-最后更新：2026-08-28
+最后更新：2026-08-30
 
 ## TL;DR
+
+- 解释卡片原地固定多窗口（2026-08-30，自动验证完成，真实 Tauri 待用户复验）：划词结果卡右上角提供无文字 pin，点击后当前可见 overlay 直接原地晋升为固定卡；不复制 ExplanationCard、不切换 WebView、不重载字体、不重新测量，也不隐藏、缩放或替换当前窗口，因此除 pin 状态外，卡片内容、尺寸和样式应保持不变。Rust 仅在后台异步创建隐藏的 `overlay-query-N` 作为下一次查询窗口，并把全局快捷键、UIA 准备和 overlay intent 路由到新的活动 label；原窗口进入固定卡注册表后忽略失焦隐藏，可继续拖动，点击 pin、聚焦后按 Esc 或双击卡片任意位置均可关闭。点击 pin 到后台窗口建成期间，原窗口先进入固定注册表，避免 WebView2 动态建窗导致的焦点变化把它隐藏；建窗失败则回滚注册状态。若快捷键由固定卡触发，Rust 会先恢复该卡记录的阅读源窗口再做 UIA 捕获。每次 pin 不重新请求模型、不写缓存或学习记录，最多同时固定 8 张，且不跨应用重启恢复。`pnpm test:overlay`、`pnpm build`、`cargo check --locked`、pinned_cards Rust 聚焦测试、fmt、YAML 与 diff 检查通过；由于 Rust 窗口生命周期已改变，真实复验前必须彻底结束旧进程再重启。
+
+- 划词卡动态效果开关（2026-08-30，自动验证完成，真实 Tauri 待用户验收）：通用设置的“划词解释”分组只提供“减少动态效果”开关，不显示模式名称或说明小字；默认关闭，查询超过 100ms 时先显示 430×92 的紧凑加载卡片（选中词、`正在生成语境解释…`、呼吸状态点），缓存快速命中会跳过。开启后才使用低动态行为：Rust 以 alpha=0、鼠标穿透且不抢焦点的准备窗口唤醒隐藏 WebView2，ExplanationCard 完成渲染和测量后以最终尺寸一次显示。SQLite v23 在 `app_preferences` 增加 `selection_explanation_display_mode` 权威字段且默认 standard；加载卡不抢焦点、不接收鼠标，最终结果复用现有完整卡片与尺寸测量链路。失败、requestKey、取消、精确缓存、single-flight、学习记录与解释内容不变。`pnpm test:settings`、`pnpm test:overlay`、`pnpm build`、Rust settings、v23 升级测试、新库迁移测试、`cargo fmt --check` 与 `git diff --check` 通过；需用户在真实 Tauri 中切换开关，分别验证缓存命中/未命中、首次查询从加载卡切换到完整卡、双击 Alt 响应、焦点与点击穿透。
 
 - 今天页记录刷新修复（2026-08-28，自动验证完成，真实 Tauri 待用户复验）：本机数据库只读核对确认当天实际存在 16 条 `learning_records`，且 16 条均有目标投影和 occurrence，日期边界与后端统计 SQL 无误；根因是主壳长期保留今天页首次读取的快照，只依赖可能在主窗口隐藏或监听尚未建立时错过的跨窗口事件。现在每次重新进入“今天”都会读取本机最新摘要，主窗口从 overlay/其他应用恢复焦点且当前位于今天页时也会刷新，同时继续保留 `readray://learning-record-created` 的即时刷新。聚焦消费者测试 6/6、设置聚合测试 60/60、复习测试 51/51、`pnpm build` 与 `git diff --check` 通过；需在真实 Tauri 中查询一条记录后返回今天页，确认数量和最近记录立即更新。
 - 复习页面精修（2026-08-28，自动验证完成，真实 Tauri 视觉与轮换手感待用户验收）：复习首页改为无需翻页的稳定活跃书架，显示 6/4/2 张（3×2、2×2、1×2）；桌面单卡统一为 360×240 CSS 像素（1.5:1）和四行预览，针对 420px 实机仍显过宽的问题明显收窄并略微回收高度，页面变宽只增加外围留白，不再拉伸卡片或改变正文换行，极窄单列才允许宽度收缩。CSS 的 `--rr-review-column-count` 同时驱动网格列数和前台容量，修复侧栏状态下“四张卡片只占三列前两列”以及两种窗口间卡片尺寸大幅变化的问题；两列/一列书架、标题和完成统计整体居中。已显示卡片不会因后台制卡或加载换位，只有用户成功提交“想起来了/没想起来”并返回书架后，下一张未完成卡才补入原槽位。游标 Feed、后台制卡和真实调度顺序保持不变，pending 条目仍不发布。首页移除分页、常驻状态、阶段说明、装饰左竖线、纸张噪点和上浮 hover，单条语境开头孤立的 `•/●/◦/▪/▫/‣/⁃` 仅在展示层隐藏；专注页使用自然内容高度和受控最大高度，缩窄阅读行宽，移除重复关闭按钮并弱化结果按钮。既有完整语境、解释、结果/撤销、来源和质量反馈链路不变。`pnpm test:review` 51/51、`pnpm build` 已通过；未使用浏览器或 Computer Use，需用户在真实 Tauri 中确认 1.5:1 新比例、侧栏开合时单卡尺寸与换行稳定、三档书架居中、完成后原槽补卡和深浅主题观感。
@@ -52,7 +56,7 @@
 - `src/App.tsx` / `src/components/MainAppShell.tsx` / `src/components/MainSidebar.tsx` / `src/mainSidebarWidth.ts` / `src/sidebarAutoCollapse.ts` / `src/components/useAutoResizeTextarea.ts`：主窗口装配、页面导航、缩放期间的稳定布局、侧栏宽度记忆与窄窗自动收放、今天/对话共用 textarea 自动增高边界。
 - `src/components/ReviewPage.tsx` / `src/reviewBackgroundPreparation.ts` / `src/reviewPreparationCoordinator.ts` / `src/reviewAuthorityRefresh.ts` / `src/reviewQualitySaveQueue.ts` / `src/reviewService.ts` / `src/reviewRepository.ts`：复习内容区、进入页面前的首屏预热、后台制卡协调、外部刷新延后、应用级卡片质量反馈协调（跨 ReviewPage 卸载存活）、业务映射和正式 Tauri 读取/写回链路；页面不得直接调用 command。
 - `src-tauri/src/review.rs` / `src-tauri/src/learning_records.rs` / `src-tauri/src/explanation_cache.rs`：复习 Feed、追加式学习事件与 SQLite v19 schema。正常 `learning_targets` 唯一身份为 canonicalizationVersion + queryType + normalizedTargetText；无可靠英文投影的旧记录使用每记录独占、不可聚合且不可调度的 `legacy_compat` 身份。`learning_target_occurrences` 保留真实记录绑定和未来重绑 revision，`learning_target_review_states` 由全部未撤销 attempt 顺序重放；Feed、attempt、generated card 同时冻结 target/record 身份。Memory target commands 与 Review target 调度只消费正常目标，缓存仍由 explanation_cache.rs 独立负责。
-- `src-tauri/src/lib.rs` / `src-tauri/src/desktop_lifecycle.rs` / `src-tauri/tauri.conf.json`：主窗口与 overlay 的命令、快捷键、关闭/隐藏、主窗口状态恢复和生命周期入口。
+- `src-tauri/src/lib.rs` / `src-tauri/src/pinned_cards.rs` / `src-tauri/src/desktop_lifecycle.rs` / `src-tauri/tauri.conf.json`：主窗口、可原地晋升的 overlay、后台替代查询窗口的命令、快捷键、关闭/隐藏、拖动、主窗口状态恢复和生命周期入口。
 - `.env.example` / `src-tauri/src/deepseek_client.rs` / `src-tauri/src/secret_store.rs`：DeepSeek 开发环境回退、共享请求和 Windows 安全存储边界；不得把真实密钥写入仓库、SQLite、前端持久化或普通日志。
 - `package.json` / `src-tauri/Cargo.toml` / `src-tauri/capabilities/default.json`：前端、Rust 插件和最小权限装配；新增设置能力前先确认是否能复用现有依赖。
 
@@ -81,7 +85,7 @@
 - 原 Tauri compact preview 曾作为开发模拟舞台：外层 ReadRay 窗口模拟桌面/阅读环境，mock selected word 模拟真实划词，AnchoredResultPopover 模拟未来贴近真实选区出现的结果浮层；当前默认主体验已切到无选区桌面 overlay，最终产品不应出现大背景舞台。
 - 无选区 overlay 由 `Ctrl+Alt+R` 显式呼出输入态，Esc 或窗口失焦隐藏；输入态/结果态可通过浮层顶部拖动，拖动后的位置会在当前进程内记住；结果态由前端请求 Rust 调整窗口尺寸。
 - 当前窗口位置方案已经接受：无拖动记录时使用屏幕偏上区域作为默认位置，拖动后优先恢复当前进程内记录的位置；现阶段不再继续校准默认位置。
-- Tauri 窗口角色固定为 `main` 与 `overlay`：`main` 加载 `index.html?view=main`，显示在任务栏并允许调整大小；`overlay` 加载 `index.html`，启动隐藏、置顶且跳过任务栏。`main` 只持久化 SIZE、POSITION、MAXIMIZED，并在首次显示前恢复和约束到可用工作区；`overlay` 不进入该状态文件。两类窗口命令继续按 label 校验，主窗口状态不得写入 overlay 位置缓存。
+- Tauri 初始静态窗口角色为 `main` 与 `overlay`：`main` 加载 `index.html?view=main`，显示在任务栏并允许调整大小；`overlay` 加载 `index.html`，启动隐藏、置顶且跳过任务栏。用户固定解释卡时，当前 overlay 原地转为固定窗口；Rust 在后台以相同 overlay 页面创建隐藏的 `overlay-query-N`，并将它设为后续查询的唯一活动窗口。固定卡可拖动、失焦保留但不跨应用重启恢复。`main` 只持久化 SIZE、POSITION、MAXIMIZED，并在首次显示前恢复和约束到可用工作区；overlay 与固定卡不进入该状态文件。窗口命令按活动 label 或固定注册表校验，主窗口和固定卡片状态不得写入 overlay 输入态的位置缓存。
 - 主窗口默认关闭策略为隐藏到托盘，使全局快捷键和隐藏的 overlay 继续存活；设置可改为安全退出。托盘已提供恢复主窗口、快速查询和真正退出三项入口。
 - Windows UIA 捕获必须在 ReadRay show/focus 前完成；`Ctrl+Alt+U` 触发划词捕获并显示选区附近的真实 DeepSeek 解释卡，`Ctrl+Alt+R` 保持无选区居中输入流程。两条链路共享 create_explanation_card，不接 SQLite、OCR 或剪贴板辅助。
 - 正式交互分为两种状态：有选区和 `anchorRect` 时显示锚定结果浮层；无选区时通过快捷键呼出居中输入框，用户手动输入后再切换到结果态。

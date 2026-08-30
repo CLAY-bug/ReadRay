@@ -119,7 +119,7 @@ test("ExplanationCard 通知、原始上下文与 Rust requestKey 权威保持�
   assert.match(lib, /fn hide_overlay_window[\s\S]*cancel_explanation_scope/);
   assert.match(lib, /fn hide_anchored_overlay_window[\s\S]*cancel_explanation_scope/);
   assert.match(lib, /WindowEvent::Focused\(false\)[\s\S]*cancel_all_explanation_requests/);
-  assert.match(lib, /WindowEvent::CloseRequested[\s\S]*OVERLAY_WINDOW_LABEL[\s\S]*cancel_all_explanation_requests/);
+  assert.match(lib, /WindowEvent::CloseRequested[\s\S]*is_active_overlay_label[\s\S]*cancel_all_explanation_requests/);
   assert.doesNotMatch(lib, /serde_json::to_string\(&capture\)/);
   assert.match(lib, /READRAY_UIA_CAPTURE ok=\{\} selected_chars=\{\} has_context=\{\}/);
   assert.match(lib, /windows_uia::capture_foreground_with_retry\(\)/);
@@ -128,24 +128,162 @@ test("ExplanationCard 通知、原始上下文与 Rust requestKey 权威保持�
   assert.match(uia, /retry\.foreground\.hwnd != initial_foreground_hwnd/);
 });
 
-test("划词结果先渲染再按稳定尺寸调整浮层，避免结果阶段重复重排", async () => {
-  const [app, popover] = await Promise.all([
+test("划词卡片默认延迟显示紧凑加载卡，减少动态效果时等待最终结果", async () => {
+  const [app, preferences, popover, lib, styles] = await Promise.all([
     readFile("src/App.tsx", "utf8"),
+    readFile("src/appPreferences.ts", "utf8"),
     readFile("src/components/AnchoredResultPopover.tsx", "utf8"),
+    readFile("src-tauri/src/lib.rs", "utf8"),
+    readFile("src/App.css", "utf8"),
   ]);
   const anchored = section(
     app,
     "const runAnchoredQuery",
     "const handleAnchoredContentSizeChange",
   );
+  const beforeProviderRequest = section(
+    anchored,
+    "const runAnchoredQuery",
+    'const card = await invoke<ExplanationCard>("create_explanation_card"',
+  );
 
-  assert.doesNotMatch(anchored, /stage: "result"/);
+  assert.doesNotMatch(anchored, /stage: "loading"/);
+  assert.match(preferences, /selectionExplanationDisplayMode: "standard"/);
+  assert.match(beforeProviderRequest, /selectionExplanationDisplayMode === "standard"/);
+  assert.match(
+    beforeProviderRequest,
+    /window\.setTimeout[\s\S]*ANCHORED_LOADING_GRACE_MS/,
+  );
+  assert.match(beforeProviderRequest, /present_anchored_loading_window/);
+  assert.match(app, /const ANCHORED_LOADING_GRACE_MS = 100/);
   assert.match(anchored, /setAnchoredResult\(mapExplanationCard\(card\)\)/);
   assert.match(anchored, /setAnchoredStage\("result"\)/);
   assert.match(app, /anchoredResizePending/);
   assert.match(app, /anchoredResizeGeneration/);
+  assert.match(app, /anchoredWindowPresented/);
+  assert.match(app, /prepare_anchored_overlay_window/);
+  assert.match(app, /setAnchoredPreparing\(true\)/);
+  assert.match(app, /shouldPresent[\s\S]*present_anchored_overlay_window[\s\S]*resize_anchored_overlay_window/);
   assert.match(popover, /element\.style\.maxWidth = "none"/);
   assert.match(popover, /settleTimer = window\.setTimeout/);
+  assert.match(app, /正在生成语境解释/);
+  assert.doesNotMatch(lib, /AnchoredOverlayStage::Loading/);
+  assert.doesNotMatch(lib, /READRAY_ANCHORED_OVERLAY_WAKE/);
+  assert.match(lib, /fn set_native_window_opacity[\s\S]*SetLayeredWindowAttributes/);
+  assert.match(lib, /fn show_anchored_measurement_window[\s\S]*set_native_window_opacity\(window, 0\)[\s\S]*set_ignore_cursor_events\(true\)[\s\S]*window\.show\(\)/);
+  assert.match(lib, /preparation_anchor[\s\S]*show_anchored_measurement_window[\s\S]*READRAY_ANCHORED_OVERLAY_PREPARE=ok/);
+  assert.match(lib, /fn show_and_focus[\s\S]*set_native_window_opacity\(window, u8::MAX\)[\s\S]*set_ignore_cursor_events\(false\)/);
+  assert.match(lib, /fn present_anchored_loading_window[\s\S]*LogicalSize::new\(ANCHORED_LOADING_WIDTH, ANCHORED_LOADING_HEIGHT\)[\s\S]*set_ignore_cursor_events\(true\)[\s\S]*set_native_window_opacity\(&window, u8::MAX\)[\s\S]*window\.show\(\)/);
+  assert.doesNotMatch(
+    section(lib, "fn present_anchored_loading_window", "fn present_anchored_overlay_window"),
+    /show_and_focus|set_focus/,
+  );
+  assert.match(lib, /fn present_anchored_overlay_window[\s\S]*place_anchored_overlay_window[\s\S]*show_and_focus/);
+  assert.match(lib, /READRAY_ANCHORED_OVERLAY_PRESENT=ok width=/);
+  assert.match(styles, /html\.is-anchored-preparing[\s\S]*visibility:\s*hidden\s*!important[\s\S]*pointer-events:\s*none\s*!important/);
+});
+
+test("解释卡片原窗口晋升为固定卡，后台补建下一查询窗口", async () => {
+  const [app, popover, drag, pinned, lib, styles] = await Promise.all([
+    readFile("src/App.tsx", "utf8"),
+    readFile("src/components/AnchoredResultPopover.tsx", "utf8"),
+    readFile("src/overlayWindowDrag.ts", "utf8"),
+    readFile("src-tauri/src/pinned_cards.rs", "utf8"),
+    readFile("src-tauri/src/lib.rs", "utf8"),
+    readFile("src/App.css", "utf8"),
+  ]);
+  const pinAction = section(
+    app,
+    "const pinAnchoredCard",
+    "const consumeOverlayIntent",
+  );
+  const promotion = section(
+    pinned,
+    "pub(crate) async fn promote_overlay_to_pinned_card",
+    "fn ensure_pinned_card_window",
+  );
+  const pinnedClose = section(
+    pinned,
+    "pub(crate) fn close_pinned_card",
+    "pub(crate) fn begin_pinned_card_drag",
+  );
+  const focusLost = section(
+    lib,
+    "WindowEvent::Focused(false)",
+    ".invoke_handler(tauri::generate_handler![",
+  );
+
+  assert.match(
+    pinAction,
+    /invoke\("promote_overlay_to_pinned_card", \{[\s\S]*card: anchoredCard[\s\S]*sourceWindowHwnd: anchoredSourceWindowHwnd\.current/,
+  );
+  assert.doesNotMatch(
+    pinAction,
+    /create_explanation_card|save_for_app|learning_record|DeepSeek|provider_request/,
+  );
+  assert.match(pinAction, /setAnchoredPinned\(true\)/);
+  assert.match(pinAction, /anchoredResizeGeneration\.current \+= 1/);
+  assert.doesNotMatch(app, /function PinnedCardApp|view === "pinned-card"/);
+  assert.doesNotMatch(
+    app,
+    /get_pinned_card_payload|present_pinned_card_window|complete_pinned_card_handoff/,
+  );
+  assert.match(app, /onMouseDownCapture=\{handlePromotedPinnedMouseDownCapture\}/);
+  assert.match(app, /onDoubleClick=\{anchoredPinned \? closePromotedPinnedCard/);
+  assert.match(app, /current\.at - previous\.at <= 400/);
+  assert.match(app, /Math\.abs\(current\.screenX - previous\.screenX\) <= 6/);
+  assert.match(app, /anchoredPinned[\s\S]*pinnedCardDragCommands[\s\S]*anchoredWindowDragCommands/);
+  assert.match(app, /anchoredPinned \? undefined : handleAnchoredContentSizeChange/);
+  assert.match(app, /pinned: anchoredPinned \|\| anchoredPinPending/);
+  assert.doesNotMatch(app, /pending: anchoredPinPending/);
+  assert.match(app, /onChange: anchoredPinned[\s\S]*closePromotedPinnedCard/);
+
+  assert.match(popover, /event\.key === "Escape"[\s\S]*onOpenChange\(false\)/);
+  assert.match(popover, /className=\{`anchored-pin-button/);
+  assert.match(popover, /aria-pressed=\{pinControl\.pinned\}/);
+  assert.doesNotMatch(popover, /disabled=\{pinControl\.pending\}/);
+  assert.doesNotMatch(popover, /title=\{pinControl|固定成功|已固定/);
+  assert.match(drag, /begin: "begin_pinned_card_drag"/);
+  assert.match(drag, /drag: "drag_pinned_card"/);
+  assert.match(drag, /finish: "finish_pinned_card_drag"/);
+
+  assert.match(pinned, /const PINNED_CARD_LIMIT: usize = 8/);
+  assert.match(pinned, /pub\(crate\) async fn promote_overlay_to_pinned_card/);
+  assert.match(pinned, /ACTIVE_OVERLAY_LABEL/);
+  assert.match(pinned, /HashMap<String, PinnedCardEntry>/);
+  assert.match(promotion, /let pinned_label = window\.label\(\)\.to_string\(\)/);
+  assert.match(promotion, /WebviewWindowBuilder::new\([\s\S]*index\.html\?view=overlay/);
+  assert.doesNotMatch(promotion, /view=pinned-card/);
+  assert.match(promotion, /\.always_on_top\(true\)/);
+  assert.match(promotion, /\.skip_taskbar\(true\)/);
+  assert.match(promotion, /\.visible\(false\)/);
+  assert.ok(
+    promotion.indexOf("cards.insert") <
+      promotion.indexOf("WebviewWindowBuilder::new"),
+  );
+  assert.ok(
+    promotion.indexOf("WebviewWindowBuilder::new") <
+      promotion.indexOf("*active_label = next_overlay_label.clone()"),
+  );
+  assert.doesNotMatch(promotion, /window\.hide\(\)|window\.close\(\)|window\.set_size/);
+  assert.match(promotion, /window\.set_title\("ReadRay 固定解释"\)/);
+  assert.match(promotion, /restore_source_window_focus/);
+  assert.match(pinned, /fn restore_source_before_selection_capture/);
+  assert.match(lib, /restore_source_before_selection_capture\(app\)[\s\S]*Duration::from_millis\(24\)[\s\S]*capture_foreground_with_retry/);
+  assert.match(pinnedClose, /window\.hide\(\)[\s\S]*forget_pinned_card/);
+  assert.match(pinnedClose, /std::thread::spawn[\s\S]*PINNED_CARD_CLOSE_DELAY_MS[\s\S]*closing_window\.close\(\)/);
+  assert.match(
+    focusLost,
+    /is_pinned_card_window\(window\.label\(\)\)[\s\S]*PINNED_CARD_FOCUS=lost_ignored[\s\S]*is_active_overlay_label\(window\.label\(\)\)[\s\S]*overlay_focus_grace_active/,
+  );
+  assert.match(lib, /active_overlay_window\(app\)[\s\S]*show_anchored_measurement_window/);
+  assert.match(lib, /active_overlay_label\(\)[\s\S]*emit_to\(label\.as_str\(\)/);
+  assert.match(lib, /CloseRequested \{ \.\. \}[\s\S]*is_pinned_card_window[\s\S]*forget_pinned_card/);
+  assert.match(lib, /promote_overlay_to_pinned_card/);
+
+  assert.match(styles, /\.anchored-pin-button svg[\s\S]*rotate\(-14deg\)/);
+  assert.match(styles, /\.anchored-pin-button\.is-pinned[\s\S]*var\(--rr-color-amber\)/);
+  assert.match(styles, /\.anchored-pin-button\.is-pinned svg[\s\S]*rotate\(0deg\)/);
 });
 
 test("搜索框与 Quick AI 同宽同首行高，并从固定顶边向下展开", async () => {

@@ -5,7 +5,7 @@ use std::path::PathBuf;
 use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, Instant};
 use tauri::{
-    AppHandle, Emitter, LogicalPosition, LogicalSize, Manager, PhysicalPosition, PhysicalSize,
+    AppHandle, Emitter, LogicalPosition, LogicalSize, PhysicalPosition, PhysicalSize,
     WebviewWindow, WindowEvent,
 };
 
@@ -20,6 +20,7 @@ pub mod explanation;
 mod explanation_cache;
 pub mod learning_records;
 pub mod model_usage;
+mod pinned_cards;
 pub mod quick_ai;
 pub mod quick_ai_prompt;
 pub mod review;
@@ -32,11 +33,19 @@ pub mod windows_uia;
 pub mod writing;
 
 const MAIN_WINDOW_LABEL: &str = "main";
-const OVERLAY_WINDOW_LABEL: &str = "overlay";
 /// 输入补全候选展开时 overlay 输入窗口的最大高度（逻辑像素）。
 const OVERLAY_INPUT_MAX_HEIGHT: f64 = 400.0;
 pub(crate) const DEEPSEEK_BASE_URL: &str = "https://api.deepseek.com";
 pub(crate) const DEFAULT_DEEPSEEK_MODEL: &str = "deepseek-v4-flash";
+
+#[cfg(debug_assertions)]
+pub(crate) fn diagnostic_uptime_ms() -> u128 {
+    static DIAGNOSTIC_STARTED: OnceLock<Instant> = OnceLock::new();
+    DIAGNOSTIC_STARTED
+        .get_or_init(Instant::now)
+        .elapsed()
+        .as_millis()
+}
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -83,25 +92,6 @@ fn get_current_overlay_window_stage() -> Result<OverlayWindowStage, String> {
         .map_err(tauri_err)
 }
 
-#[cfg(target_os = "windows")]
-#[derive(Clone, Copy)]
-enum AnchoredOverlayStage {
-    Loading,
-    Result,
-    Error,
-}
-
-#[cfg(target_os = "windows")]
-impl AnchoredOverlayStage {
-    fn logical_size(self) -> LogicalSize<f64> {
-        match self {
-            Self::Loading => LogicalSize::new(430.0, 92.0),
-            Self::Result => LogicalSize::new(520.0, 380.0),
-            Self::Error => LogicalSize::new(430.0, 132.0),
-        }
-    }
-}
-
 const DEFAULT_OVERLAY_CENTER_Y_RATIO: f64 = 0.36;
 #[cfg(target_os = "windows")]
 const ANCHORED_OVERLAY_GAP: f64 = 10.0;
@@ -115,6 +105,10 @@ const ANCHORED_OVERLAY_MIN_WIDTH: f64 = 360.0;
 const ANCHORED_OVERLAY_MAX_WIDTH: f64 = 720.0;
 #[cfg(target_os = "windows")]
 const ANCHORED_OVERLAY_MIN_HEIGHT: f64 = 80.0;
+#[cfg(target_os = "windows")]
+const ANCHORED_LOADING_WIDTH: f64 = 430.0;
+#[cfg(target_os = "windows")]
+const ANCHORED_LOADING_HEIGHT: f64 = 92.0;
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -192,7 +186,7 @@ fn ensure_window_label(window: &WebviewWindow, expected: &str) -> Result<(), Str
 }
 
 fn ensure_overlay_window(window: &WebviewWindow) -> Result<(), String> {
-    ensure_window_label(window, OVERLAY_WINDOW_LABEL)
+    pinned_cards::ensure_active_overlay_window(window)
 }
 
 fn ensure_main_window(window: &WebviewWindow) -> Result<(), String> {
@@ -415,8 +409,39 @@ fn place_anchored_overlay_window(
         .map_err(tauri_err)
 }
 
+#[cfg(target_os = "windows")]
+fn set_native_window_opacity(window: &WebviewWindow, alpha: u8) -> Result<(), String> {
+    use windows::Win32::Foundation::{GetLastError, SetLastError, COLORREF, WIN32_ERROR};
+    use windows::Win32::UI::WindowsAndMessaging::{
+        GetWindowLongPtrW, SetLayeredWindowAttributes, SetWindowLongPtrW, GWL_EXSTYLE, LWA_ALPHA,
+        WS_EX_LAYERED,
+    };
+
+    let hwnd = window.hwnd().map_err(tauri_err)?;
+    unsafe {
+        let current_style = GetWindowLongPtrW(hwnd, GWL_EXSTYLE);
+        if current_style & WS_EX_LAYERED.0 as isize == 0 {
+            SetLastError(WIN32_ERROR(0));
+            let previous_style =
+                SetWindowLongPtrW(hwnd, GWL_EXSTYLE, current_style | WS_EX_LAYERED.0 as isize);
+            let error = GetLastError();
+            if previous_style == 0 && error != WIN32_ERROR(0) {
+                return Err(format!("无法启用 overlay 原生透明度：{}", error.0));
+            }
+        }
+        SetLayeredWindowAttributes(hwnd, COLORREF(0), alpha, LWA_ALPHA).map_err(tauri_err)
+    }
+}
+
+#[cfg(not(target_os = "windows"))]
+fn set_native_window_opacity(_window: &WebviewWindow, _alpha: u8) -> Result<(), String> {
+    Ok(())
+}
+
 fn show_and_focus(window: &WebviewWindow) -> Result<(), String> {
     start_overlay_focus_grace();
+    set_native_window_opacity(window, u8::MAX)?;
+    window.set_ignore_cursor_events(false).map_err(tauri_err)?;
     window.show().map_err(tauri_err)?;
     window.set_focus().map_err(tauri_err)?;
 
@@ -434,13 +459,12 @@ fn show_and_focus(window: &WebviewWindow) -> Result<(), String> {
 }
 
 pub(crate) fn wake_quick_query(app: &tauri::AppHandle) -> Result<(), String> {
-    let window = app
-        .get_webview_window(OVERLAY_WINDOW_LABEL)
-        .ok_or_else(|| "ReadRay overlay 窗口不存在。".to_string())?;
+    let window = pinned_cards::active_overlay_window(app)?;
+    let label = window.label().to_string();
     set_pending_overlay_intent(OverlayIntent::show_input())?;
     resize_overlay_window(&window, get_current_overlay_window_stage()?)?;
     show_and_focus(&window)?;
-    app.emit_to(OVERLAY_WINDOW_LABEL, "readray://overlay-intent", ())
+    app.emit_to(label.as_str(), "readray://overlay-intent", ())
         .map_err(tauri_err)
 }
 
@@ -577,37 +601,85 @@ fn hide_main_window(window: WebviewWindow) -> Result<(), String> {
 }
 
 #[cfg(target_os = "windows")]
-fn show_anchored_overlay_window(
+fn anchored_overlay_size(width: f64, height: f64) -> Result<LogicalSize<f64>, String> {
+    if !width.is_finite() || !height.is_finite() || width <= 0.0 || height <= 0.0 {
+        return Err("anchored overlay 尺寸必须是有限的正数。".to_string());
+    }
+
+    Ok(LogicalSize::new(width, height))
+}
+
+#[cfg(target_os = "windows")]
+fn show_anchored_measurement_window(
     window: &WebviewWindow,
-    stage: AnchoredOverlayStage,
     anchor_rect: &windows_uia::ScreenRect,
 ) -> Result<(), String> {
-    place_anchored_overlay_window(window, stage.logical_size(), anchor_rect)?;
+    set_native_window_opacity(window, 0)?;
+    place_anchored_overlay_window(
+        window,
+        LogicalSize::new(ANCHORED_OVERLAY_MIN_WIDTH, ANCHORED_OVERLAY_MIN_HEIGHT),
+        anchor_rect,
+    )?;
     window.set_always_on_top(true).map_err(tauri_err)?;
-    show_and_focus(window)
+    window.set_ignore_cursor_events(true).map_err(tauri_err)?;
+    window.show().map_err(tauri_err)
+}
+
+#[cfg(target_os = "windows")]
+#[tauri::command]
+fn prepare_anchored_overlay_window(
+    window: WebviewWindow,
+    anchor_rect: windows_uia::ScreenRect,
+) -> Result<(), String> {
+    ensure_overlay_window(&window)?;
+    show_anchored_measurement_window(&window, &anchor_rect)
+}
+
+#[cfg(target_os = "windows")]
+#[tauri::command]
+fn present_anchored_loading_window(
+    window: WebviewWindow,
+    anchor_rect: windows_uia::ScreenRect,
+) -> Result<(), String> {
+    ensure_overlay_window(&window)?;
+    place_anchored_overlay_window(
+        &window,
+        LogicalSize::new(ANCHORED_LOADING_WIDTH, ANCHORED_LOADING_HEIGHT),
+        &anchor_rect,
+    )?;
+    window.set_always_on_top(true).map_err(tauri_err)?;
+    window.set_ignore_cursor_events(true).map_err(tauri_err)?;
+    set_native_window_opacity(&window, u8::MAX)?;
+    window.show().map_err(tauri_err)?;
+    eprintln!("READRAY_ANCHORED_LOADING_PRESENT=ok");
+    Ok(())
 }
 
 #[cfg(target_os = "windows")]
 #[tauri::command]
 fn present_anchored_overlay_window(
     window: WebviewWindow,
-    stage: &str,
+    width: f64,
+    height: f64,
     anchor_rect: windows_uia::ScreenRect,
 ) -> Result<(), String> {
+    let present_started = Instant::now();
     ensure_overlay_window(&window)?;
-    let anchored_stage = match stage {
-        "loading" => {
-            deepseek_explanation::cancel_explanation_scope(
-                deepseek_explanation::ExplanationRequestScope::Manual,
-            );
-            AnchoredOverlayStage::Loading
-        }
-        "result" => AnchoredOverlayStage::Result,
-        "error" => AnchoredOverlayStage::Error,
-        other => return Err(format!("未知 anchored overlay stage：{other}")),
-    };
-
-    show_anchored_overlay_window(&window, anchored_stage, &anchor_rect)
+    let size = anchored_overlay_size(width, height)?;
+    place_anchored_overlay_window(&window, size, &anchor_rect)?;
+    window.set_always_on_top(true).map_err(tauri_err)?;
+    show_and_focus(&window)?;
+    eprintln!(
+        "READRAY_ANCHORED_OVERLAY_PRESENT=ok width={:.0} height={:.0}",
+        width, height
+    );
+    #[cfg(debug_assertions)]
+    eprintln!(
+        "READRAY_SELECTION_TIMING phase=overlay_present elapsed_ms={} at_ms={}",
+        present_started.elapsed().as_millis(),
+        diagnostic_uptime_ms()
+    );
+    Ok(())
 }
 
 #[cfg(target_os = "windows")]
@@ -619,11 +691,8 @@ fn resize_anchored_overlay_window(
     anchor_rect: windows_uia::ScreenRect,
 ) -> Result<(), String> {
     ensure_overlay_window(&window)?;
-    if !width.is_finite() || !height.is_finite() || width <= 0.0 || height <= 0.0 {
-        return Err("anchored overlay 尺寸必须是有限的正数。".to_string());
-    }
-
-    place_anchored_overlay_window(&window, LogicalSize::new(width, height), &anchor_rect)
+    let size = anchored_overlay_size(width, height)?;
+    place_anchored_overlay_window(&window, size, &anchor_rect)
 }
 
 #[cfg(target_os = "windows")]
@@ -849,7 +918,17 @@ pub(crate) fn handle_shortcut_action(
     if action == desktop_lifecycle::ShortcutAction::SelectionExplanation {
         match phase {
             desktop_lifecycle::ShortcutPhase::Pressed => {
+                if pinned_cards::restore_source_before_selection_capture(app) {
+                    std::thread::sleep(Duration::from_millis(24));
+                }
+                let capture_started = Instant::now();
                 let capture = windows_uia::capture_foreground_with_retry();
+                #[cfg(debug_assertions)]
+                eprintln!(
+                    "READRAY_SELECTION_TIMING phase=uia_capture elapsed_ms={} at_ms={}",
+                    capture_started.elapsed().as_millis(),
+                    diagnostic_uptime_ms()
+                );
                 eprintln!(
                     "READRAY_UIA_CAPTURE ok={} selected_chars={} has_context={} has_minimal_context={} has_anchor={} text_pattern={}",
                     capture.ok,
@@ -877,7 +956,7 @@ pub(crate) fn handle_shortcut_action(
                     }
                 };
                 if let Some(capture) = capture {
-                    let loading_anchor = capture.anchor_rect.clone().filter(|_| {
+                    let preparation_anchor = capture.anchor_rect.clone().filter(|_| {
                         capture
                             .selected_text
                             .as_deref()
@@ -889,23 +968,32 @@ pub(crate) fn handle_shortcut_action(
                         eprintln!("READRAY_OVERLAY_INTENT_ERROR={error}");
                         return;
                     }
-                    if let Some(anchor_rect) = loading_anchor {
-                        if let Some(window) = app.get_webview_window(OVERLAY_WINDOW_LABEL) {
-                            if let Err(error) = show_anchored_overlay_window(
-                                &window,
-                                AnchoredOverlayStage::Loading,
-                                &anchor_rect,
-                            ) {
-                                eprintln!("READRAY_ANCHORED_OVERLAY_WAKE_ERROR={error}");
-                            } else {
-                                eprintln!("READRAY_ANCHORED_OVERLAY_WAKE=ok");
+                    if let Some(anchor_rect) = preparation_anchor {
+                        match pinned_cards::active_overlay_window(app) {
+                            Ok(window) => {
+                                match show_anchored_measurement_window(&window, &anchor_rect) {
+                                    Ok(()) => eprintln!("READRAY_ANCHORED_OVERLAY_PREPARE=ok"),
+                                    Err(error) => {
+                                        eprintln!("READRAY_ANCHORED_OVERLAY_PREPARE_ERROR={error}")
+                                    }
+                                }
+                            }
+                            Err(error) => {
+                                eprintln!("READRAY_ANCHORED_OVERLAY_PREPARE_ERROR={error}");
                             }
                         }
                     }
-                    if let Err(error) =
-                        app.emit_to(OVERLAY_WINDOW_LABEL, "readray://overlay-intent", ())
-                    {
-                        eprintln!("READRAY_OVERLAY_INTENT_EMIT_ERROR={error}");
+                    match pinned_cards::active_overlay_label() {
+                        Ok(label) => {
+                            if let Err(error) =
+                                app.emit_to(label.as_str(), "readray://overlay-intent", ())
+                            {
+                                eprintln!("READRAY_OVERLAY_INTENT_EMIT_ERROR={error}");
+                            }
+                        }
+                        Err(error) => {
+                            eprintln!("READRAY_OVERLAY_INTENT_EMIT_ERROR={error}");
+                        }
                     }
                 }
             }
@@ -993,7 +1081,7 @@ pub fn run() {
                     if let Some(main) = app.get_webview_window(MAIN_WINDOW_LABEL) {
                         let _ = main.hide();
                     }
-                    if let Some(overlay) = app.get_webview_window(OVERLAY_WINDOW_LABEL) {
+                    if let Ok(overlay) = pinned_cards::active_overlay_window(app.handle()) {
                         let _ = overlay.hide();
                     }
                 } else {
@@ -1005,7 +1093,15 @@ pub fn run() {
             Ok(())
         })
         .on_window_event(|window, event| match event {
-            WindowEvent::Focused(false) if window.label() == OVERLAY_WINDOW_LABEL => {
+            WindowEvent::Focused(false) if pinned_cards::is_pinned_card_window(window.label()) => {
+                eprintln!(
+                    "READRAY_PINNED_CARD_FOCUS=lost_ignored label={}",
+                    window.label()
+                );
+            }
+            WindowEvent::Focused(false)
+                if pinned_cards::is_active_overlay_label(window.label()) =>
+            {
                 if overlay_focus_grace_active() {
                     eprintln!("READRAY_OVERLAY_FOCUS=lost_ignored");
                 } else {
@@ -1019,7 +1115,14 @@ pub fn run() {
                 api.prevent_close();
                 desktop_lifecycle::handle_main_close(window.app_handle(), window);
             }
-            WindowEvent::CloseRequested { api, .. } if window.label() == OVERLAY_WINDOW_LABEL => {
+            WindowEvent::CloseRequested { .. }
+                if pinned_cards::is_pinned_card_window(window.label()) =>
+            {
+                pinned_cards::forget_pinned_card(window.label());
+            }
+            WindowEvent::CloseRequested { api, .. }
+                if pinned_cards::is_active_overlay_label(window.label()) =>
+            {
                 api.prevent_close();
                 deepseek_explanation::cancel_all_explanation_requests();
                 let _ = window.hide();
@@ -1049,6 +1152,10 @@ pub fn run() {
             start_main_window_drag,
             hide_main_window,
             #[cfg(target_os = "windows")]
+            prepare_anchored_overlay_window,
+            #[cfg(target_os = "windows")]
+            present_anchored_loading_window,
+            #[cfg(target_os = "windows")]
             present_anchored_overlay_window,
             #[cfg(target_os = "windows")]
             resize_anchored_overlay_window,
@@ -1064,6 +1171,11 @@ pub fn run() {
             vocabulary::suggest_vocabulary_terms_command,
             deepseek_explanation::create_explanation_card,
             deepseek_explanation::cancel_explanation_request,
+            pinned_cards::promote_overlay_to_pinned_card,
+            pinned_cards::close_pinned_card,
+            pinned_cards::begin_pinned_card_drag,
+            pinned_cards::drag_pinned_card,
+            pinned_cards::finish_pinned_card_drag,
             learning_records::list_learning_records,
             learning_records::search_learning_records,
             learning_records::get_learning_record,

@@ -13,7 +13,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use tauri::{AppHandle, Manager};
 
 const DATABASE_FILE_NAME: &str = "readray.sqlite3";
-const DATABASE_SCHEMA_VERSION: i64 = 22;
+const DATABASE_SCHEMA_VERSION: i64 = 23;
 const LEARNING_TARGET_CANONICALIZATION_VERSION: i64 = 1;
 const REVIEW_DAY_UNIX_MS: i64 = 24 * 60 * 60 * 1_000;
 pub const EXPLANATION_CARD_SCHEMA_VERSION: i64 = 2;
@@ -800,6 +800,14 @@ ALTER TABLE app_preferences
   ADD COLUMN selection_explanation_binding_json TEXT;
 "#;
 
+/// 划词卡片显示模式：默认先显示紧凑加载卡片；
+/// 用户可开启减少动态效果，等待结果就绪后再显示完整卡片。
+const MIGRATION_23: &str = r#"
+ALTER TABLE app_preferences
+  ADD COLUMN selection_explanation_display_mode TEXT NOT NULL DEFAULT 'standard'
+  CHECK (selection_explanation_display_mode IN ('reduced_motion', 'standard'));
+"#;
+
 const MIGRATIONS: &[(i64, &str)] = &[
     (1, MIGRATION_1),
     (2, MIGRATION_2),
@@ -822,7 +830,8 @@ const MIGRATIONS: &[(i64, &str)] = &[
     (19, MIGRATION_19),
     (20, MIGRATION_20),
     (21, MIGRATION_21),
-    (DATABASE_SCHEMA_VERSION, MIGRATION_22),
+    (22, MIGRATION_22),
+    (DATABASE_SCHEMA_VERSION, MIGRATION_23),
 ];
 
 #[derive(Clone, Debug, Serialize)]
@@ -3670,13 +3679,14 @@ mod tests {
             .unwrap();
 
         assert_eq!(version, DATABASE_SCHEMA_VERSION);
-        let bindings: (String, String) = store
+        let bindings: (String, String, String) = store
             .connection
             .query_row(
-                "SELECT quick_query_binding_json, selection_explanation_binding_json
+                "SELECT quick_query_binding_json, selection_explanation_binding_json,
+                        selection_explanation_display_mode
                  FROM app_preferences WHERE id = 1",
                 [],
-                |row| Ok((row.get(0)?, row.get(1)?)),
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
             )
             .unwrap();
         assert_eq!(
@@ -3687,6 +3697,7 @@ mod tests {
                 "accelerator": "Alt+Super+Space",
             })
         );
+        assert_eq!(bindings.2, "standard");
         assert_eq!(
             serde_json::from_str::<serde_json::Value>(&bindings.1).unwrap(),
             serde_json::json!({
@@ -3698,6 +3709,57 @@ mod tests {
         );
         assert!(path.exists());
         drop(store);
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn migration_v23_adds_standard_display_default_without_touching_preferences() {
+        let (root, path) = test_database_path();
+        fs::create_dir_all(&root).unwrap();
+        let connection = Connection::open(&path).unwrap();
+        connection
+            .execute_batch(
+                "CREATE TABLE schema_migrations (
+                   version INTEGER PRIMARY KEY,
+                   applied_at_unix_ms INTEGER NOT NULL
+                 );",
+            )
+            .unwrap();
+        for &(version, sql) in MIGRATIONS.iter().take(22) {
+            connection.execute_batch(sql).unwrap();
+            connection
+                .execute(
+                    "INSERT INTO schema_migrations (version, applied_at_unix_ms)
+                     VALUES (?1, ?2)",
+                    params![version, version * 100],
+                )
+                .unwrap();
+        }
+        connection
+            .execute(
+                "UPDATE app_preferences SET revision = 7, ui_font_size = 16 WHERE id = 1",
+                [],
+            )
+            .unwrap();
+        drop(connection);
+
+        let upgraded = open_database(&path).unwrap();
+        let values: (i64, i64, String) = upgraded
+            .query_row(
+                "SELECT revision, ui_font_size, selection_explanation_display_mode
+                 FROM app_preferences WHERE id = 1",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .unwrap();
+        assert_eq!(values, (7, 16, "standard".to_string()));
+        let version: i64 = upgraded
+            .query_row("SELECT MAX(version) FROM schema_migrations", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        assert_eq!(version, DATABASE_SCHEMA_VERSION);
+        drop(upgraded);
         let _ = fs::remove_dir_all(root);
     }
 

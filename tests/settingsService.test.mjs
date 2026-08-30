@@ -295,6 +295,22 @@ test("偏好设置校验、字体作用域与两种发送方式保持确定语�
     /14–24/,
   );
   assert.equal(
+    DEFAULT_APP_PREFERENCES.selectionExplanationDisplayMode,
+    "standard",
+  );
+  assert.equal(
+    validateAppPreferences(
+      preferences({ selectionExplanationDisplayMode: "standard" }),
+    ).selectionExplanationDisplayMode,
+    "standard",
+  );
+  assert.throws(
+    () => validateAppPreferences(
+      preferences({ selectionExplanationDisplayMode: "unknown" }),
+    ),
+    /划词卡片显示模式/,
+  );
+  assert.equal(
     shortcutBindingIdentity(DEFAULT_APP_PREFERENCES.quickQueryBinding),
     "chord:Alt+Super+Space",
   );
@@ -979,6 +995,16 @@ test("正式设置页保持四类设置结构，确定性操作已接线且不�
   assert.match(page, /Geist-OFL\.txt\?raw/);
   assert.match(page, /Source-Han-Serif-OFL\.txt\?raw/);
   assert.match(page, /role="switch"/);
+  assert.match(page, /SettingsCopy label="减少动态效果"/);
+  assert.match(
+    page,
+    /aria-checked=\{[\s\S]*?selectionExplanationDisplayMode ===[\s\S]*?"reducedMotion"/,
+  );
+  assert.match(
+    page,
+    /onClick=\{\(\) => patchPreferences\(\{[\s\S]*?"reducedMotion"[\s\S]*?"standard"/,
+  );
+  assert.doesNotMatch(page, /卡片显示模式|标准模式|先显示紧凑的生成提示|等待解释就绪/);
   assert.match(page, /隐藏到托盘/);
   assert.match(page, /autostart/i);
   assert.match(page, /closeBehavior/);
