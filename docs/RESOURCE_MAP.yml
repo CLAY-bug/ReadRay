@@ -1134,7 +1134,7 @@ source_areas:
     read_when:
       - "调整窗口 label、入口 URL、初始尺寸、任务栏或无边框行为。"
       - "排查启动时主应用和快捷 overlay 的显示策略。"
-    notes: "main 的静态回退尺寸仍为 1440×900、最小 480×600；在本机 150% 缩放下约为 720×900 物理像素，与 Codex 参考最小宽度一致。1440×900 只是设计基线：Rust setup 会在窗口隐藏时先应用工作区约 86% 的自适应默认值，再用有效历史 SIZE/POSITION/MAXIMIZED 覆盖，最后才由手动启动路径显示。main 开启 transparent 以使用 Windows 透明合成路径，并以 #f2f1ed 作为启动期原生/WebView 默认背景，避免尺寸追赶时暴露黑白底板；shadow 使用 Windows 原生窗口阴影。初始 overlay 保留透明、置顶、跳过任务栏、启动隐藏和 shadow:false 的浮窗配置；固定后它原地保留，后台生成的 overlay-query-* 使用相同 overlay URL 和窗口属性。"
+    notes: "main 的静态回退和首次启动上限均为 1040×700、最小 480×600；本机 150% 缩放下默认上限约为 1560×1050 物理像素，与 1545×1041 的用户参考窗口接近。1440×900 只保留为页面排版设计基线：Rust setup 会在窗口隐藏时先应用工作区约 86% 的自适应默认值并以 1040×700 封顶，再用有效历史 SIZE/POSITION/MAXIMIZED 覆盖，最后才由手动启动路径显示。main 开启 transparent 以使用 Windows 透明合成路径，并以 #f2f1ed 作为启动期原生/WebView 默认背景，避免尺寸追赶时暴露黑白底板；shadow 使用 Windows 原生窗口阴影。初始 overlay 保留透明、置顶、跳过任务栏、启动隐藏和 shadow:false 的浮窗配置；固定后它原地保留，后台生成的 overlay-query-* 使用相同 overlay URL 和窗口属性。"
     risk: "main 与 overlay 生命周期必须隔离；固定卡不能被当作活动查询 overlay 隐藏或重排，也不要把 main 或固定卡的位置写入 overlay 输入态的位置缓存。"
 
   - path: "src-tauri/src/pinned_cards.rs"
@@ -1163,7 +1163,7 @@ source_areas:
       - "调整托盘菜单、主窗口关闭/恢复、快捷键注册或安全退出。"
       - "排查手动/开机启动可见性、第二实例或运行时与 SQLite 偏好不一致。"
       - "排查窗口重启后尺寸、位置、最大化状态未恢复，或显示器/DPI 变化后窗口越界。"
-    notes: "托盘左键恢复主窗口，右键菜单仅打开/快速查询/退出；快速查询复用既有 overlay intent。main 使用官方 tauri-plugin-window-state 的独立 .main-window-state.json，只保存 SIZE、POSITION、MAXIMIZED；setup 在首次显示前手动恢复，并把无效或离屏几何约束到当前/主显示器工作区。无历史状态时按工作区约 86% 生成不小于 480×600、不大于 1440×900 的默认边界；历史尺寸也按相同 DPI 感知最小值约束，最大化恢复保留修正后的普通窗口边界。运行时把 version=2 binding 解析为普通 chord 或双击左 Alt；registered set 只包含 chord，高级动作交给 advanced_shortcuts。任意偏好保存失败会把普通注册、原生高级动作与完整 active 元数据一起回滚。单实例回调只对再次手动启动恢复主窗口。真正退出由主窗口先完成设置写入和写作 flush；取消先清除 pending ID，窗口显示/聚焦失败仅记录警告而不把前端留在过期请求上。"
+    notes: "托盘左键恢复主窗口，右键菜单仅打开/快速查询/退出；快速查询复用既有 overlay intent。main 使用官方 tauri-plugin-window-state 的独立 .main-window-state.json，只保存 SIZE、POSITION、MAXIMIZED；setup 在首次显示前手动恢复，并把无效或离屏几何约束到当前/主显示器工作区。无历史状态时按工作区约 86% 生成不小于 480×600、不大于 1040×700 的默认边界；历史尺寸也按相同 DPI 感知最小值约束，最大化恢复保留修正后的普通窗口边界。运行时把 version=2 binding 解析为普通 chord 或双击左 Alt；registered set 只包含 chord，高级动作交给 advanced_shortcuts。任意偏好保存失败会把普通注册、原生高级动作与完整 active 元数据一起回滚。单实例回调只对再次手动启动恢复主窗口。真正退出由主窗口先完成设置写入和写作 flush；取消先清除 pending ID，窗口显示/聚焦失败仅记录警告而不把前端留在过期请求上。"
     risk: "不得让托盘退出绕过安全退出，或让开机启动、第二实例创建额外托盘和数据库连接；overlay 窗口边界不得在此改写。"
 
   - path: "src-tauri/src/advanced_shortcuts.rs"

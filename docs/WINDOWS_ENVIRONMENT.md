@@ -75,7 +75,7 @@ $env:TAURI_SIGNING_PRIVATE_KEY_PASSWORD = ""
 - 每次发版步骤：
   1. 抬版本号：`src-tauri/tauri.conf.json`、`src-tauri/Cargo.toml`、`package.json` 三处同步（updater 按 semver 比较，必须高于已发布版本）。
   2. 按上文完成签名 release 构建，记录安装包大小与 SHA-256。
-  3. 在 GitHub 创建 Release（tag 形如 `v0.1.1`），上传**三个资产**：安装包 exe、`.sig` 文件、`latest.json`。
+  3. 在 GitHub 创建 Release（tag 形如 `v0.1.1`），上传**三个资产**：安装包 exe、`.sig` 文件、`latest.json`。当前 updater endpoint 使用 `/releases/latest/download/latest.json`，因此该 Release 必须发布为普通 Release，不能勾选 GitHub 的 **Set as a pre-release**；GitHub 的 `latest` 不包含 prerelease 或 draft。
   4. `latest.json` 内容模板（`signature` 字段粘贴 `.sig` 文件全文；`url` 指向该 Release 的 exe 资产直链；`pub_date` 为 RFC 3339）：
 
 ```json

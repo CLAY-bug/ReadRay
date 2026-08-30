@@ -18,8 +18,8 @@ const MAIN_WINDOW_LABEL: &str = "main";
 const MAIN_WINDOW_STATE_FILENAME: &str = ".main-window-state.json";
 const MAIN_WINDOW_MIN_WIDTH: u32 = 480;
 const MAIN_WINDOW_MIN_HEIGHT: u32 = 600;
-const MAIN_WINDOW_PREFERRED_WIDTH: u32 = 1440;
-const MAIN_WINDOW_PREFERRED_HEIGHT: u32 = 900;
+const MAIN_WINDOW_PREFERRED_WIDTH: u32 = 1040;
+const MAIN_WINDOW_PREFERRED_HEIGHT: u32 = 700;
 const MAIN_WINDOW_DEFAULT_WORK_AREA_RATIO: f64 = 0.86;
 const TRAY_OPEN_ID: &str = "readray-tray-open";
 const TRAY_QUICK_QUERY_ID: &str = "readray-tray-quick-query";
@@ -1261,10 +1261,27 @@ mod tests {
                 1.0,
             ),
             PhysicalBounds {
-                x: 560,
-                y: 250,
-                width: 1440,
-                height: 900,
+                x: 760,
+                y: 350,
+                width: 1040,
+                height: 700,
+            }
+        );
+        assert_eq!(
+            adaptive_default_bounds(
+                PhysicalBounds {
+                    x: 0,
+                    y: 0,
+                    width: 2560,
+                    height: 1400,
+                },
+                1.5,
+            ),
+            PhysicalBounds {
+                x: 500,
+                y: 175,
+                width: 1560,
+                height: 1050,
             }
         );
         assert_eq!(
@@ -1278,9 +1295,9 @@ mod tests {
                 1.0,
             ),
             PhysicalBounds {
-                x: 95,
+                x: 163,
                 y: 51,
-                width: 1175,
+                width: 1040,
                 height: 626,
             }
         );

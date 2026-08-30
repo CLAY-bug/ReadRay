@@ -147,6 +147,10 @@ test("桌面正式路径保持单实例优先、三项托盘菜单和隐藏式�
   const overlayWindow = config.app.windows.find((window) => window.label === "overlay");
   assert.equal(mainWindow.visible, false);
   assert.equal(overlayWindow.visible, false);
+  assert.equal(mainWindow.width, 1040);
+  assert.equal(mainWindow.height, 700);
+  assert.match(lifecycle, /MAIN_WINDOW_PREFERRED_WIDTH:\s*u32\s*=\s*1040/);
+  assert.match(lifecycle, /MAIN_WINDOW_PREFERRED_HEIGHT:\s*u32\s*=\s*700/);
   assert.equal(mainWindow.shadow, true);
   assert.equal(overlayWindow.shadow, false);
 });
