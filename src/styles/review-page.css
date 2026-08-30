@@ -1,8 +1,8 @@
 .rr-review-page {
-  --rr-review-card-width: 360px;
+  --rr-review-card-width: 300px;
   --rr-review-card-height: 240px;
   --rr-review-column-count: 3;
-  --rr-review-shelf-width: 1112px;
+  --rr-review-shelf-width: 932px;
   position: relative;
   min-width: 0;
   min-height: 0;
@@ -833,7 +833,7 @@
 @container (max-width: 1176px) {
   .rr-review-page {
     --rr-review-column-count: 2;
-    --rr-review-shelf-width: 736px;
+    --rr-review-shelf-width: 616px;
     padding-inline: 24px;
   }
 }
@@ -841,7 +841,7 @@
 @container (max-width: 784px) {
   .rr-review-page {
     --rr-review-column-count: 1;
-    --rr-review-shelf-width: 360px;
+    --rr-review-shelf-width: 300px;
   }
 }
 

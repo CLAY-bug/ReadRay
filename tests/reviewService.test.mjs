@@ -739,14 +739,15 @@ test("页面采用响应式活跃书架和单卡专注阅读，不保留分页�
   assert.doesNotMatch(pageSource, /复习卡片分页|shelfPageIndex|showNextShelfPage/);
   assert.match(pageSource, /专注复习/);
   assert.match(pageSource, /返回书架/);
-  assert.match(styles, /--rr-review-card-width:\s*360px/);
+  assert.match(styles, /--rr-review-card-width:\s*300px/);
   assert.match(styles, /--rr-review-card-height:\s*240px/);
   assert.match(styles, /--rr-review-column-count:\s*3/);
+  assert.match(styles, /--rr-review-shelf-width:\s*932px/);
   assert.match(styles, /\.rr-review-feed\s*\{[\s\S]*?display:\s*grid[\s\S]*?var\(--rr-review-column-count\)[\s\S]*?var\(--rr-review-card-width\)/);
   assert.match(styles, /\.rr-review-feed-card\s*\{[\s\S]*?height:\s*var\(--rr-review-card-height\)/);
   assert.match(styles, /-webkit-line-clamp:\s*4/);
-  assert.match(styles, /@container \(max-width: 1176px\)[\s\S]*?--rr-review-column-count:\s*2/);
-  assert.match(styles, /@container \(max-width: 784px\)[\s\S]*?--rr-review-column-count:\s*1/);
+  assert.match(styles, /@container \(max-width: 1176px\)[\s\S]*?--rr-review-column-count:\s*2[\s\S]*?--rr-review-shelf-width:\s*616px/);
+  assert.match(styles, /@container \(max-width: 784px\)[\s\S]*?--rr-review-column-count:\s*1[\s\S]*?--rr-review-shelf-width:\s*300px/);
   assert.doesNotMatch(styles, /min-height:\s*208px|min-height:\s*192px/);
   assert.doesNotMatch(styles, /\.rr-review-feed-card\.is-quote[\s\S]*?border-left/);
   assert.doesNotMatch(styles, /\.rr-review-focus-layer[\s\S]*?backdrop-filter/);
